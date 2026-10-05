@@ -1181,8 +1181,8 @@ impl<'a> RunRef<'a> {
                         RunItemRef::Drawing(DrawingRef { inner: drawing })
                     }
                     RunContent::Field(field) => RunItemRef::Field(FieldRef { inner: field }),
-                    RunContent::FootnoteRef { id } => RunItemRef::FootnoteReference(*id),
-                    RunContent::EndnoteRef { id } => RunItemRef::EndnoteReference(*id),
+                    RunContent::FootnoteRef { id, .. } => RunItemRef::FootnoteReference(*id),
+                    RunContent::EndnoteRef { id, .. } => RunItemRef::EndnoteReference(*id),
                     RunContent::CommentReference { id, .. } => RunItemRef::CommentReference(*id),
                     RunContent::Symbol { font, char_code } => RunItemRef::Symbol {
                         font: font.as_str(),
@@ -1211,7 +1211,7 @@ impl<'a> RunRef<'a> {
     pub fn footnote_id(&self) -> Option<i32> {
         use rdocx_oxml::text::RunContent;
         self.inner.content.iter().find_map(|c| match c {
-            RunContent::FootnoteRef { id } => Some(*id),
+            RunContent::FootnoteRef { id, .. } => Some(*id),
             _ => None,
         })
     }

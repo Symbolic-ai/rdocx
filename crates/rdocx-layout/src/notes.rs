@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 
+use rdocx_oxml::footnotes::NoteType;
 use rdocx_oxml::styles::CT_Styles;
 
 use crate::WordStory;
@@ -41,6 +42,8 @@ pub const SEPARATOR_WIDTH_FRACTION: f64 = 0.33;
 pub struct NoteLayout {
     /// The pre-shaped superscript number drawn at the start of the note.
     pub marker: TextSegment,
+    /// Special separator and notice stories supply all visible content themselves.
+    pub draw_marker: bool,
     /// How far above the baseline the marker sits.
     pub marker_rise: f64,
     /// The note's lines, flattened across its paragraphs.
@@ -83,7 +86,8 @@ type NoteKey = (NoteRef, u64);
 #[derive(Debug, Clone, Default)]
 pub struct NoteRegistry {
     notes: HashMap<NoteKey, NoteEntry>,
-    continuation_separator: bool,
+    specials: HashMap<(NoteStream, NoteType, u64), NoteEntry>,
+    continuation_separator: [bool; 2],
 }
 
 #[derive(Debug, Clone)]
@@ -119,7 +123,8 @@ impl NoteRegistry {
         sources: Option<&SourceRegistry>,
     ) -> Result<Self> {
         let mut notes = HashMap::new();
-        let mut continuation_separator = false;
+        let mut specials = HashMap::new();
+        let mut continuation_separator = [false; 2];
 
         // Each stream is keyed separately, so a document numbering a footnote
         // and an endnote alike keeps both.
@@ -130,14 +135,35 @@ impl NoteRegistry {
         .into_iter()
         .filter_map(|(kind, stream)| stream.map(|stream| (kind, stream)))
         {
-            if stream.has_continuation_separator() {
-                continuation_separator = true;
-            }
-
+            let family = usize::from(kind == NoteStream::Endnote);
+            let selected = input.note_defaults[family]
+                .as_ref()
+                .map(|properties| properties.special_references.as_slice())
+                .unwrap_or_default();
             for note in &stream.footnotes {
-                // `get_by_id` is the authority on what counts as a real note,
-                // so separators never reach the registry.
-                if stream.get_by_id(note.id).is_none() {
+                let special = (note.note_type != NoteType::Normal).then_some(note.note_type);
+                if let Some(record) = special {
+                    let conventional = match record {
+                        NoteType::Separator => -1,
+                        NoteType::ContinuationSeparator => 0,
+                        NoteType::ContinuationNotice => -2,
+                        NoteType::Normal => unreachable!(),
+                    };
+                    if !selected.contains(&note.id)
+                        && !(selected.is_empty() && note.id == conventional)
+                    {
+                        continue;
+                    }
+                    if record == NoteType::ContinuationSeparator {
+                        continuation_separator[family] = true;
+                    }
+                }
+                if special.is_some()
+                    && !note
+                        .paragraphs
+                        .iter()
+                        .any(|paragraph| !paragraph.text().trim().is_empty())
+                {
                     continue;
                 }
                 let note_ref = NoteRef {
@@ -155,7 +181,10 @@ impl NoteRegistry {
 
                 for &content_width in content_widths {
                     let key = (note_ref, content_width.to_bits());
-                    if notes.contains_key(&key) {
+                    if special.is_some_and(|record| {
+                        specials.contains_key(&(kind, record, content_width.to_bits()))
+                    }) || (special.is_none() && notes.contains_key(&key))
+                    {
                         continue;
                     }
                     if laid_out {
@@ -202,28 +231,37 @@ impl NoteRegistry {
                         });
                     }
 
-                    let Some(marker) = shape_marker(num_state.note_label(note_ref), fm)? else {
+                    let marker_text = if special.is_some() {
+                        " ".to_owned()
+                    } else {
+                        num_state.note_label(note_ref)
+                    };
+                    let Some(marker) = shape_marker(&marker_text, fm)? else {
                         continue;
                     };
 
-                    notes.insert(
-                        key,
-                        NoteEntry {
-                            layout: NoteLayout {
-                                marker,
-                                marker_rise: NOTE_FONT_SIZE * 0.33,
-                                lines,
-                                revision_ranges,
-                            },
-                            paragraphs: render_paragraphs,
+                    let entry = NoteEntry {
+                        layout: NoteLayout {
+                            marker,
+                            draw_marker: special.is_none(),
+                            marker_rise: NOTE_FONT_SIZE * 0.33,
+                            lines,
+                            revision_ranges,
                         },
-                    );
+                        paragraphs: render_paragraphs,
+                    };
+                    if let Some(record) = special {
+                        specials.insert((kind, record, content_width.to_bits()), entry);
+                    } else {
+                        notes.insert(key, entry);
+                    }
                 }
             }
         }
 
         Ok(NoteRegistry {
             notes,
+            specials,
             continuation_separator,
         })
     }
@@ -245,15 +283,27 @@ impl NoteRegistry {
             .map(|entry| (&entry.layout, entry.paragraphs.as_slice()))
     }
 
-    /// Whether either stream defined the rule drawn above a carried note.
-    pub fn has_continuation_separator(&self) -> bool {
-        self.continuation_separator
+    /// A special record laid out at this section's width.
+    pub(crate) fn get_special(
+        &self,
+        stream: NoteStream,
+        record: NoteType,
+        content_width: f64,
+    ) -> Option<(&NoteLayout, &[NoteRenderParagraph])> {
+        self.specials
+            .get(&(stream, record, content_width.to_bits()))
+            .map(|entry| (&entry.layout, entry.paragraphs.as_slice()))
+    }
+
+    /// Whether the stream defines an authored continuation separator.
+    pub fn has_continuation_separator(&self, stream: NoteStream) -> bool {
+        self.continuation_separator[usize::from(stream == NoteStream::Endnote)]
     }
 }
 
 /// Shape a note's number as the superscript marker drawn beside it.
-fn shape_marker(id: i32, fm: &mut FontManager) -> Result<Option<TextSegment>> {
-    let text = id.to_string();
+fn shape_marker(text: &str, fm: &mut FontManager) -> Result<Option<TextSegment>> {
+    let text = text.to_owned();
     let size = NOTE_FONT_SIZE * 0.58;
 
     let Ok(font_id) = fm.resolve_font(Some("serif"), false, false) else {
@@ -315,6 +365,7 @@ mod tests {
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
             math_properties: None,
+            note_defaults: [None, None],
             document: rdocx_oxml::document::CT_Document::new(),
             styles: CT_Styles::new_default(),
             numbering: None,

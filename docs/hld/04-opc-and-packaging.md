@@ -119,6 +119,18 @@ its body references. The staged package reopens before publication. Endnote
 story edits preserve separator records, unknown children, and unrelated
 relationships. Pictures and hyperlinks are owned by the endnotes part.
 
+Checked document and section note policies retain unmodelled property children
+while writing position, format, start, and restart in schema order. The
+document policy lives in the relationship-resolved settings part. An authored
+separator, continuation separator, or continuation notice replaces only its
+special note owner in the relevant note part. The corresponding settings note
+property records the special ID. This namespace remains separate from normal
+note IDs and unselected special records do not render. Removing only the
+numbering or placement policy retains special-record selection and unmodelled
+property children. Special records are never public note stories. Custom reference
+marks live in the body reference and in the note owner's marker run. Package
+mutation is staged through save and reopen before publication.
+
 Revision inventory uses these same supported story owners and reports their
 `StoryId` with each record. A revision reachable by resolution without a
 discoverable owner is an error. CLI text extraction retains readable body text
@@ -406,8 +418,12 @@ document. The relationship must be internal, its normalized target must not
 escape the package root, the part must exist, and its override must use the
 Word glossary content type. Duplicate, external, traversal-shaped, missing,
 wrong-type, and malformed-root graphs fail before document mutation.
-Building-block replacement enters the canonical staged preparation and
-provenance-reconciling reopen path before publication.
+Glossary creation reserves one internal relationship, part and override as
+one bundle. Last-entry removal retains that valid empty part. Creation,
+replacement, removal and placeholder binding enter canonical staged
+preparation and provenance-reconciling reopen before publication. Fragment
+content resolves its dependency closure from the physical glossary owner.
+Typed creation rejects dependency references requiring a source package.
 
 Both facades resolve core properties through the package-level
 `CORE_PROPERTIES` relationship and retain its normalized target. Immutable
@@ -657,6 +673,16 @@ producer declarations and compatibility attributes in source order. Comment
 range and reference anchors remain ordered among neighbouring paragraph and
 run XML. A document without a comments relationship does not gain a comments
 part, relationship, or override during an ordinary save.
+
+Story-qualified marker edits resolve both endpoints through the same body,
+table-cell, text-box, header, footer, note or comment owner. Block content
+controls expose their contained paragraphs under a second path segment in
+each owner. Namespace-resolved scans pair bookmark, comment, permission and
+proofing markers in accepted-view order. Rewrites splice only the affected
+paragraph bytes into its owning part and retain unrelated siblings and
+unsupported markers. Invalid owner paths, crossing or unmatched pairs, stale
+snapshots, duplicate names and exhausted identifiers reject the staged edit
+without changing the live package.
 
 The Word facade resolves an existing settings part through the main document's
 `SETTINGS` relationship and retains the normalized target instead of assuming
@@ -1510,17 +1536,31 @@ document identities before insertion. Any value-kind, marker, relationship,
 identity, callback, allocation, serialization, or reopen failure discards the
 entire prospective result.
 
-Cross-document body fragments carry their source package so retained XML stays
-authoritative while the selected closure is rebuilt in the destination. The
-closure starts from selected main-story and comment-story relationship
-references, follows internal targets recursively, and copies only reachable
-parts with their exact content types. Style and numbering graphs are pruned to
-the selected references and their transitive links before deterministic reuse
-or renaming. Every destination relationship id, part name, comment id,
-bookmark id, drawing id, style id, and numbering id is reserved before any
-selected XML is rewritten. An external edge, missing target, malformed
-relationship part, invalid ownership range, or exhausted allocator rejects the
-candidate without publishing package or typed state.
+Cross-document block fragments carry their source package so retained XML stays
+authoritative across every supported owner. Local namespace declarations and
+unrelated destination XML survive insertion. The closure starts at selected
+story references and required note and comment companions, follows internal
+OPC targets through cycles, and copies reachable payloads with exact content
+types and part-local relationship IDs. External edges retain their target,
+mode and type and are never fetched.
+
+Style aliases and links, numbering overrides and custom XML binding stores
+are resolved with their companions. Store collisions rewrite the selected
+bindings and copied item-property IDs together. Note references are rewritten
+from complete maps, including forward, backward and cyclic references. Note,
+comment-thread, bookmark, paired-marker and revision identities are fresh.
+Equivalent reuse is limited to proven style and numbering comparisons and
+relationship-free leaf payloads. Identity-bearing item properties that need a
+store-ID rewrite are never reused.
+
+Selected XML is changed only inside one staged transaction. The package is
+serialized and reopened before the live destination changes. Missing targets,
+malformed graphs, incomplete ownership, exhausted allocators, unsafe embedded
+part-name rewrites and integrity-bound signatures that cannot remain valid
+reject atomically. Existing destination signature coverage is invalidated by
+the normal mutation policy. Opaque graphs are preserved without new decoding
+or rendering support. Rich mail merge retains its separate prohibition on
+external fragment edges.
 
 Dynamic table-of-contents rebuild uses the same staged package rule. It scans
 the relationship-resolved main document by expanded WordprocessingML names,

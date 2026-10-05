@@ -1012,15 +1012,23 @@ destination locations from one owned story inventory. A rejected clone names
 `source` when it is not a Paragraph or Table handle and names `destination` as
 a direct body index when it is not an integer.
 
-Native Rust also exposes owned `DocumentFragment` and non-exhaustive
+Native Rust exposes owned `DocumentFragment` and non-exhaustive
 `FragmentConflictPolicy` values. `DocumentFragment::from_range` captures a
-nonempty half-open main-body selection and can include final body section
-properties only when explicitly requested at the body end.
-`Document::import_fragment` inserts at a checked main-body location and applies
-caller-selected equivalent reuse independently to styles, numbering, and
-related parts. The import remains package-authoritative and transactional.
-These are additive pre-1.0 APIs in the published `rdocx` crate. Python, WASM,
-and CLI gain no fragment-import surface here.
+nonempty half-open block selection in any supported story owner. Existing
+two-segment block-control paragraph paths use the enclosing control content.
+Inline items are rejected because the fragment API has no inline boundary.
+Final body section properties require an explicit selection ending at the
+main-body boundary and a main-body destination.
+
+`Document::import_fragment` inserts at a checked compatible block boundary and
+uses that owner's physical part for relationship references. Caller policy
+chooses equivalent reuse independently for styles, numbering and related leaf
+parts. The import closes note, comment, binding-store and reachable OPC
+companions and remaps conflicting identities in one package-authoritative
+transaction. The candidate serializes and reopens before publication, and a
+failed import leaves the destination unchanged. These are additive pre-1.0
+APIs in the published `rdocx` crate. Python, WASM and CLI gain no fragment-import
+surface here.
 
 Native Rust also exposes fallible story-scoped relationship operations on the
 same pre-1.0 `Document` facade. `add_picture_to_story` and
@@ -1222,8 +1230,17 @@ source-order ordinal within that part. `Document::building_blocks` and
 existing relationship-resolved glossary entries, identified by glossary part
 and source-order ordinal. Both mutation paths validate a staged package,
 reopen it, and commit only after the selected identity and typed value survive.
-They do not create entries, execute fields, or expand AutoText. Python, WASM,
-and CLI bindings remain unchanged.
+The additive pre-1.0 Rust surface also exposes `create_building_block`,
+`create_building_block_from_fragment`, `update_building_block`,
+`update_building_block_from_fragment`, `remove_building_block`,
+`building_block_fragment`, `insert_building_block` and
+`bind_building_block_placeholder`. Typed creation accepts dependency-free
+content. Fragment creation and insertion use `FragmentConflictPolicy` and
+the source package dependency closure. Mutation checks the complete
+`BuildingBlockInfo` snapshot, rejecting stale ordinals and changed values.
+Placeholder binding keeps the existing control discriminator and updates
+selection properties only on existing document-part control variants.
+Python, WASM, and CLI bindings remain unchanged.
 
 The native document renderer copies those defaults into the concrete optional
 `rdocx_layout::LayoutInput::math_properties` field. This field addition is a
@@ -1669,6 +1686,17 @@ and does not advance the revision. A rejected name or range raises
 `RdocxError` and leaves the document unchanged. WASM and CLI consumers keep
 their existing surface and preserve the typed content when they save the owned
 document.
+
+The additive native pre-1.0 story range API exposes `StoryRangeKind`,
+`StoryRangeRef` and `Document::story_ranges` with immutable story-qualified
+`StoryRunRange` endpoints. `add_story_bookmark`,
+`add_story_permission_range`, `add_story_proofing_range`,
+`move_story_range` and `remove_story_range` validate one physical owner,
+accepted run boundaries and pair order before committing. Permission starts
+retain an editor or group, while proofing pairs use `spell` or `gram` and no
+numeric id. Removing a comment pair retains its reference and definition as
+a point comment. Moving the pair relocates the reference with it. Existing
+Python, WASM and CLI APIs remain source compatible and preserve these markers.
 
 Native Word callers evaluate fields with `Document::evaluate_fields` and an
 explicit `FieldEvaluationContext`. `FieldDateTime` supplies deterministic civil

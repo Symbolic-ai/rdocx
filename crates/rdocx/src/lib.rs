@@ -46,7 +46,8 @@ mod template;
 
 pub use building_block::{BuildingBlock, BuildingBlockInfo, BuildingBlockKind};
 pub use comments::{
-    BookmarkRef, CommentRef, RunPosition, RunRange, StoryRunPosition, StoryRunRange,
+    BookmarkRef, CommentRef, RunPosition, RunRange, StoryRangeKind, StoryRangeRef,
+    StoryRunPosition, StoryRunRange,
 };
 pub use comparison::{
     ComparisonDiagnostic, ComparisonGranularity, ComparisonOptions, ComparisonStoryKind,
@@ -58,7 +59,8 @@ pub use document::{
     DrawingHorizontalRelativeFrom, DrawingVerticalAlignment, DrawingVerticalRelativeFrom,
     DrawingWrap, EmbeddedFont, EmbeddedFontKind, FontDefinition, FontEmbeddingLicense,
     FragmentConflictPolicy, HeaderFooterKind, ImageInfo, IssueSeverity, LinkInfo, ListLevel,
-    ListLevelRestart, ListLevelSuffix, ListNumberFormat, NumberingDefinition,
+    ListLevelRestart, ListLevelSuffix, ListNumberFormat, NoteFamily, NoteNumberFormat,
+    NotePlacement, NotePolicy, NoteRestart, NoteSpecialRecord, NumberingDefinition,
     NumberingDefinitionLevel, NumberingFormat, NumberingInstance, NumberingLevel,
     NumberingLevelOverride, OutlineNode, PictureAnchor, PictureCrop, PictureOptions, RenderOptions,
     ReplacementCountMismatch, Section, SectionRef, SectionStory, StoryError, StoryId,

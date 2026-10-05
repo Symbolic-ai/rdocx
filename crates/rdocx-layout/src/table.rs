@@ -2200,6 +2200,7 @@ mod tests {
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
             math_properties: None,
+            note_defaults: [None, None],
             document: rdocx_oxml::document::CT_Document {
                 body: rdocx_oxml::document::CT_Body {
                     content: Vec::new(),
@@ -2393,6 +2394,7 @@ mod tests {
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
             math_properties: None,
+            note_defaults: [None, None],
             document: rdocx_oxml::document::CT_Document {
                 body: rdocx_oxml::document::CT_Body {
                     content: Vec::new(),

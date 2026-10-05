@@ -1,8 +1,13 @@
 //! Public comment handles and atomic document comment mutations.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::ops::Range;
 
 use oxml_opc::OpcPackage;
+use quick_xml::XmlVersion;
+use quick_xml::events::{BytesStart, Event};
+use quick_xml::name::{Namespace, ResolveResult};
+use quick_xml::reader::NsReader;
 use rdocx_oxml::comments::{CT_Comment, CT_Comments};
 use rdocx_oxml::comments_extended::{CT_CommentEx, CT_CommentsEx};
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
@@ -64,6 +69,229 @@ pub struct StoryRunPosition {
 pub struct StoryRunRange {
     pub start: StoryRunPosition,
     pub end: StoryRunPosition,
+}
+
+/// The four paired marker families supported by checked story ranges.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StoryRangeKind {
+    Bookmark {
+        id: i32,
+        name: String,
+    },
+    Comment {
+        id: i32,
+    },
+    Permission {
+        id: i32,
+        editor: Option<String>,
+        group: Option<String>,
+    },
+    Proofing {
+        kind: String,
+    },
+}
+
+/// One immutable pair of accepted-view story positions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoryRangeRef {
+    kind: StoryRangeKind,
+    range: StoryRunRange,
+    pub(crate) start_ordinal: usize,
+    pub(crate) end_ordinal: usize,
+}
+
+impl StoryRangeRef {
+    pub fn kind(&self) -> &StoryRangeKind {
+        &self.kind
+    }
+
+    pub fn range(&self) -> &StoryRunRange {
+        &self.range
+    }
+
+    pub fn bookmark_id(&self) -> Option<i32> {
+        match self.kind {
+            StoryRangeKind::Bookmark { id, .. } => Some(id),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct StoryMarker {
+    kind: StoryRangeKind,
+    start: bool,
+    run_index: usize,
+    span: Range<usize>,
+    location: ContentLocation,
+    ordinal: usize,
+}
+
+fn word_marker_attribute(
+    reader: &NsReader<&[u8]>,
+    element: &BytesStart<'_>,
+    name: &[u8],
+) -> Result<Option<String>> {
+    for attribute in element.attributes() {
+        let attribute = attribute.map_err(|error| Error::Other(error.to_string()))?;
+        let (namespace, local) = reader.resolver().resolve_attribute(attribute.key);
+        if local.as_ref() == name
+            && matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == rdocx_oxml::namespace::W_NS.as_bytes())
+        {
+            return Ok(Some(
+                attribute
+                    .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                    .map_err(|error| Error::Other(error.to_string()))?
+                    .into_owned(),
+            ));
+        }
+    }
+    Ok(None)
+}
+
+fn scan_story_markers(xml: &[u8], location: &ContentLocation) -> Result<Vec<StoryMarker>> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut stack: Vec<(Vec<u8>, bool, Option<usize>)> = Vec::new();
+    let mut markers = Vec::<StoryMarker>::new();
+    let mut run_index = 0usize;
+    let mut buffer = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("story marker scan failed: {error}")))?;
+        let is_word = matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == rdocx_oxml::namespace::W_NS.as_bytes());
+        drop(namespace);
+        let after = reader.buffer_position() as usize;
+        match event {
+            Event::Start(ref element) | Event::Empty(ref element) => {
+                let local = element.local_name().as_ref().to_vec();
+                let hidden = stack.iter().any(|(name, word, _)| {
+                    *word
+                        && matches!(
+                            name.as_slice(),
+                            b"del"
+                                | b"moveFrom"
+                                | b"txbxContent"
+                                | b"smartTag"
+                                | b"customXml"
+                                | b"fldSimple"
+                        )
+                });
+                if is_word && local == b"r" && !hidden {
+                    run_index += 1;
+                }
+                let marker = if is_word && !hidden {
+                    let id = word_marker_attribute(&reader, element, b"id")?;
+                    match local.as_slice() {
+                        b"bookmarkStart" | b"bookmarkEnd" => {
+                            let id = id.and_then(|id| id.parse().ok()).ok_or_else(|| {
+                                Error::Other("bookmark marker has no valid id".to_owned())
+                            })?;
+                            let name = word_marker_attribute(&reader, element, b"name")?
+                                .unwrap_or_default();
+                            Some((
+                                StoryRangeKind::Bookmark { id, name },
+                                local == b"bookmarkStart",
+                            ))
+                        }
+                        b"commentRangeStart" | b"commentRangeEnd" => {
+                            let id = id.and_then(|id| id.parse().ok()).ok_or_else(|| {
+                                Error::Other("comment marker has no valid id".to_owned())
+                            })?;
+                            Some((
+                                StoryRangeKind::Comment { id },
+                                local == b"commentRangeStart",
+                            ))
+                        }
+                        b"permStart" | b"permEnd" => {
+                            let id = id.and_then(|id| id.parse().ok()).ok_or_else(|| {
+                                Error::Other("permission marker has no valid id".to_owned())
+                            })?;
+                            let editor = word_marker_attribute(&reader, element, b"ed")?;
+                            let group = word_marker_attribute(&reader, element, b"edGrp")?;
+                            Some((
+                                StoryRangeKind::Permission { id, editor, group },
+                                local == b"permStart",
+                            ))
+                        }
+                        b"proofErr" => {
+                            let kind = word_marker_attribute(&reader, element, b"type")?;
+                            match kind.as_deref() {
+                                Some("spellStart") => Some((
+                                    StoryRangeKind::Proofing {
+                                        kind: "spell".to_owned(),
+                                    },
+                                    true,
+                                )),
+                                Some("spellEnd") => Some((
+                                    StoryRangeKind::Proofing {
+                                        kind: "spell".to_owned(),
+                                    },
+                                    false,
+                                )),
+                                Some("gramStart") => Some((
+                                    StoryRangeKind::Proofing {
+                                        kind: "gram".to_owned(),
+                                    },
+                                    true,
+                                )),
+                                Some("gramEnd") => Some((
+                                    StoryRangeKind::Proofing {
+                                        kind: "gram".to_owned(),
+                                    },
+                                    false,
+                                )),
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                let marker_index = marker.map(|(kind, start)| {
+                    markers.push(StoryMarker {
+                        kind,
+                        start,
+                        run_index,
+                        span: before..after,
+                        location: location.clone(),
+                        ordinal: 0,
+                    });
+                    markers.len() - 1
+                });
+                if matches!(event, Event::Start(_)) {
+                    stack.push((local, is_word, marker_index));
+                }
+            }
+            Event::End(_) => {
+                if let Some((_, _, Some(index))) = stack.pop() {
+                    markers[index].span.end = after;
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    Ok(markers)
+}
+
+fn same_marker_identity(start: &StoryRangeKind, end: &StoryRangeKind) -> bool {
+    match (start, end) {
+        (StoryRangeKind::Bookmark { id: left, .. }, StoryRangeKind::Bookmark { id: right, .. })
+        | (StoryRangeKind::Comment { id: left }, StoryRangeKind::Comment { id: right })
+        | (
+            StoryRangeKind::Permission { id: left, .. },
+            StoryRangeKind::Permission { id: right, .. },
+        ) => left == right,
+        (StoryRangeKind::Proofing { kind: left }, StoryRangeKind::Proofing { kind: right }) => {
+            left == right
+        }
+        _ => false,
+    }
 }
 
 /// Immutable summary of one correlated bookmark or one reported marker issue.
@@ -161,6 +389,253 @@ impl CommentRef<'_> {
 }
 
 impl Document {
+    /// Add a bookmark across one checked story owner.
+    pub fn add_story_bookmark(&mut self, name: &str, range: StoryRunRange) -> Result<i32> {
+        validate_bookmark_name(name)?;
+        if self.story_ranges()?.iter().any(|entry| {
+            matches!(&entry.kind, StoryRangeKind::Bookmark { name: existing, .. } if existing == name)
+        }) {
+            return Err(Error::Other(format!("bookmark name {name} already exists")));
+        }
+        let mut candidate = self.clone_for_staging();
+        let mut identifiers = candidate.identifiers.clone();
+        let id = identifiers.reserve_bookmark_id()?;
+        candidate.anchor_story_range(&range, RangeAnchor::Bookmark { id, name }, "bookmark")?;
+        candidate.identifiers = identifiers;
+        candidate.story_ranges()?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(id)
+    }
+
+    /// Add a permission range with exactly one editor or editor group.
+    pub fn add_story_permission_range(
+        &mut self,
+        editor: Option<&str>,
+        group: Option<&str>,
+        range: StoryRunRange,
+    ) -> Result<i32> {
+        if editor.is_some() == group.is_some()
+            || editor.is_some_and(str::is_empty)
+            || group.is_some_and(str::is_empty)
+        {
+            return Err(Error::Other(
+                "permission range needs one editor or group".to_owned(),
+            ));
+        }
+        oxml_core::xml::reject_non_xml_characters("permission editor", editor.unwrap_or_default())?;
+        oxml_core::xml::reject_non_xml_characters("permission group", group.unwrap_or_default())?;
+        let occupied = self
+            .story_ranges()?
+            .into_iter()
+            .filter_map(|entry| match entry.kind {
+                StoryRangeKind::Permission { id, .. } => Some(id),
+                _ => None,
+            })
+            .collect::<HashSet<_>>();
+        let id = (0..=i32::MAX)
+            .find(|candidate| !occupied.contains(candidate))
+            .ok_or_else(|| Error::Other("permission range identifiers are exhausted".to_owned()))?;
+        let mut candidate = self.clone_for_staging();
+        candidate.anchor_story_range(
+            &range,
+            RangeAnchor::Permission { id, editor, group },
+            "permission",
+        )?;
+        candidate.story_ranges()?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(id)
+    }
+
+    /// Add a spelling (`spell`) or grammar (`gram`) proofing range.
+    pub fn add_story_proofing_range(&mut self, kind: &str, range: StoryRunRange) -> Result<()> {
+        if !matches!(kind, "spell" | "gram") {
+            return Err(Error::Other(
+                "proofing kind must be spell or gram".to_owned(),
+            ));
+        }
+        self.story_ranges()?;
+        let mut candidate = self.clone_for_staging();
+        candidate.anchor_story_range(&range, RangeAnchor::Proofing { kind }, "proofing")?;
+        candidate.story_ranges()?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
+    /// Remove one checked bookmark pair by its identifier.
+    pub fn remove_story_bookmark(&mut self, id: i32) -> Result<bool> {
+        let entry = self.story_ranges()?.into_iter().find(|entry| {
+            matches!(entry.kind, StoryRangeKind::Bookmark { id: existing, .. } if existing == id)
+        });
+        let Some(entry) = entry else {
+            return Ok(false);
+        };
+        let mut candidate = self.clone_for_staging();
+        candidate.remove_story_range_markers(&entry, false)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(true)
+    }
+
+    /// Move a checked pair to a new range in one story owner.
+    pub fn move_story_range(
+        &mut self,
+        selected: &StoryRangeRef,
+        range: StoryRunRange,
+    ) -> Result<()> {
+        if !self.story_ranges()?.contains(selected) {
+            return Err(Error::Other("selected story range is stale".to_owned()));
+        }
+        let mut candidate = self.clone_for_staging();
+        candidate.remove_story_range_markers(selected, true)?;
+        let anchor = match selected.kind() {
+            StoryRangeKind::Bookmark { id, name } => RangeAnchor::Bookmark { id: *id, name },
+            StoryRangeKind::Comment { id } => RangeAnchor::Comment(*id),
+            StoryRangeKind::Permission { id, editor, group } => RangeAnchor::Permission {
+                id: *id,
+                editor: editor.as_deref(),
+                group: group.as_deref(),
+            },
+            StoryRangeKind::Proofing { kind } => RangeAnchor::Proofing { kind },
+        };
+        let mut placement_check = self.clone_for_staging();
+        placement_check.anchor_story_range(&range, anchor, "story")?;
+        let refreshed = candidate.stories()?;
+        let rebase = |position: &StoryRunPosition| -> Result<StoryRunPosition> {
+            let source = position.location.story();
+            let story = refreshed
+                .iter()
+                .find(|story| {
+                    story.kind() == source.kind()
+                        && story.part_name() == source.part_name()
+                        && story.owner_index() == source.owner_index()
+                })
+                .ok_or_else(|| {
+                    Error::Other("target story disappeared during range move".to_owned())
+                })?;
+            Ok(StoryRunPosition {
+                location: ContentLocation::new(
+                    story.clone(),
+                    position.location.item_kind(),
+                    position.location.index_path().to_vec(),
+                ),
+                run_index: position.run_index,
+            })
+        };
+        let range = StoryRunRange {
+            start: rebase(&range.start)?,
+            end: rebase(&range.end)?,
+        };
+        candidate.anchor_story_range(&range, anchor, "story")?;
+        candidate.story_ranges()?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
+    /// Remove one checked pair. Its attached comment definition, if any,
+    /// remains a separate comment operation.
+    pub fn remove_story_range(&mut self, selected: &StoryRangeRef) -> Result<bool> {
+        if !self.story_ranges()?.contains(selected) {
+            return Ok(false);
+        }
+        let mut candidate = self.clone_for_staging();
+        candidate.remove_story_range_markers(selected, false)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(true)
+    }
+
+    /// Return checked paired-marker ranges in physical story order.
+    ///
+    /// Unmatched, reversed and crossing markers are rejected. Unsupported
+    /// marker families remain opaque and are not included.
+    pub fn story_ranges(&self) -> Result<Vec<StoryRangeRef>> {
+        let mut ranges = Vec::new();
+        let mut open = Vec::<StoryMarker>::new();
+        let mut story = None;
+        let mut bookmark_names = HashSet::new();
+        let mut bookmark_ids = HashSet::new();
+        let mut comment_ids = HashSet::new();
+        let mut permission_ids = HashSet::new();
+        let mut marker_ordinal = 0usize;
+        for (location, xml) in self.story_range_paragraphs()? {
+            if story.as_ref() != Some(location.story()) {
+                if !open.is_empty() {
+                    return Err(Error::Other(
+                        "paired marker crosses a story owner".to_owned(),
+                    ));
+                }
+                story = Some(location.story().clone());
+                marker_ordinal = 0;
+            }
+            for mut marker in scan_story_markers(&xml, &location)? {
+                marker.ordinal = marker_ordinal;
+                marker_ordinal += 1;
+                if marker.start {
+                    open.push(marker);
+                    continue;
+                }
+                let start = open
+                    .pop()
+                    .ok_or_else(|| Error::Other("paired marker has an unmatched end".to_owned()))?;
+                if !same_marker_identity(&start.kind, &marker.kind) {
+                    return Err(Error::Other(
+                        "paired markers cross or use different identities".to_owned(),
+                    ));
+                }
+                if let StoryRangeKind::Bookmark { name, .. } = &start.kind
+                    && (name.is_empty() || !bookmark_names.insert(name.clone()))
+                {
+                    return Err(Error::Other(
+                        "bookmark name is missing or duplicated".to_owned(),
+                    ));
+                }
+                let unique = match &start.kind {
+                    StoryRangeKind::Bookmark { id, .. } => bookmark_ids.insert(*id),
+                    StoryRangeKind::Comment { id } => comment_ids.insert(*id),
+                    StoryRangeKind::Permission { id, editor, group } => {
+                        if editor.is_some() == group.is_some() {
+                            return Err(Error::Other(
+                                "permission start needs one editor or group".to_owned(),
+                            ));
+                        }
+                        permission_ids.insert(*id)
+                    }
+                    StoryRangeKind::Proofing { .. } => true,
+                };
+                if !unique {
+                    return Err(Error::Other(
+                        "paired marker identity is duplicated".to_owned(),
+                    ));
+                }
+                ranges.push(StoryRangeRef {
+                    kind: start.kind,
+                    range: StoryRunRange {
+                        start: StoryRunPosition {
+                            location: start.location,
+                            run_index: start.run_index,
+                        },
+                        end: StoryRunPosition {
+                            location: marker.location,
+                            run_index: marker.run_index,
+                        },
+                    },
+                    start_ordinal: start.ordinal,
+                    end_ordinal: marker.ordinal,
+                });
+            }
+        }
+        if !open.is_empty() {
+            return Err(Error::Other(
+                "paired marker has an unmatched start".to_owned(),
+            ));
+        }
+        Ok(ranges)
+    }
+
     pub(crate) fn ensure_fragment_comment_models_staged(&mut self) -> Result<String> {
         self.ensure_comment_models()?;
         self.ensure_comment_relationships()?;
@@ -566,22 +1041,11 @@ impl Document {
         text: &str,
         date: Option<&str>,
     ) -> Result<i32> {
-        let related_part = matches!(
-            range.start.location.story().kind(),
-            crate::StoryKind::Header
-                | crate::StoryKind::Footer
-                | crate::StoryKind::Footnote
-                | crate::StoryKind::Endnote
-        );
         let mut candidate = self.clone_for_staging();
         let id = candidate.add_story_comment_staged(range, author, initials, text, date)?;
-        if related_part {
-            let reopened = candidate.prepare_and_reopen_staged()?;
-            self.commit_staged_mutation(reopened);
-        } else {
-            candidate.flush_dirty_related_story_models()?;
-            self.commit_staged_mutation(candidate);
-        }
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        reopened.story_ranges()?;
+        self.commit_staged_mutation(reopened);
         Ok(id)
     }
 
@@ -606,29 +1070,26 @@ impl Document {
         date: Option<&str>,
     ) -> Result<i32> {
         validate_comment_date(date)?;
-        if range.start.location.story() != range.end.location.story()
-            || range.start.location.index_path() > range.end.location.index_path()
-        {
+        if range.start.location.story() != range.end.location.story() {
             return Err(Error::Other(
                 "comment story range start must not follow its end".to_owned(),
             ));
         }
-        if matches!(
-            range.start.location.story().kind(),
-            crate::StoryKind::Header
-                | crate::StoryKind::Footer
-                | crate::StoryKind::Footnote
-                | crate::StoryKind::Endnote
-        ) {
+        if range.start.location.index_path().len() == 2
+            || range.end.location.index_path().len() == 2
+            || matches!(
+                range.start.location.story().kind(),
+                crate::StoryKind::Header
+                    | crate::StoryKind::Footer
+                    | crate::StoryKind::Footnote
+                    | crate::StoryKind::Endnote
+                    | crate::StoryKind::Comment
+                    | crate::StoryKind::TextBox
+            )
+        {
             let mut identifiers = self.identifiers.clone();
             let id = identifiers.reserve_comment_id()?;
-            self.anchor_related_story_comment(
-                &range.start.location,
-                range.start.run_index,
-                &range.end.location,
-                range.end.run_index,
-                id,
-            )?;
+            self.anchor_story_range(&range, RangeAnchor::Comment(id), "comment")?;
             self.ensure_comment_models()?;
             self.ensure_comment_relationships()?;
             self.push_comment_definition(id, author, initials, text, date)?;

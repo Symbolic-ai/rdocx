@@ -7771,6 +7771,13 @@ Pedro Assumpcao and the rdocx maintainers.
                 # S74 and handed the row's remaining note policy to F-274, so
                 # it no longer owns an incomplete row.
                 269,
+                # F-275 delivered range authoring in S89. Remaining
+                # annotation capability ownership stays with F-293.
+                275,
+                # F-276 closes the native block fragment dependency row.
+                276,
+                # F-277 closes the native modeled glossary lifecycle row.
+                277,
                 # F-267 completed the table style and conditional formatting
                 # authoring of DOCX-034 in S74 and handed the row's remaining
                 # conditional row geometry to F-268, so it no longer owns an
@@ -7798,6 +7805,9 @@ Pedro Assumpcao and the rdocx maintainers.
                 # F-273 closed DOCX-040 with rich endnote authoring, so it
                 # no longer owns an incomplete row.
                 273,
+                # F-274 completed DOCX-036 note policy and DOCX-041, so it
+                # no longer owns an incomplete row.
+                274,
             }
         }
         self.assertEqual(
@@ -7857,7 +7867,7 @@ Pedro Assumpcao and the rdocx maintainers.
         self.assertTrue(all(len(value) == 1 for value in placements.values()))
         self.assertEqual(
             {sprint for value in placements.values() for sprint, _, _ in value},
-            set(range(70, 75)) | {86} | set(range(89, 92)),
+            set(range(70, 75)) | {86} | set(range(89, 95)),
         )
 
         backlog_rows: dict[str, list[tuple[int, str, str, str]]] = {

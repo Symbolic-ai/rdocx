@@ -504,7 +504,10 @@ fields and the `w:glossaryDocument` root model. Typed form values and glossary
 properties are namespace aware, while retained XML remains the serialization
 source for every unsupported attribute and subtree. The `rdocx` facade owns
 relationship resolution, story-part identity, staged validation, and package
-commit for form-value and existing building-block replacement.
+commit for form values and the glossary lifecycle. Structural glossary edits
+retain untouched entry spans, container attributes and unsupported siblings.
+Glossary capture and insertion share the document-fragment dependency
+transaction, using the physical glossary part as relationship owner.
 
 Strict XML 1.0 lexical policy is shared by these glossary and facade scanners
 through `oxml_core::xml::validate_strict_xml_1_0`. The shared pass owns UTF-8,
@@ -663,7 +666,13 @@ raw XML, while unsupported valid fields retain their cached display. Dirty
 complex hyperlinks are not reported as `Document::links()` until the update
 policy defines how to handle them. The `rdocx` facade correlates bookmark ids
 and owns mutation across typed body paragraphs, including supported table and
-content-control traversal.
+content-control traversal. Its story-qualified range inventory also pairs
+bookmarks, comment endpoints, permission ranges and proofing ranges within one
+physical owner. Checked add, move and remove operations stage a candidate,
+validate accepted-view order and reopen the result before publication.
+Proofing pairs carry their spelling or grammar type without an invented id.
+Removing a comment range leaves its reference run and definition as a point
+comment. Moving a comment range moves its reference run with the pair.
 `rdocx-layout` resolves bookmark text and maps page targets, while the shared
 `oxml-layout` boundary exposes only format-neutral `Target` and `TargetPage`
 field kinds.
@@ -1129,8 +1138,9 @@ one effective header variant without changing the caller-owned even-and-odd
 header setting. Every operation serializes and reopens the staged package
 before publishing it.
 
-Footnotes and endnotes are laid out into a `NoteRegistry` before pagination, and
-the paginator reserves, splits and draws them. Note placement is part of
+Footnotes, endnotes, and authored separator and continuation records are laid
+out into a `NoteRegistry` before pagination, and the paginator reserves, splits
+and draws them. Note placement is part of
 pagination rather than a pass that runs after it, because a page's body height
 depends on the note area it owes, and a note that does not fit continues on the
 following page. The registry pre-shapes each note's marker, so the paginator
@@ -1141,9 +1151,8 @@ per document, and is looked up by the width of the section drawing it. A note is
 broken to the measure of the section carrying its reference, since that is the
 measure it is drawn at, and reserve and render therefore still read the same
 lines. A document whose sections share a page size registers one width and lays
-each note out once, which is the common case. Endnotes are measured against the
-final section, because they are emitted after the last body page and drawn
-against that section's geometry wherever their references sit.
+each note out once, which is the common case. Section-end endnotes use their
+section's width, while document-end endnotes use the final section's width.
 
 The paginator also reflows a paragraph around any floating drawing that wraps,
 because whether a drawing overlaps a line is only known once the paragraph has a
@@ -1167,12 +1176,15 @@ paragraph can push a drawing to the next page, which shrinks the paragraph,
 which pulls the drawing back. Two passes give one answer, always.
 
 The two note streams are placed differently and are keyed apart. A footnote
-sits at the foot of the page carrying its reference and takes height from that
-page. An endnote costs its page nothing and is emitted after the last body
-page, where endnotes flow from the top of their own pages without a separator
-rule. A reference therefore carries a `NoteRef`, its stream and its number,
-because the streams number independently and a document may hold a footnote and
-an endnote sharing a number.
+sits at the foot of the page carrying its reference or immediately beneath
+body text when the effective policy selects that position. The paginator
+reserves its full note area before admitting body lines. Endnotes flow from the
+last page of their section or from the final body page, then continue on later
+pages as needed. The body and note marker use one label assigned at the first
+body reference under document and section policy. Page restarts use the
+reference's physical page after a bounded pagination pass. A custom mark does
+not consume the numeric stream. A reference carries a `NoteRef`, its stream
+and its package ID, because footnotes and endnotes can share an ID.
 
 The native document facade stages normal endnote creation, exact element
 reordering, and removal with matching body references. Endnotes use their own
@@ -1431,17 +1443,31 @@ owner. Clones allocate fresh document identities and drop the `w14:paraId` and
 fragments require the unchanged owner scope. Every operation serializes and
 reopens a staged candidate before publishing it.
 
-`DocumentFragment` owns a package-authoritative half-open main-body selection
-and its supported dependency source. Import closes only dependencies reachable
-from the selected body XML and selected comment threads. It computes style and
-numbering references to a fixpoint, preallocates relationship and part names,
-and rewrites bookmark, comment, drawing, field, style, numbering, and
-relationship identities only after every map exists. Exact retained body and
-comment XML remain authoritative. Reuse of equivalent style, numbering, and
-related-part graphs is caller-selected through `FragmentConflictPolicy`.
-Import applies all changes to one staged document and publishes only after the
-package serializes and reopens. External, dangling, malformed, incomplete, or
-exhausted dependency graphs leave the destination unchanged.
+`DocumentFragment` owns a package-authoritative half-open block selection from
+any supported story owner. Existing two-segment paragraph paths inside block
+controls resolve their enclosing control content. Source and destination keep
+their physical part's relationship scope. Inline items and split owners are
+invalid fragment boundaries.
+
+Import closes only dependencies reachable from selected XML and its required
+note and comment companions. Style and numbering references reach a fixpoint
+across those companions, including cyclic style links and numbering overrides.
+Custom XML stores carry item properties and receive fresh store IDs on
+collision. Notes, comment threads, bookmarks, paired endpoints and revisions
+receive deterministic new identities. REF targets share the bookmark-name map.
+Charts, diagrams, embeddings and opaque extensions use the existing OPC graph.
+Internal cycles retain exact payload bytes and part-local relationship IDs,
+with allocated part names and rewritten internal targets. External edges keep
+their target, type and mode without fetching resources. Reuse applies only to
+structurally equivalent styles, numbering and relationship-free leaf parts.
+
+One staged document serializes and reopens before publication. Insertion into
+a note or comment part retains companions imported into that same part.
+Dangling, malformed, split, exhausted and unsafe opaque-reference graphs fail
+without changing the live document. An integrity-bound package signature part
+that cannot survive remapping is rejected. Existing destination signature
+invalidation policy applies to changed coverage. Preserved opaque companions
+gain no new rendering or decoding support.
 
 Ordered Word section ownership also belongs to the `rdocx` facade. Concrete
 `SectionRef` and `Section` handles borrow the existing paragraph-level or

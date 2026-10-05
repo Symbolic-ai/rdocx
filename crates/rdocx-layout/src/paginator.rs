@@ -24,6 +24,7 @@ use rdocx_oxml::document::{ST_LineNumberRestart, ST_PageBorderDisplay, ST_PageBo
 use rdocx_oxml::drawing::{
     AnchorAlignH, AnchorAlignV, ST_RelativeFromH, ST_RelativeFromV, WrapType,
 };
+use rdocx_oxml::footnotes::NoteType;
 use rdocx_oxml::shared::ST_Border;
 use rdocx_oxml::table::ST_VerticalJc;
 
@@ -267,6 +268,8 @@ pub(crate) struct SharedSection {
     pub header_footer_semantics: Option<HeaderFooterSemantics>,
     pub title_pg: bool,
     pub page_number_start: Option<usize>,
+    pub endnotes_at_section_end: bool,
+    pub footnotes_beneath_text: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -284,10 +287,19 @@ pub(crate) struct RecordedPagination {
     pub stopped_at: Option<PaginationCheckpoint>,
 }
 
+/// Remaining vertical body band after the last body mark and before footnotes.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PageFlowSpace {
+    pub body_bottom: f64,
+    pub note_top: f64,
+}
+
 pub(crate) struct SharedPagination {
     pub pages: Vec<PageFrame>,
     pub outlines: Vec<OutlineEntry>,
     pub body_fragments: Vec<(usize, WordBodyLayoutFragment)>,
+    pub last_flow_space: Option<PageFlowSpace>,
+    pub endnotes_placed: Vec<NoteRef>,
 }
 
 /// Paginate across multiple sections, each with its own geometry and header/footer.
@@ -372,26 +384,43 @@ pub(crate) fn paginate_shared_sections(
             pages: vec![PageFrame::new(1, 612.0, 792.0, Vec::new())],
             outlines: Vec::new(),
             body_fragments: Vec::new(),
+            last_flow_space: None,
+            endnotes_placed: Vec::new(),
         };
     }
     if sections.len() == 1 {
         let section = &sections[0];
-        let result = paginate_with_media_recorded(
+        let mut result = paginate_with_media_recorded(
             &section.blocks,
             section.geometry.clone(),
             section.header_footer.as_ref(),
             section.header_footer_semantics.as_ref(),
             section.title_pg,
+            section.footnotes_beneath_text,
             fm,
             media,
             notes,
             1,
             section.page_number_start.unwrap_or(1),
         );
+        let mut endnotes_placed = Vec::new();
+        if section.endnotes_at_section_end {
+            endnotes_placed =
+                collect_endnote_refs(&result.pages, notes, section.geometry.content_width());
+            append_endnote_pages_at_document_end(
+                &mut result.pages,
+                notes,
+                section.geometry.clone(),
+                result.last_flow_space,
+                &[],
+            );
+        }
         return SharedPagination {
             pages: result.pages,
             outlines: result.outlines,
             body_fragments: result.body_fragments,
+            last_flow_space: result.last_flow_space,
+            endnotes_placed,
         };
     }
 
@@ -400,6 +429,8 @@ pub(crate) fn paginate_shared_sections(
     let mut body_fragments = Vec::new();
     let mut page_offset = 0;
     let mut next_section_page_number = 1usize;
+    let mut last_flow_space = None;
+    let mut endnotes_placed = Vec::new();
     for section in sections {
         let section_page_number = section
             .page_number_start
@@ -410,13 +441,29 @@ pub(crate) fn paginate_shared_sections(
             section.header_footer.as_ref(),
             section.header_footer_semantics.as_ref(),
             section.title_pg,
+            section.footnotes_beneath_text,
             fm,
             media,
             notes,
             page_offset + 1,
             section_page_number,
         );
+        if section.endnotes_at_section_end {
+            endnotes_placed.extend(collect_endnote_refs(
+                &result.pages,
+                notes,
+                section.geometry.content_width(),
+            ));
+            append_endnote_pages_at_document_end(
+                &mut result.pages,
+                notes,
+                section.geometry.clone(),
+                result.last_flow_space,
+                &[],
+            );
+        }
         next_section_page_number = section_page_number.saturating_add(result.pages.len());
+        last_flow_space = result.last_flow_space;
         page_offset += result.pages.len();
         pages.append(&mut result.pages);
         outlines.append(&mut result.outlines);
@@ -429,6 +476,8 @@ pub(crate) fn paginate_shared_sections(
         pages,
         outlines,
         body_fragments,
+        last_flow_space,
+        endnotes_placed,
     }
 }
 
@@ -450,6 +499,7 @@ pub(crate) fn paginate_shared_single_section_recorded(
         header_footer: section.header_footer.as_ref(),
         header_footer_semantics: section.header_footer_semantics.as_ref(),
         title_pg: section.title_pg,
+        footnotes_beneath_text: section.footnotes_beneath_text,
         fm,
         media: media.media(),
         notes,
@@ -646,6 +696,7 @@ fn paginate_with_media<B: LayoutBlockLike>(
         header_footer,
         header_footer_semantics,
         title_pg,
+        false,
         _fm,
         media,
         notes,
@@ -662,6 +713,7 @@ fn paginate_with_media_recorded<B: LayoutBlockLike>(
     header_footer: Option<&HeaderFooterContent>,
     header_footer_semantics: Option<&HeaderFooterSemantics>,
     title_pg: bool,
+    footnotes_beneath_text: bool,
     _fm: &FontManager,
     media: &HashMap<MediaId, ImageData>,
     notes: &NoteRegistry,
@@ -673,6 +725,7 @@ fn paginate_with_media_recorded<B: LayoutBlockLike>(
         header_footer,
         header_footer_semantics,
         title_pg,
+        footnotes_beneath_text,
         fm: _fm,
         media,
         notes,
@@ -705,6 +758,7 @@ struct PassResult {
     resolved: ResolvedWraps,
     checkpoints: Vec<PaginationCheckpoint>,
     stopped_at: Option<PaginationCheckpoint>,
+    last_flow_space: Option<PageFlowSpace>,
 }
 
 /// Everything a pass needs that is the same for both passes.
@@ -716,6 +770,7 @@ struct PassContext<'a> {
     header_footer: Option<&'a HeaderFooterContent>,
     header_footer_semantics: Option<&'a HeaderFooterSemantics>,
     title_pg: bool,
+    footnotes_beneath_text: bool,
     fm: &'a FontManager,
     media: &'a HashMap<MediaId, ImageData>,
     notes: &'a NoteRegistry,
@@ -747,6 +802,7 @@ fn paginate_pass_from<B: LayoutBlockLike>(
             body_fragments: Vec::new(),
             checkpoints: Vec::new(),
             stopped_at: None,
+            last_flow_space: None,
         };
     }
     let mut pager = Pager::new(
@@ -754,6 +810,7 @@ fn paginate_pass_from<B: LayoutBlockLike>(
         context.header_footer,
         context.header_footer_semantics,
         context.title_pg,
+        context.footnotes_beneath_text,
         context.media,
         context.notes,
         context.fm,
@@ -862,10 +919,11 @@ fn paginate_pass_from<B: LayoutBlockLike>(
     let body_fragments = std::mem::take(&mut pager.body_fragments);
     let checkpoints = std::mem::take(&mut pager.checkpoints);
     let stopped_at = pager.stopped_at;
-    let (pages, outlines) = if stopped_at.is_some() {
+    let (pages, outlines, last_flow_space) = if stopped_at.is_some() {
         (
             std::mem::take(&mut pager.pages),
             std::mem::take(&mut pager.outlines),
+            pager.page_flow_spaces.last().copied(),
         )
     } else {
         pager.flush()
@@ -877,6 +935,7 @@ fn paginate_pass_from<B: LayoutBlockLike>(
         resolved,
         checkpoints,
         stopped_at,
+        last_flow_space,
     }
 }
 
@@ -1117,6 +1176,7 @@ struct Pager<'a> {
     is_first_page: bool,
     /// Whether this section uses different first page header/footer.
     title_pg: bool,
+    footnotes_beneath_text: bool,
     media: &'a HashMap<MediaId, ImageData>,
     /// Every note the document defines, laid out once before pagination.
     notes: &'a NoteRegistry,
@@ -1146,6 +1206,7 @@ struct Pager<'a> {
     /// would let it eat into the height that was reserved, which is enough to
     /// push a note off the page its own reference sits on.
     ink_bottom: f64,
+    page_flow_spaces: Vec<PageFlowSpace>,
     /// Space after of the paragraph that ends the flow above the cursor, which
     /// `cursor_y` already includes. Zero after a table row, because Word
     /// collapses spacing only between two paragraphs of the same flow.
@@ -1171,6 +1232,7 @@ impl<'a> Pager<'a> {
         header_footer: Option<&'a HeaderFooterContent>,
         header_footer_semantics: Option<&'a HeaderFooterSemantics>,
         title_pg: bool,
+        footnotes_beneath_text: bool,
         media: &'a HashMap<MediaId, ImageData>,
         notes: &'a NoteRegistry,
         fm: &'a FontManager,
@@ -1205,6 +1267,7 @@ impl<'a> Pager<'a> {
             outlines: Vec::new(),
             is_first_page,
             title_pg,
+            footnotes_beneath_text,
             media,
             notes,
             page_note_ids: Vec::new(),
@@ -1213,6 +1276,7 @@ impl<'a> Pager<'a> {
             page_wraps: Vec::new(),
             page_floats: Vec::new(),
             ink_bottom: 0.0,
+            page_flow_spaces: Vec::new(),
             previous_space_after: 0.0,
             resolved_in,
             resolved_out: ResolvedWraps::new(),
@@ -1373,7 +1437,16 @@ impl<'a> Pager<'a> {
                     .map(NoteLayout::height)
             })
             .sum();
-        NOTE_SEPARATOR_OFFSET + carried_height + fresh_height
+        let record = if carried.is_empty() {
+            NoteType::Separator
+        } else {
+            NoteType::ContinuationSeparator
+        };
+        let separator_height = self
+            .notes
+            .get_special(NoteStream::Footnote, record, self.geometry.content_width())
+            .map_or(0.0, |(note, _)| note.height());
+        NOTE_SEPARATOR_OFFSET + separator_height + carried_height + fresh_height
     }
 
     /// The note area currently committed for the page being built.
@@ -1802,7 +1875,37 @@ impl<'a> Pager<'a> {
         }
 
         let opens_with_continuation = queue[0].2;
-        let available = (self.content_height - self.ink_bottom - NOTE_SEPARATOR_OFFSET).max(0.0);
+        let special_record = if opens_with_continuation {
+            NoteType::ContinuationSeparator
+        } else {
+            NoteType::Separator
+        };
+        let authored_separator = self.notes.get_special(
+            NoteStream::Footnote,
+            special_record,
+            self.geometry.content_width(),
+        );
+        let separator_height = authored_separator.map_or(0.0, |(note, _)| note.height());
+        let mut available =
+            (self.content_height - self.ink_bottom - NOTE_SEPARATOR_OFFSET - separator_height)
+                .max(0.0);
+        let continuation_notice = self.notes.get_special(
+            NoteStream::Footnote,
+            NoteType::ContinuationNotice,
+            self.geometry.content_width(),
+        );
+        let remaining_height: f64 = queue
+            .iter()
+            .filter_map(|(id, first, _)| {
+                self.notes
+                    .get(*id, self.geometry.content_width())
+                    .map(|note| note.height_from(*first))
+            })
+            .sum();
+        if remaining_height > available + 0.01 {
+            available =
+                (available - continuation_notice.map_or(0.0, |(note, _)| note.height())).max(0.0);
+        }
 
         // Decide how much of each note this page can hold.
         let mut placed: Vec<(NoteRef, usize, usize, bool)> = Vec::new();
@@ -1852,34 +1955,56 @@ impl<'a> Pager<'a> {
             })
             .sum();
 
-        let separator_y =
-            self.geometry.page_height - self.geometry.margin_bottom - total - NOTE_SEPARATOR_OFFSET;
+        let separator_y = if self.footnotes_beneath_text {
+            self.geometry.margin_top + self.ink_bottom
+        } else {
+            self.geometry.page_height
+                - self.geometry.margin_bottom
+                - total
+                - NOTE_SEPARATOR_OFFSET
+                - separator_height
+        };
 
         // A page opening with carried content gets the full-width rule, which
         // is how Word says "this continues from the previous page". A document
         // that never defined one keeps the short rule.
-        let separator_width = if opens_with_continuation && self.notes.has_continuation_separator()
+        let separator_width = if opens_with_continuation
+            && self.notes.has_continuation_separator(NoteStream::Footnote)
         {
             self.geometry.content_width()
         } else {
             self.geometry.content_width() * SEPARATOR_WIDTH_FRACTION
         };
 
-        self.elements.push(PositionedElement::Line {
-            start: Point {
-                x: self.geometry.margin_left,
-                y: separator_y,
-            },
-            end: Point {
-                x: self.geometry.margin_left + separator_width,
-                y: separator_y,
-            },
-            width: 0.5,
-            color: Color::BLACK,
-            dash_pattern: None,
-        });
+        if let Some((note, render)) = authored_separator {
+            draw_note(
+                &mut self.elements,
+                &self.geometry,
+                note,
+                render,
+                0,
+                note.lines.len(),
+                false,
+                separator_y,
+                self.page_number,
+            );
+        } else {
+            self.elements.push(PositionedElement::Line {
+                start: Point {
+                    x: self.geometry.margin_left,
+                    y: separator_y,
+                },
+                end: Point {
+                    x: self.geometry.margin_left + separator_width,
+                    y: separator_y,
+                },
+                width: 0.5,
+                color: Color::BLACK,
+                dash_pattern: None,
+            });
+        }
 
-        let mut cursor_y = separator_y + NOTE_SEPARATOR_OFFSET;
+        let mut cursor_y = separator_y + separator_height + NOTE_SEPARATOR_OFFSET;
         for (id, first, count, continued) in placed {
             let Some((note, render)) = self.notes.get_render(id, self.geometry.content_width())
             else {
@@ -1893,6 +2018,21 @@ impl<'a> Pager<'a> {
                 first,
                 count,
                 continued,
+                cursor_y,
+                self.page_number,
+            );
+        }
+        if !self.pending_notes.is_empty()
+            && let Some((note, render)) = continuation_notice
+        {
+            draw_note(
+                &mut self.elements,
+                &self.geometry,
+                note,
+                render,
+                0,
+                note.lines.len(),
+                false,
                 cursor_y,
                 self.page_number,
             );
@@ -2131,6 +2271,10 @@ impl<'a> Pager<'a> {
         self.draw_line_numbers();
         self.apply_vertical_alignment();
         self.apply_body_rotation();
+        self.page_flow_spaces.push(PageFlowSpace {
+            body_bottom: self.ink_bottom,
+            note_top: self.content_height - self.reserved_height(),
+        });
         self.place_page_notes();
         let mut all_elements = Vec::new();
         // A frame with `w:zOrder="back"` goes down before anything else, and
@@ -2292,7 +2436,7 @@ impl<'a> Pager<'a> {
         }
     }
 
-    fn flush(mut self) -> (Vec<PageFrame>, Vec<OutlineEntry>) {
+    fn flush(mut self) -> (Vec<PageFrame>, Vec<OutlineEntry>, Option<PageFlowSpace>) {
         // Always create at least one page
         if self.has_content() || self.pages.is_empty() {
             self.finish_page_outright();
@@ -2316,7 +2460,8 @@ impl<'a> Pager<'a> {
                 break;
             }
         }
-        (self.pages, self.outlines)
+        let last_flow_space = self.page_flow_spaces.last().copied();
+        (self.pages, self.outlines, last_flow_space)
     }
 }
 
@@ -2556,7 +2701,7 @@ fn draw_note(
     let baseline = top + note.lines.get(first).map_or(0.0, |line| line.ascent);
 
     // A continuation does not repeat the marker.
-    if !continued {
+    if !continued && note.draw_marker {
         elements.push(PositionedElement::Text(GlyphRun {
             origin: Point {
                 x: geometry.margin_left,
@@ -2667,7 +2812,43 @@ pub fn append_endnote_pages(
         });
     }
 
-    append_ordered_endnote_pages(pages, &ordered, notes, geometry, 0, 1);
+    append_ordered_endnote_pages(pages, &ordered, notes, geometry, 0, 1, None);
+}
+
+/// Flow document-end endnotes into the measured free band of the final body page.
+pub(crate) fn append_endnote_pages_at_document_end(
+    pages: &mut Vec<PageFrame>,
+    notes: &NoteRegistry,
+    geometry: PageGeometry,
+    flow_space: Option<PageFlowSpace>,
+    excluded: &[NoteRef],
+) {
+    let ordered = collect_endnote_refs(pages, notes, geometry.content_width())
+        .into_iter()
+        .filter(|reference| !excluded.contains(reference))
+        .collect::<Vec<_>>();
+    append_ordered_endnote_pages(pages, &ordered, notes, geometry, 0, 1, flow_space);
+}
+
+fn collect_endnote_refs(pages: &[PageFrame], notes: &NoteRegistry, width: f64) -> Vec<NoteRef> {
+    let mut ordered = Vec::new();
+    for page in pages {
+        oxml_layout::walk(&page.elements, &mut |element, _| {
+            let note = match element {
+                PositionedElement::Text(run) => run.note,
+                PositionedElement::MultilingualText(run) => run.note,
+                _ => None,
+            };
+            if let Some(note) = note
+                && note.stream == NoteStream::Endnote
+                && notes.get(note, width).is_some()
+                && !ordered.contains(&note)
+            {
+                ordered.push(note);
+            }
+        });
+    }
+    ordered
 }
 
 pub(crate) fn append_endnote_pages_for_references(
@@ -2695,6 +2876,7 @@ pub(crate) fn append_endnote_pages_for_references(
         geometry,
         preceding_page_count,
         next_displayed_page_number,
+        None,
     );
 }
 
@@ -2705,28 +2887,124 @@ fn append_ordered_endnote_pages(
     geometry: PageGeometry,
     preceding_page_count: usize,
     next_displayed_page_number: usize,
+    flow_space: Option<PageFlowSpace>,
 ) {
     if ordered.is_empty() {
         return;
     }
 
-    let content_height = geometry.content_height();
-    let mut elements: Vec<PositionedElement> = Vec::new();
-    let mut cursor_y = 0.0;
-    let mut page_number = preceding_page_count + pages.len() + 1;
-    let mut displayed_page_number = pages.last().map_or(next_displayed_page_number, |page| {
-        page.displayed_page_number.saturating_add(1)
+    let authored_separator = notes.get_special(
+        NoteStream::Endnote,
+        NoteType::Separator,
+        geometry.content_width(),
+    );
+    let separator_height = authored_separator.map_or(0.0, |(note, _)| note.height());
+
+    let reuse_last = flow_space.is_some_and(|space| {
+        pages.last().is_some()
+            && matches!(geometry.vertical_alignment, None | Some(ST_VerticalJc::Top))
+            && geometry.body_rotation.is_none()
+            && geometry.columns.is_empty()
+            && ordered
+                .first()
+                .and_then(|note| notes.get(*note, geometry.content_width()))
+                .and_then(|note| note.lines.first())
+                .is_some_and(|line| {
+                    space.body_bottom + NOTE_SEPARATOR_OFFSET * 2.0 + separator_height + line.height
+                        <= space.note_top
+                })
     });
+    let mut content_height = if reuse_last {
+        flow_space.map_or(geometry.content_height(), |space| space.note_top)
+    } else {
+        geometry.content_height()
+    };
+    let mut elements: Vec<PositionedElement> = Vec::new();
+    let mut cursor_y = if reuse_last {
+        flow_space.map_or(0.0, |space| space.body_bottom + NOTE_SEPARATOR_OFFSET * 2.0)
+    } else {
+        0.0
+    };
+    if reuse_last {
+        if let Some((note, render)) = authored_separator {
+            draw_note(
+                &mut elements,
+                &geometry,
+                note,
+                render,
+                0,
+                note.lines.len(),
+                false,
+                geometry.margin_top + cursor_y - NOTE_SEPARATOR_OFFSET,
+                pages
+                    .last()
+                    .map_or(preceding_page_count + 1, |page| page.page_number),
+            );
+            cursor_y += separator_height;
+        } else {
+            elements.push(PositionedElement::Line {
+                start: Point {
+                    x: geometry.margin_left,
+                    y: geometry.margin_top + cursor_y - NOTE_SEPARATOR_OFFSET,
+                },
+                end: Point {
+                    x: geometry.margin_left + geometry.content_width() * 0.33,
+                    y: geometry.margin_top + cursor_y - NOTE_SEPARATOR_OFFSET,
+                },
+                width: 0.5,
+                color: Color::BLACK,
+                dash_pattern: None,
+            });
+        }
+    } else if let Some((note, render)) = authored_separator
+        && ordered
+            .first()
+            .and_then(|reference| notes.get(*reference, geometry.content_width()))
+            .and_then(|first| first.lines.first())
+            .is_some_and(|line| {
+                note.height() + NOTE_SEPARATOR_OFFSET + line.height <= content_height
+            })
+    {
+        draw_note(
+            &mut elements,
+            &geometry,
+            note,
+            render,
+            0,
+            note.lines.len(),
+            false,
+            geometry.margin_top,
+            pages
+                .last()
+                .map_or(preceding_page_count + 1, |page| page.page_number + 1),
+        );
+        cursor_y += separator_height + NOTE_SEPARATOR_OFFSET;
+    }
+    let mut page_number = pages.last().map_or(preceding_page_count + 1, |page| {
+        page.page_number + usize::from(!reuse_last)
+    });
+    let mut displayed_page_number = pages.last().map_or(next_displayed_page_number, |page| {
+        page.displayed_page_number
+            .saturating_add(usize::from(!reuse_last))
+    });
+    let mut reuse_pending = reuse_last;
 
     let mut flush = |elements: &mut Vec<PositionedElement>, page_number: &mut usize| {
-        let mut page = PageFrame::new(
-            *page_number,
-            geometry.page_width,
-            geometry.page_height,
-            std::mem::take(elements),
-        );
-        page.displayed_page_number = displayed_page_number;
-        pages.push(page);
+        if reuse_pending {
+            if let Some(page) = pages.last_mut() {
+                page.elements.append(elements);
+            }
+            reuse_pending = false;
+        } else {
+            let mut page = PageFrame::new(
+                *page_number,
+                geometry.page_width,
+                geometry.page_height,
+                std::mem::take(elements),
+            );
+            page.displayed_page_number = displayed_page_number;
+            pages.push(page);
+        }
         *page_number += 1;
         displayed_page_number = displayed_page_number.saturating_add(1);
     };
@@ -2739,10 +3017,21 @@ fn append_ordered_endnote_pages(
         let mut first = 0;
         let mut continued = false;
         while first < note.lines.len() {
+            let notice = notes.get_special(
+                NoteStream::Endnote,
+                NoteType::ContinuationNotice,
+                geometry.content_width(),
+            );
+            let notice_height = notice.map_or(0.0, |(special, _)| special.height());
+            let notice_reserve = if note.height_from(first) > content_height - cursor_y + 0.01 {
+                notice_height
+            } else {
+                0.0
+            };
             let mut count = 0;
             let mut used = cursor_y;
             for line in note.lines.iter().skip(first) {
-                if used + line.height > content_height + 0.01 {
+                if used + line.height + notice_reserve > content_height + 0.01 {
                     break;
                 }
                 used += line.height;
@@ -2761,6 +3050,35 @@ fn append_ordered_endnote_pages(
                 } else {
                     flush(&mut elements, &mut page_number);
                     cursor_y = 0.0;
+                    content_height = geometry.content_height();
+                    if let Some((special, special_render)) = notes.get_special(
+                        NoteStream::Endnote,
+                        NoteType::ContinuationSeparator,
+                        geometry.content_width(),
+                    ) && note.lines.get(first).is_some_and(|line| {
+                        let available_after_separator =
+                            content_height - special.height() - NOTE_SEPARATOR_OFFSET;
+                        let notice_height =
+                            if note.height_from(first) > available_after_separator + 0.01 {
+                                notice.map_or(0.0, |(record, _)| record.height())
+                            } else {
+                                0.0
+                            };
+                        line.height + notice_height <= available_after_separator + 0.01
+                    }) {
+                        draw_note(
+                            &mut elements,
+                            &geometry,
+                            special,
+                            special_render,
+                            0,
+                            special.lines.len(),
+                            false,
+                            geometry.margin_top,
+                            page_number,
+                        );
+                        cursor_y += special.height() + NOTE_SEPARATOR_OFFSET;
+                    }
                     continue;
                 }
             }
@@ -2776,6 +3094,22 @@ fn append_ordered_endnote_pages(
                 geometry.margin_top + cursor_y,
                 page_number,
             );
+            if first + count < note.lines.len()
+                && let Some((special, special_render)) = notice
+                && cursor_y + special.height() <= content_height + 0.01
+            {
+                cursor_y += draw_note(
+                    &mut elements,
+                    &geometry,
+                    special,
+                    special_render,
+                    0,
+                    special.lines.len(),
+                    false,
+                    geometry.margin_top + cursor_y,
+                    page_number,
+                );
+            }
             first += count;
             continued = true;
         }
@@ -7703,6 +8037,7 @@ mod tests {
             None,
             None,
             false,
+            false,
             &media,
             &notes,
             &fm,
@@ -7749,6 +8084,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 &media,
                 &notes,
                 &fm,
@@ -7786,6 +8122,7 @@ mod tests {
             header_footer: None,
             header_footer_semantics: None,
             title_pg: false,
+            footnotes_beneath_text: false,
             fm: &fm,
             media: &media,
             notes: &notes,

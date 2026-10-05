@@ -109,11 +109,11 @@ in month nine.
 The active post-v1 delivery record is larger than this historical v1 estimate.
 M23 adds 24 stories and roughly 112 developer-days. M24 adds 47 stories and
 roughly 219 developer-days. Their planned feature sprints occupy S70 through
-S75 and S89 through S94. The S76 through S88 contribution and issue repair
+S75, S86, and S89 through S94. The S76 through S88 contribution and issue repair
 programme comes before the remaining feature work, and conditional
 spreadsheet work begins at S95. The F-240 audit closed 85 stable capability
 rows against the public facade, modeled Word properties, bindings, package
 ownership, and five anonymous private references. Its evidence confirmed the
 F-243 through F-310 story boundaries, sizes, and dependencies without adding
 another backlog or document model. The current plan places them across S71
-through S75 and S89 through S94.
+through S75, S86, and S89 through S94.

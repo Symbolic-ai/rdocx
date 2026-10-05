@@ -28316,6 +28316,7 @@ fn empty_story_layout_input() -> rdocx_layout::LayoutInput {
         do_not_use_html_paragraph_auto_spacing: false,
         default_tab_stop: None,
         math_properties: None,
+        note_defaults: [None, None],
         document,
         styles: rdocx_oxml::styles::CT_Styles::new_default(),
         numbering: None,
@@ -36853,7 +36854,7 @@ fn f256_fragment(source: &Document) -> DocumentFragment {
 }
 
 #[test]
-fn dependency_rich_fragment_imports_twice_without_collisions() {
+fn fragment_import_preserves_unmodeled_xml_and_reopens() {
     let source = f256_dependency_source();
     let fragment = f256_fragment(&source);
     let mut destination = Document::new();
@@ -37010,7 +37011,7 @@ fn dependency_rich_fragment_imports_twice_without_collisions() {
 }
 
 #[test]
-fn fragment_conflict_policies_are_deterministic() {
+fn fragment_conflict_policies_reuse_only_equivalent_graphs() {
     let fragment = f256_fragment(&f256_dependency_source());
     let build = |policy| {
         let mut destination = f256_dependency_source();
@@ -37132,7 +37133,7 @@ fn fragment_conflict_policies_are_deterministic() {
 }
 
 #[test]
-fn unsupported_fragment_dependency_aborts_without_mutation() {
+fn fragment_import_rejects_incomplete_graph_atomically() {
     let mut source = Document::new();
     let relationship = source.add_hyperlink_relationship("https://example.com/f256");
     source
@@ -37145,17 +37146,29 @@ fn unsupported_fragment_dependency_aborts_without_mutation() {
 
     let mut destination = Document::new();
     destination.add_paragraph("unchanged");
-    let before = destination.to_bytes().unwrap();
     let body = f254_story(&destination, StoryKind::Body);
-    let error = destination
+    destination
         .import_fragment(
             &ContentLocation::end(body),
             &fragment,
             FragmentConflictPolicy::reuse_equivalent(),
         )
-        .unwrap_err();
-    assert!(error.to_string().contains("non-internal"), "{error}");
-    assert_eq!(destination.to_bytes().unwrap(), before);
+        .unwrap();
+    let imported =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(destination.to_bytes().unwrap()))
+            .unwrap();
+    assert!(
+        imported
+            .get_part_rels("/word/document.xml")
+            .unwrap()
+            .items
+            .iter()
+            .any(
+                |relationship| relationship.target == "https://example.com/f256"
+                    && relationship.target_mode.as_deref() == Some("External")
+            )
+    );
+    let before = destination.to_bytes().unwrap();
 
     let mut split_bookmark = Document::new();
     split_bookmark.add_paragraph("start");
@@ -37274,6 +37287,72 @@ fn unsupported_fragment_dependency_aborts_without_mutation() {
         .unwrap_err();
     assert!(error.to_string().contains("exhausted"), "{error}");
     assert_eq!(exhausted.to_bytes().unwrap(), before_exhausted);
+
+    let mut opaque_source = Document::new();
+    opaque_source.add_picture(
+        b"f276-unsafe-image",
+        "unsafe.png",
+        Length::pt(10.0),
+        Length::pt(10.0),
+    );
+    let mut source_package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(opaque_source.to_bytes().unwrap()))
+            .unwrap();
+    let image_part = source_package
+        .parts
+        .iter()
+        .find_map(|(name, bytes)| (bytes.as_slice() == b"f276-unsafe-image").then(|| name.clone()))
+        .unwrap();
+    source_package.set_part(
+        "/word/unsafe.bin",
+        b"opaque reference /word/unsafe.bin".to_vec(),
+    );
+    source_package
+        .content_types
+        .add_override("/word/unsafe.bin", "application/x-f276-unsafe");
+    source_package
+        .get_or_create_part_rels(&image_part)
+        .add_with_id("unsafeChild", "urn:f276:unsafe", "/word/unsafe.bin");
+    let mut source_bytes = std::io::Cursor::new(Vec::new());
+    source_package.write_to(&mut source_bytes).unwrap();
+    let opaque_source = Document::from_bytes(source_bytes.get_ref()).unwrap();
+    let body = f254_story(&opaque_source, StoryKind::Body);
+    let opaque_fragment = DocumentFragment::from_range(
+        &opaque_source,
+        &f254_item(&opaque_source, &body, 0),
+        &ContentLocation::end(body),
+        false,
+    )
+    .unwrap();
+    let mut destination_package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(
+        Document::new().to_bytes().unwrap(),
+    ))
+    .unwrap();
+    destination_package.set_part("/word/unsafe.bin", b"existing payload".to_vec());
+    destination_package
+        .content_types
+        .add_override("/word/unsafe.bin", "application/x-f276-unsafe");
+    let mut destination_bytes = std::io::Cursor::new(Vec::new());
+    destination_package
+        .write_to(&mut destination_bytes)
+        .unwrap();
+    let mut destination = Document::from_bytes(destination_bytes.get_ref()).unwrap();
+    let before = destination.to_bytes().unwrap();
+    let body = f254_story(&destination, StoryKind::Body);
+    let error = destination
+        .import_fragment(
+            &ContentLocation::end(body),
+            &opaque_fragment,
+            FragmentConflictPolicy::rename_all(),
+        )
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("opaque payload cannot be rewritten safely"),
+        "{error}"
+    );
+    assert_eq!(destination.to_bytes().unwrap(), before);
 }
 
 #[test]
@@ -39931,6 +40010,7 @@ mod advanced_table_geometry_regressions {
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
             math_properties: None,
+            note_defaults: [None, None],
             document: rdocx_oxml::document::CT_Document {
                 body: rdocx_oxml::document::CT_Body {
                     content: Vec::new(),
@@ -45450,4 +45530,2040 @@ fn endnote_edit_preserves_unmodelled_children() {
         "{xml}"
     );
     assert!(xml.contains("rich"), "{xml}");
+}
+
+#[test]
+fn full_story_fragment_import_remaps_every_conflicting_dependency() {
+    full_story_fragment_import_covers_every_supported_owner_pair();
+    fragment_import_preserves_nested_block_control_content();
+    fragment_import_inserts_at_nested_block_control_boundaries();
+    fragment_import_remaps_nested_note_references_and_companion_bindings();
+    let source = f276_complete_dependency_source();
+    let fragment = f256_fragment(&source);
+    let build = || {
+        let mut destination = f276_complete_dependency_source();
+        for _ in 0..2 {
+            let body = f254_story(&destination, StoryKind::Body);
+            destination
+                .import_fragment(
+                    &ContentLocation::end(body),
+                    &fragment,
+                    FragmentConflictPolicy::rename_all(),
+                )
+                .unwrap();
+        }
+        destination.to_bytes().unwrap()
+    };
+    let first = build();
+    let second = build();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&first)).unwrap();
+    let repeat = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&second)).unwrap();
+    assert_eq!(package.parts, repeat.parts);
+    assert_eq!(package.part_rels.len(), repeat.part_rels.len());
+    for (owner, relationships) in &package.part_rels {
+        assert_eq!(
+            relationships.to_xml().unwrap(),
+            repeat.part_rels[owner].to_xml().unwrap()
+        );
+    }
+    let reopened = Document::from_bytes(&first).unwrap();
+    assert_eq!(reopened.bookmarks().len(), 3);
+    assert_eq!(reopened.comments().len(), 6);
+    assert_eq!(reopened.footnotes().len(), 3);
+    let notes = std::str::from_utf8(package.get_part("/word/footnotes.xml").unwrap()).unwrap();
+    for ordinal in [1, 2] {
+        assert!(
+            notes.contains(&format!("{{F2760000-0000-4000-8000-{ordinal:012X}}}")),
+            "{notes}"
+        );
+    }
+    assert_eq!(
+        reopened
+            .comments()
+            .iter()
+            .filter(|comment| comment.parent_id().is_some())
+            .count(),
+        3
+    );
+    let body = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    let styles = std::str::from_utf8(package.get_part("/word/styles.xml").unwrap()).unwrap();
+    let numbering = std::str::from_utf8(package.get_part("/word/numbering.xml").unwrap()).unwrap();
+    for ordinal in [1, 2] {
+        assert!(
+            styles.contains(&format!("FragmentStyleMerge{ordinal}")),
+            "{styles}"
+        );
+        assert!(
+            styles.contains(&format!("CycleStyleMerge{ordinal}")),
+            "{styles}"
+        );
+        assert!(
+            styles.contains(&format!("w:next w:val=\"CycleStyleMerge{ordinal}\"")),
+            "{styles}"
+        );
+        assert!(
+            styles.contains(&format!("w:next w:val=\"FragmentStyleMerge{ordinal}\"")),
+            "{styles}"
+        );
+    }
+    assert_eq!(
+        numbering.matches("w:startOverride").count(),
+        3,
+        "{numbering}"
+    );
+    for element in [
+        "permStart",
+        "permEnd",
+        "customXmlInsRangeStart",
+        "customXmlInsRangeEnd",
+        "ins",
+    ] {
+        let ids = body
+            .split(&format!("<w:{element} "))
+            .skip(1)
+            .filter_map(|item| item.split("w:id=\"").nth(1))
+            .filter_map(|id| id.split('"').next())
+            .collect::<Vec<_>>();
+        assert_eq!(ids.len(), 3, "{element}: {body}");
+        assert_eq!(
+            ids.iter().copied().collect::<HashSet<_>>().len(),
+            3,
+            "{element}: {ids:?}"
+        );
+    }
+    for payload in [
+        b"f276-diagram-data".as_slice(),
+        b"f276-diagram-layout",
+        b"f276-embedded-object",
+    ] {
+        assert_eq!(
+            package
+                .parts
+                .values()
+                .filter(|bytes| bytes.as_slice() == payload)
+                .count(),
+            3
+        );
+    }
+    // Every part-local edge remains resolvable, including chart/workbook,
+    // diagram companions and opaque embedding descendants.
+    for (owner, relationships) in &package.part_rels {
+        for relationship in &relationships.items {
+            if relationship.target_mode.as_deref() != Some("External") {
+                let target = oxml_opc::OpcPackage::resolve_rel_target(owner, &relationship.target);
+                assert!(package.get_part(&target).is_some(), "{owner} -> {target}");
+            }
+        }
+    }
+}
+
+fn f276_complete_dependency_source() -> Document {
+    let mut source = f256_dependency_source();
+    source
+        .add_style(StyleBuilder::paragraph("CycleStyle", "Cycle Style"))
+        .unwrap();
+    source
+        .set_style(
+            StyleBuilder::paragraph("FragmentStyle", "Fragment Style").next_style("CycleStyle"),
+        )
+        .unwrap();
+    source
+        .set_style(StyleBuilder::paragraph("CycleStyle", "Cycle Style").next_style("FragmentStyle"))
+        .unwrap();
+    let body = f254_story(&source, StoryKind::Body);
+    source
+        .create_footnote(&f254_item(&source, &body, 1), "combined footnote")
+        .unwrap();
+    let body = f254_story(&source, StoryKind::Body);
+    source
+        .create_endnote(&f254_item(&source, &body, 2), "combined endnote")
+        .unwrap();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(source.to_bytes().unwrap()))
+            .unwrap();
+    let styles = std::str::from_utf8(package.get_part("/word/styles.xml").unwrap())
+        .unwrap()
+        .replace(
+            "<w:name w:val=\"Fragment Style\"/>",
+            "<w:name w:val=\"Fragment Style\"/><w:aliases w:val=\"Fragment Alias\"/>",
+        );
+    package.set_part("/word/styles.xml", styles.into_bytes());
+    let binding = r#"<w:sdt><w:sdtPr><w:dataBinding w:storeItemID="{11111111-1111-1111-1111-111111111111}" w:xpath="/root"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>combined binding</w:t></w:r></w:p></w:sdtContent></w:sdt>"#;
+    let notes = std::str::from_utf8(package.get_part("/word/footnotes.xml").unwrap())
+        .unwrap()
+        .replacen("</w:footnote>", &format!("{binding}</w:footnote>"), 1);
+    package.set_part("/word/footnotes.xml", notes.into_bytes());
+    package.set_part(
+        "/customXml/item276.xml",
+        b"<root>combined value</root>".to_vec(),
+    );
+    package.set_part("/customXml/itemProps276.xml", br#"<ds:datastoreItem xmlns:ds="http://schemas.openxmlformats.org/officeDocument/2006/customXml" ds:itemID="{11111111-1111-1111-1111-111111111111}"><ds:schemaRefs/></ds:datastoreItem>"#.to_vec());
+    package
+        .content_types
+        .add_override("/customXml/item276.xml", "application/xml");
+    package.content_types.add_override(
+        "/customXml/itemProps276.xml",
+        "application/vnd.openxmlformats-officedocument.customXmlProperties+xml",
+    );
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add_with_id(
+            "store276",
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml",
+            "../customXml/item276.xml",
+        );
+    package
+        .get_or_create_part_rels("/customXml/item276.xml")
+        .add_with_id(
+            "props276",
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXmlProps",
+            "itemProps276.xml",
+        );
+    let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    let annotation = r#"<w:permStart w:id="76" w:edGrp="everyone"/><w:customXmlInsRangeStart w:id="77" w:author="Ada"/><w:ins w:id="78" w:author="Ada"><w:r><w:t>tracked fragment</w:t></w:r></w:ins><w:customXmlInsRangeEnd w:id="77"/><w:permEnd w:id="76"/><f:dependencies xmlns:f="urn:f276" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="diagram276" r:embed="embedding276"/>"#;
+    let xml = xml.replacen("</w:p>", &format!("{annotation}</w:p>"), 2);
+    // Keep annotations in the selected paragraph only.
+    let first_end = xml.find("</w:p>").unwrap();
+    let xml = format!(
+        "{}{}",
+        xml[..first_end].replace(annotation, ""),
+        &xml[first_end..]
+    );
+    package.set_part("/word/document.xml", xml.into_bytes());
+    let numbering = std::str::from_utf8(package.get_part("/word/numbering.xml").unwrap()).unwrap()
+        .replace("<w:num w:numId=\"42\"><w:abstractNumId w:val=\"41\"/></w:num>",
+                 "<w:num w:numId=\"42\"><w:abstractNumId w:val=\"41\"/><w:lvlOverride w:ilvl=\"0\"><w:startOverride w:val=\"7\"/></w:lvlOverride></w:num>");
+    package.set_part("/word/numbering.xml", numbering.into_bytes());
+    for (name, payload) in [
+        (
+            "/word/diagrams/data276.bin",
+            b"f276-diagram-data".as_slice(),
+        ),
+        ("/word/diagrams/layout276.bin", b"f276-diagram-layout"),
+        ("/word/embeddings/object276.bin", b"f276-embedded-object"),
+    ] {
+        package.set_part(name, payload.to_vec());
+        package
+            .content_types
+            .add_override(name, "application/octet-stream");
+    }
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add_with_id(
+            "diagram276",
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramData",
+            "diagrams/data276.bin",
+        );
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add_with_id(
+            "embedding276",
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/oleObject",
+            "embeddings/object276.bin",
+        );
+    package
+        .get_or_create_part_rels("/word/diagrams/data276.bin")
+        .add_with_id(
+            "layout276",
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramLayout",
+            "layout276.bin",
+        );
+    let mut output = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut output).unwrap();
+    Document::from_bytes(output.get_ref()).unwrap()
+}
+
+#[test]
+fn opaque_extension_graphs_copy_without_corrupting_parts() {
+    let mut source = Document::new();
+    source.add_picture(
+        b"f276-opaque-image",
+        "opaque.png",
+        Length::pt(12.0),
+        Length::pt(12.0),
+    );
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(source.to_bytes().unwrap()))
+            .unwrap();
+    let image = package
+        .parts
+        .iter()
+        .find_map(|(name, bytes)| (bytes.as_slice() == b"f276-opaque-image").then(|| name.clone()))
+        .unwrap();
+    package
+        .get_or_create_part_rels(&image)
+        .add_external("urn:f276:external", "https://example.test/asset");
+    package.set_part("/word/extension/first.bin", b"f276-first-opaque".to_vec());
+    package.set_part("/word/extension/second.bin", b"f276-second-opaque".to_vec());
+    for part in ["/word/extension/first.bin", "/word/extension/second.bin"] {
+        package
+            .content_types
+            .add_override(part, "application/x-f276-opaque");
+    }
+    package.get_or_create_part_rels(&image).add_with_id(
+        "opaqueFirst",
+        "urn:f276:opaque",
+        "/word/extension/first.bin",
+    );
+    package
+        .get_or_create_part_rels("/word/extension/first.bin")
+        .add_with_id("opaqueSecond", "urn:f276:opaque", "second.bin");
+    package
+        .get_or_create_part_rels("/word/extension/second.bin")
+        .add_with_id("opaqueCycle", "urn:f276:opaque", "first.bin");
+    package
+        .get_or_create_part_rels("/word/extension/second.bin")
+        .add_external("urn:f276:external", "https://example.test/nested");
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let source = Document::from_bytes(&bytes.into_inner()).unwrap();
+    let body = f254_story(&source, StoryKind::Body);
+    let item = f254_item(&source, &body, 0);
+    let fragment =
+        DocumentFragment::from_range(&source, &item, &ContentLocation::end(body), false).unwrap();
+    let mut destination = Document::new();
+    for _ in 0..2 {
+        let body = f254_story(&destination, StoryKind::Body);
+        destination
+            .import_fragment(
+                &ContentLocation::end(body),
+                &fragment,
+                FragmentConflictPolicy::rename_all(),
+            )
+            .unwrap();
+    }
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(destination.to_bytes().unwrap()))
+            .unwrap();
+    for (payload, expected_count) in [
+        (b"f276-opaque-image".as_slice(), 2),
+        (b"f276-first-opaque".as_slice(), 2),
+        (b"f276-second-opaque".as_slice(), 2),
+    ] {
+        assert_eq!(
+            package
+                .parts
+                .values()
+                .filter(|bytes| bytes.as_slice() == payload)
+                .count(),
+            expected_count
+        );
+    }
+    for (name, bytes) in &package.parts {
+        if !bytes.starts_with(b"f276-") {
+            continue;
+        }
+        let relationships = package
+            .get_part_rels(name)
+            .unwrap_or_else(|| panic!("missing relationships for {name}"));
+        for relationship in &relationships.items {
+            if relationship.target_mode.as_deref() == Some("External") {
+                assert!(relationship.target.starts_with("https://example.test/"));
+            } else {
+                let target = oxml_opc::OpcPackage::resolve_rel_target(name, &relationship.target);
+                assert!(package.get_part(&target).is_some(), "{name} -> {target}");
+            }
+        }
+    }
+}
+
+#[test]
+fn fragment_import_preserves_bound_custom_xml_store() {
+    let xml = wrap_word_body(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="customer"/><w:dataBinding w:storeItemID="{11111111-1111-1111-1111-111111111111}" w:xpath="/c:root/c:name" w:prefixMappings="xmlns:c='urn:customer'"/><w:text/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>Bound value</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    );
+    let source = document_with_bound_content_controls(
+        &xml,
+        Some(r#"<c:root xmlns:c="urn:customer"><c:name>Bound value</c:name></c:root>"#),
+    );
+    let body = f254_story(&source, StoryKind::Body);
+    let item = f254_item(&source, &body, 0);
+    let fragment =
+        DocumentFragment::from_range(&source, &item, &ContentLocation::end(body), false).unwrap();
+    let mut destination = Document::new();
+    let body = f254_story(&destination, StoryKind::Body);
+    destination
+        .import_fragment(
+            &ContentLocation::end(body),
+            &fragment,
+            FragmentConflictPolicy::rename_all(),
+        )
+        .unwrap();
+    let saved = destination.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    assert!(package.parts.values().any(|part| {
+        part.windows(b"Bound value".len())
+            .any(|window| window == b"Bound value")
+    }));
+    assert!(package.parts.values().any(|part| {
+        part.windows(b"ds:datastoreItem".len())
+            .any(|window| window == b"ds:datastoreItem")
+    }));
+    let reopened = Document::from_bytes(&saved).unwrap();
+    assert_eq!(reopened.content_controls()[0].text(), "Bound value");
+
+    let existing_xml = wrap_word_body(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="existing"/><w:dataBinding w:storeItemID="{11111111-1111-1111-1111-111111111111}" w:xpath="/c:root/c:name" w:prefixMappings="xmlns:c='urn:customer'"/><w:text/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>Existing value</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    );
+    let mut destination = document_with_bound_content_controls(
+        &existing_xml,
+        Some(r#"<c:root xmlns:c="urn:customer"><c:name>Existing value</c:name></c:root>"#),
+    );
+    let body = f254_story(&destination, StoryKind::Body);
+    destination
+        .import_fragment(
+            &ContentLocation::end(body),
+            &fragment,
+            FragmentConflictPolicy::rename_all(),
+        )
+        .unwrap();
+    let saved = destination.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(xml.contains("{11111111-1111-1111-1111-111111111111}"));
+    assert!(xml.contains("{F2760000-0000-4000-8000-000000000001}"));
+    let item_props = package
+        .parts
+        .iter()
+        .filter(|(name, _)| name.contains("itemProps"))
+        .collect::<Vec<_>>();
+    assert_eq!(item_props.len(), 2);
+    assert!(item_props.iter().any(|(_, bytes)| {
+        bytes
+            .windows(38)
+            .any(|window| window == b"{F2760000-0000-4000-8000-000000000001}")
+    }));
+    let reopened = Document::from_bytes(&saved).unwrap();
+    assert_eq!(reopened.content_controls().len(), 2);
+}
+
+#[test]
+fn fragment_import_remaps_note_companions_atomically() {
+    let mut source = Document::new();
+    source.add_paragraph("First footnote reference");
+    source.add_paragraph("Second footnote reference");
+    source.add_paragraph("Endnote reference");
+    let body = f254_story(&source, StoryKind::Body);
+    let first_id = source
+        .create_footnote(&f254_item(&source, &body, 0), "First note body")
+        .unwrap();
+    let first_note_story = source.footnote_story(first_id).unwrap().unwrap();
+    source
+        .add_picture_to_story(
+            &first_note_story,
+            b"f276-note-image",
+            "note.png",
+            Length::pt(10.0),
+            Length::pt(10.0),
+        )
+        .unwrap();
+    let body = f254_story(&source, StoryKind::Body);
+    source
+        .create_footnote(&f254_item(&source, &body, 1), "Second note body")
+        .unwrap();
+    let body = f254_story(&source, StoryKind::Body);
+    source
+        .create_endnote(&f254_item(&source, &body, 2), "Endnote body")
+        .unwrap();
+    let body = f254_story(&source, StoryKind::Body);
+    let fragment = DocumentFragment::from_range(
+        &source,
+        &f254_item(&source, &body, 0),
+        &ContentLocation::end(body),
+        false,
+    )
+    .unwrap();
+    let mut destination = Document::new();
+    destination.add_paragraph("Existing note reference");
+    let body = f254_story(&destination, StoryKind::Body);
+    destination
+        .create_footnote(&f254_item(&destination, &body, 0), "Existing note body")
+        .unwrap();
+    let body = f254_story(&destination, StoryKind::Body);
+    destination
+        .import_fragment(
+            &ContentLocation::end(body),
+            &fragment,
+            FragmentConflictPolicy::rename_all(),
+        )
+        .unwrap();
+    let saved = destination.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    let footnotes =
+        String::from_utf8(package.get_part("/word/footnotes.xml").unwrap().to_vec()).unwrap();
+    let endnotes =
+        String::from_utf8(package.get_part("/word/endnotes.xml").unwrap().to_vec()).unwrap();
+    assert!(footnotes.contains("First note body") && footnotes.contains("Second note body"));
+    assert!(endnotes.contains("Endnote body"));
+    assert!(
+        package
+            .parts
+            .values()
+            .any(|bytes| bytes == b"f276-note-image")
+    );
+    let reopened = Document::from_bytes(&saved).unwrap();
+    assert_eq!(reopened.footnotes().len(), 3);
+    assert_eq!(
+        reopened
+            .stories()
+            .unwrap()
+            .into_iter()
+            .filter(|story| story.kind() == StoryKind::Endnote)
+            .count(),
+        1
+    );
+}
+
+fn f276_all_story_fixture() -> Document {
+    const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    const R: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    let mut seed = Document::new();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    package.set_part("/word/document.xml", format!(r#"<w:document xmlns:w="{W}" xmlns:r="{R}" xmlns:v="urn:schemas-microsoft-com:vml"><w:body><w:p><w:r><w:t>body source</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>cell source</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:pict><v:shape><v:textbox><w:txbxContent><w:p><w:r><w:t>text box source</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="f276Header"/><w:footerReference w:type="default" r:id="f276Footer"/></w:sectPr></w:body></w:document>"#).into_bytes());
+    let rels = package.get_or_create_part_rels("/word/document.xml");
+    for (id, kind, target) in [
+        (
+            "f276Header",
+            oxml_opc::relationship::rel_types::HEADER,
+            "header-f276.xml",
+        ),
+        (
+            "f276Footer",
+            oxml_opc::relationship::rel_types::FOOTER,
+            "footer-f276.xml",
+        ),
+        (
+            "f276Footnotes",
+            oxml_opc::relationship::rel_types::FOOTNOTES,
+            "footnotes-f276.xml",
+        ),
+        (
+            "f276Endnotes",
+            oxml_opc::relationship::rel_types::ENDNOTES,
+            "endnotes-f276.xml",
+        ),
+        (
+            "f276Comments",
+            oxml_opc::relationship::rel_types::COMMENTS,
+            "comments-f276.xml",
+        ),
+    ] {
+        rels.add_with_id(id, kind, target);
+    }
+    for (name, content_type, xml) in [
+        (
+            "/word/header-f276.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+            format!(
+                r#"<w:hdr xmlns:w="{W}"><w:p><w:r><w:t>header source</w:t></w:r></w:p></w:hdr>"#
+            ),
+        ),
+        (
+            "/word/footer-f276.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml",
+            format!(
+                r#"<w:ftr xmlns:w="{W}"><w:p><w:r><w:t>footer source</w:t></w:r></w:p></w:ftr>"#
+            ),
+        ),
+        (
+            "/word/footnotes-f276.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml",
+            format!(
+                r#"<w:footnotes xmlns:w="{W}"><w:footnote w:id="2"><w:p><w:r><w:t>footnote source</w:t></w:r></w:p></w:footnote></w:footnotes>"#
+            ),
+        ),
+        (
+            "/word/endnotes-f276.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml",
+            format!(
+                r#"<w:endnotes xmlns:w="{W}"><w:endnote w:id="2"><w:p><w:r><w:t>endnote source</w:t></w:r></w:p></w:endnote></w:endnotes>"#
+            ),
+        ),
+        (
+            "/word/comments-f276.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
+            format!(
+                r#"<w:comments xmlns:w="{W}"><w:comment w:id="2" w:author="Ada"><w:p><w:r><w:t>comment source</w:t></w:r></w:p></w:comment></w:comments>"#
+            ),
+        ),
+    ] {
+        package.set_part(name, xml.into_bytes());
+        package.content_types.add_override(name, content_type);
+    }
+    let mut output = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut output).unwrap();
+    Document::from_bytes(output.get_ref()).unwrap()
+}
+
+#[test]
+fn full_story_fragment_import_covers_every_supported_owner_pair() {
+    let kinds = [
+        StoryKind::Body,
+        StoryKind::TableCell,
+        StoryKind::TextBox,
+        StoryKind::Header,
+        StoryKind::Footer,
+        StoryKind::Footnote,
+        StoryKind::Endnote,
+        StoryKind::Comment,
+    ];
+    for source_kind in kinds {
+        let mut source = f276_all_story_fixture();
+        let source_story = f254_story(&source, source_kind);
+        let image = format!("f276-owner-image-{source_kind:?}");
+        source
+            .add_picture_to_story(
+                &source_story,
+                image.as_bytes(),
+                "scope.png",
+                Length::pt(10.0),
+                Length::pt(10.0),
+            )
+            .unwrap();
+        let source_story = f254_story(&source, source_kind);
+        let item = f254_item(&source, &source_story, 0);
+        let source_text = source.story_items(&source_story).unwrap()[0]
+            .text()
+            .unwrap()
+            .unwrap();
+        let fragment = DocumentFragment::from_range(
+            &source,
+            &item,
+            &ContentLocation::end(source_story),
+            false,
+        )
+        .unwrap();
+        for destination_kind in kinds {
+            let mut destination = f276_all_story_fixture();
+            let destination_story = f254_story(&destination, destination_kind);
+            destination
+                .import_fragment(
+                    &ContentLocation::end(destination_story),
+                    &fragment,
+                    FragmentConflictPolicy::rename_all(),
+                )
+                .unwrap();
+            let reopened = Document::from_bytes(&destination.to_bytes().unwrap()).unwrap();
+            let destination_story = f254_story(&reopened, destination_kind);
+            let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(
+                destination.to_bytes().unwrap(),
+            ))
+            .unwrap();
+            let copied = package
+                .parts
+                .iter()
+                .find_map(|(name, bytes)| (bytes == image.as_bytes()).then_some(name))
+                .unwrap();
+            assert!(
+                package
+                    .get_part_rels(destination_story.part_name())
+                    .unwrap()
+                    .items
+                    .iter()
+                    .any(|relationship| relationship.rel_type
+                        == oxml_opc::relationship::rel_types::IMAGE
+                        && oxml_opc::OpcPackage::resolve_rel_target(
+                            destination_story.part_name(),
+                            &relationship.target
+                        ) == *copied),
+                "{source_kind:?} -> {destination_kind:?}"
+            );
+            assert!(
+                reopened
+                    .story_items(&destination_story)
+                    .unwrap()
+                    .iter()
+                    .any(|item| item.text().unwrap().as_deref() == Some(source_text.as_str())),
+                "{source_kind:?} -> {destination_kind:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn fragment_import_preserves_nested_block_control_content() {
+    let xml = wrap_word_body(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="nested"/></w:sdtPr><w:sdtContent><w:sdt><w:sdtContent><w:p><w:r><w:t>nested control value</w:t></w:r></w:p></w:sdtContent></w:sdt><w:p><w:r><w:t>after nested control</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    );
+    let source = document_with_content_controls(&xml);
+    let body = f254_story(&source, StoryKind::Body);
+    let control = source
+        .story_items(&body)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind() == StoryItemKind::ContentControl)
+        .unwrap()
+        .location()
+        .clone();
+    let fragment =
+        DocumentFragment::from_range(&source, &control, &ContentLocation::end(body), false)
+            .unwrap();
+    for kind in [
+        StoryKind::Body,
+        StoryKind::TableCell,
+        StoryKind::TextBox,
+        StoryKind::Header,
+        StoryKind::Footer,
+        StoryKind::Footnote,
+        StoryKind::Endnote,
+        StoryKind::Comment,
+    ] {
+        let mut destination = f276_all_story_fixture();
+        let owner = f254_story(&destination, kind);
+        destination
+            .import_fragment(
+                &ContentLocation::end(owner),
+                &fragment,
+                FragmentConflictPolicy::rename_all(),
+            )
+            .unwrap();
+        let saved = destination.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&saved).unwrap();
+        let owner = f254_story(&reopened, kind);
+        let items = reopened.story_items(&owner).unwrap();
+        assert!(
+            items
+                .iter()
+                .any(|item| item.kind() == StoryItemKind::ContentControl
+                    && item
+                        .text()
+                        .unwrap()
+                        .unwrap_or_default()
+                        .contains("nested control value")),
+            "{kind:?}"
+        );
+    }
+}
+
+#[test]
+fn fragment_import_remaps_nested_note_references_and_companion_bindings() {
+    let mut source = Document::new();
+    source.add_paragraph("selected note root");
+    let body = f254_story(&source, StoryKind::Body);
+    let first = source
+        .create_footnote(&f254_item(&source, &body, 0), "first companion")
+        .unwrap();
+    let body = f254_story(&source, StoryKind::Body);
+    let second = source
+        .create_footnote(&f254_item(&source, &body, 0), "second companion")
+        .unwrap();
+    let body = f254_story(&source, StoryKind::Body);
+    let endnote = source
+        .create_endnote(&f254_item(&source, &body, 0), "end companion")
+        .unwrap();
+    source
+        .add_style(StyleBuilder::paragraph("NoteOnly", "Note Only"))
+        .unwrap();
+    let range = RunRange {
+        start: RunPosition {
+            body_index: 0,
+            run_index: 0,
+        },
+        end: RunPosition {
+            body_index: 0,
+            run_index: 1,
+        },
+    };
+    let comment = source
+        .add_comment(range, "Note reviewer", None, "companion comment")
+        .unwrap();
+    source
+        .reply_to(comment, "Reply", "companion reply")
+        .unwrap();
+    let list = source.add_list_definition(&[ListLevel::decimal()]);
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(source.to_bytes().unwrap()))
+            .unwrap();
+    let binding = r#"<w:sdt><w:sdtPr><w:dataBinding w:storeItemID="{ABCDEFAB-ABCD-ABCD-ABCD-ABCDEFABCDEF}" w:xpath="/root"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>note binding</w:t></w:r></w:p></w:sdtContent></w:sdt>"#;
+    let root_binding = binding.replace(
+        "{ABCDEFAB-ABCD-ABCD-ABCD-ABCDEFABCDEF}",
+        " abcdefab-abcd-abcd-abcd-abcdefabcdef ",
+    );
+    let comment_binding = binding.replace(
+        "ABCDEFAB-ABCD-ABCD-ABCD-ABCDEFABCDEF",
+        "abcdefab-abcd-abcd-abcd-abcdefabcdef",
+    );
+    let anchors = format!(
+        "<w:commentRangeStart w:id=\"{comment}\"/><w:r><w:t>commented note</w:t></w:r><w:commentRangeEnd w:id=\"{comment}\"/><w:r><w:commentReference w:id=\"{comment}\"/></w:r>"
+    );
+    let marker = r#"<w:p><w:bookmarkStart w:id="90" w:name="NoteMark"/><w:permStart w:id="91" w:edGrp="everyone"/><w:ins w:id="92" w:author="Ada"><w:r><w:t>note revision</w:t></w:r></w:ins><w:permEnd w:id="91"/><w:bookmarkEnd w:id="90"/></w:p>"#;
+    let body_xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap()
+        .replace(&format!("<w:commentRangeStart w:id=\"{comment}\"/>"), "")
+        .replace(&format!("<w:commentRangeEnd w:id=\"{comment}\"/>"), "")
+        .replace(&format!("<w:commentReference w:id=\"{comment}\"/>"), "")
+        .replacen("</w:p>", "<w:fldSimple w:instr=\"REF NoteMark\"><w:r><w:t>note ref</w:t></w:r></w:fldSimple></w:p>", 1);
+    let body_xml = body_xml.replacen("<w:sectPr", &format!("{root_binding}<w:sectPr"), 1);
+    package.set_part("/word/document.xml", body_xml.into_bytes());
+    let comments = std::str::from_utf8(package.get_part("/word/comments.xml").unwrap())
+        .unwrap()
+        .replacen("</w:comment>", &format!("{comment_binding}</w:comment>"), 1);
+    package.set_part("/word/comments.xml", comments.into_bytes());
+    let footnotes = std::str::from_utf8(package.get_part("/word/footnotes.xml").unwrap()).unwrap()
+        .replacen("<w:p>", &format!("<w:p><w:pPr><w:pStyle w:val=\"NoteOnly\"/><w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"{list}\"/></w:numPr></w:pPr>"), 1)
+        .replacen("</w:footnote>", &format!("<w:p><w:r><w:footnoteReference w:id=\"{second}\"/><w:endnoteReference w:id=\"{endnote}\"/></w:r></w:p>{binding}{marker}<w:p>{anchors}</w:p></w:footnote>"), 1);
+    let offset = footnotes.find("second companion").unwrap();
+    let footnotes = format!(
+        "{}{}",
+        &footnotes[..offset],
+        footnotes[offset..].replacen(
+            "</w:footnote>",
+            &format!("<w:p><w:r><w:footnoteReference w:id=\"{first}\"/></w:r></w:p></w:footnote>"),
+            1
+        )
+    );
+    package.set_part("/word/footnotes.xml", footnotes.into_bytes());
+    package.set_part("/customXml/item276.xml", b"<root>value</root>".to_vec());
+    package.set_part("/customXml/itemProps276.xml", br#"<ds:datastoreItem xmlns:ds="http://schemas.openxmlformats.org/officeDocument/2006/customXml" ds:itemID="{ABCDEFAB-ABCD-ABCD-ABCD-ABCDEFABCDEF}"><ds:schemaRefs/></ds:datastoreItem>"#.to_vec());
+    package
+        .content_types
+        .add_override("/customXml/item276.xml", "application/xml");
+    package.content_types.add_override(
+        "/customXml/itemProps276.xml",
+        "application/vnd.openxmlformats-officedocument.customXmlProperties+xml",
+    );
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add_with_id(
+            "store276",
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml",
+            "../customXml/item276.xml",
+        );
+    package
+        .get_or_create_part_rels("/customXml/item276.xml")
+        .add_with_id(
+            "props276",
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXmlProps",
+            "itemProps276.xml",
+        );
+    let mut output = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut output).unwrap();
+    let source = Document::from_bytes(output.get_ref()).unwrap();
+    let body = f254_story(&source, StoryKind::Body);
+    let fragment = DocumentFragment::from_range(
+        &source,
+        &f254_item(&source, &body, 0),
+        &ContentLocation::end(body),
+        false,
+    )
+    .unwrap();
+    for kind in [StoryKind::Footnote, StoryKind::Endnote, StoryKind::Comment] {
+        let mut owner_destination = Document::from_bytes(output.get_ref()).unwrap();
+        let owner = f254_story(&owner_destination, kind);
+        owner_destination
+            .import_fragment(
+                &ContentLocation::end(owner),
+                &fragment,
+                FragmentConflictPolicy::rename_all(),
+            )
+            .unwrap();
+        let reopened = Document::from_bytes(&owner_destination.to_bytes().unwrap()).unwrap();
+        assert_eq!(reopened.footnotes().len(), 4, "{kind:?}");
+        assert_eq!(reopened.comments().len(), 4, "{kind:?}");
+    }
+    let mut destination = Document::from_bytes(output.get_ref()).unwrap();
+    for _ in 0..2 {
+        let body = f254_story(&destination, StoryKind::Body);
+        destination
+            .import_fragment(
+                &ContentLocation::end(body),
+                &fragment,
+                FragmentConflictPolicy::rename_all(),
+            )
+            .unwrap();
+    }
+    let saved = destination.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    let footnotes = std::str::from_utf8(package.get_part("/word/footnotes.xml").unwrap()).unwrap();
+    let body = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    for (first, second, endnote) in [(2, 3, 2), (4, 5, 3), (6, 7, 4)] {
+        assert!(
+            body.contains(&format!("footnoteReference w:id=\"{first}\"")),
+            "{body}"
+        );
+        assert!(
+            body.contains(&format!("footnoteReference w:id=\"{second}\"")),
+            "{body}"
+        );
+        assert!(
+            body.contains(&format!("endnoteReference w:id=\"{endnote}\"")),
+            "{body}"
+        );
+        let note = footnotes
+            .split(&format!("<w:footnote w:id=\"{first}\""))
+            .nth(1)
+            .unwrap()
+            .split("</w:footnote>")
+            .next()
+            .unwrap();
+        assert!(
+            note.contains(&format!("footnoteReference w:id=\"{second}\"")),
+            "{note}"
+        );
+        assert!(
+            note.contains(&format!("endnoteReference w:id=\"{endnote}\"")),
+            "{note}"
+        );
+        let note = footnotes
+            .split(&format!("<w:footnote w:id=\"{second}\""))
+            .nth(1)
+            .unwrap()
+            .split("</w:footnote>")
+            .next()
+            .unwrap();
+        assert!(
+            note.contains(&format!("footnoteReference w:id=\"{first}\"")),
+            "{note}"
+        );
+    }
+    assert!(
+        footnotes.contains("NoteOnlyMerge1") && footnotes.contains("NoteOnlyMerge2"),
+        "{footnotes}"
+    );
+    for ordinal in [1, 2] {
+        let id = format!("{{F2760000-0000-4000-8000-{ordinal:012X}}}");
+        assert!(footnotes.contains(&id), "{footnotes}");
+        assert!(body.contains(&id), "{body}");
+        assert!(package.parts.values().any(|bytes| {
+            bytes
+                .windows(id.len())
+                .any(|window| window == id.as_bytes())
+        }));
+    }
+    assert_eq!(Document::from_bytes(&saved).unwrap().footnotes().len(), 6);
+    assert_eq!(Document::from_bytes(&saved).unwrap().comments().len(), 6);
+    for element in ["bookmarkStart", "permStart", "ins"] {
+        let ids = footnotes
+            .split(&format!("<w:{element} "))
+            .skip(1)
+            .filter_map(|item| item.split("w:id=\"").nth(1))
+            .filter_map(|id| id.split('"').next())
+            .collect::<Vec<_>>();
+        assert_eq!(ids.len(), 3, "{element}: {footnotes}");
+        assert_eq!(
+            ids.iter().copied().collect::<HashSet<_>>().len(),
+            3,
+            "{element}: {ids:?}"
+        );
+    }
+    let comments = std::str::from_utf8(package.get_part("/word/comments.xml").unwrap()).unwrap();
+    for ordinal in [1, 2] {
+        let store = format!("{{F2760000-0000-4000-8000-{ordinal:012X}}}");
+        assert!(comments.contains(&store), "{comments}");
+    }
+    let names = footnotes
+        .split("w:name=\"")
+        .skip(1)
+        .filter_map(|name| name.split('"').next())
+        .collect::<HashSet<_>>();
+    let targets = body
+        .split("w:instr=\"REF ")
+        .skip(1)
+        .filter_map(|target| target.split('"').next())
+        .collect::<HashSet<_>>();
+    assert_eq!(names, targets);
+}
+
+#[test]
+fn fragment_import_inserts_at_nested_block_control_boundaries() {
+    let xml = wrap_word_body(
+        r#"<w:sdt><w:sdtContent><w:sdt><w:sdtContent><w:p><w:r><w:t>first</w:t></w:r></w:p><w:p><w:r><w:t>second</w:t></w:r></w:p></w:sdtContent></w:sdt></w:sdtContent></w:sdt>"#,
+    );
+    let source = document_with_content_controls(&xml);
+    let body = f254_story(&source, StoryKind::Body);
+    let start = ContentLocation::new(body.clone(), StoryItemKind::Paragraph, vec![1, 0]);
+    let end = ContentLocation::new(body, StoryItemKind::Paragraph, vec![1, 1]);
+    let fragment = DocumentFragment::from_range(&source, &start, &end, false).unwrap();
+    let mut destination = document_with_content_controls(&xml);
+    let body = f254_story(&destination, StoryKind::Body);
+    destination
+        .import_fragment(
+            &ContentLocation::new(body, StoryItemKind::Paragraph, vec![1, 1]),
+            &fragment,
+            FragmentConflictPolicy::rename_all(),
+        )
+        .unwrap();
+    let saved = destination.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert_eq!(xml.matches("<w:t>first</w:t>").count(), 2, "{xml}");
+    assert_eq!(xml.matches("<w:t>second</w:t>").count(), 1, "{xml}");
+    Document::from_bytes(&saved).unwrap();
+}
+
+#[test]
+fn fragment_import_rejects_inline_grammar_and_split_control_ownership() {
+    for content in [
+        r#"<w:r><w:t>invalid body run</w:t></w:r>"#,
+        r#"<w:sdt><w:sdtContent><w:r><w:t>inline control</w:t></w:r></w:sdtContent></w:sdt>"#,
+    ] {
+        let source = document_with_content_controls(&wrap_word_body(content));
+        let body = f254_story(&source, StoryKind::Body);
+        assert!(
+            DocumentFragment::from_range(
+                &source,
+                &f254_item(&source, &body, 0),
+                &ContentLocation::end(body),
+                false
+            )
+            .is_err()
+        );
+    }
+    let source = document_with_content_controls(&wrap_word_body(
+        r#"<w:p><w:sdt><w:sdtContent><w:r><w:t>inline</w:t></w:r></w:sdtContent></w:sdt></w:p><w:sdt><w:sdtContent><w:p><w:r><w:t>block</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    ));
+    let body = f254_story(&source, StoryKind::Body);
+    let fragment = DocumentFragment::from_range(
+        &source,
+        &f254_item(&source, &body, 0),
+        &ContentLocation::end(body),
+        false,
+    )
+    .unwrap();
+    let mut destination = document_with_content_controls(&wrap_word_body(
+        r#"<w:p><w:sdt><w:sdtContent><w:r><w:t>inline target</w:t></w:r></w:sdtContent></w:sdt></w:p>"#,
+    ));
+    let body = f254_story(&destination, StoryKind::Body);
+    let inline = destination
+        .story_items(&body)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind() == StoryItemKind::ContentControl)
+        .unwrap()
+        .location()
+        .clone();
+    let before = destination.to_bytes().unwrap();
+    assert!(
+        destination
+            .import_fragment(&inline, &fragment, FragmentConflictPolicy::rename_all())
+            .is_err()
+    );
+    assert_eq!(destination.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn fragment_import_invalidates_destination_package_signature_evidence() {
+    let mut source = Document::new();
+    source.add_paragraph("unsigned fragment");
+    let body = f254_story(&source, StoryKind::Body);
+    let fragment = DocumentFragment::from_range(
+        &source,
+        &f254_item(&source, &body, 0),
+        &ContentLocation::end(body),
+        false,
+    )
+    .unwrap();
+    let mut destination = f236_embedded_document(true);
+    let body = f254_story(&destination, StoryKind::Body);
+    destination
+        .import_fragment(
+            &ContentLocation::end(body),
+            &fragment,
+            FragmentConflictPolicy::rename_all(),
+        )
+        .unwrap();
+    let reopened = Document::from_bytes(&destination.to_bytes().unwrap()).unwrap();
+    assert!(
+        reopened
+            .embedded_content()
+            .unwrap()
+            .iter()
+            .all(|content| content.signature_state == EmbeddedSignatureState::Invalidated)
+    );
+}
+
+#[test]
+fn fragment_import_rejects_integrity_bound_reachable_signature_atomically() {
+    let mut source = Document::new();
+    source.add_picture(
+        b"signature graph owner",
+        "sig.png",
+        Length::pt(10.0),
+        Length::pt(10.0),
+    );
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(source.to_bytes().unwrap()))
+            .unwrap();
+    let image = package
+        .parts
+        .iter()
+        .find_map(|(name, bytes)| (bytes == b"signature graph owner").then(|| name.clone()))
+        .unwrap();
+    package.set_part(
+        "/_xmlsignatures/reachable.xml",
+        b"integrity bound signature".to_vec(),
+    );
+    package.content_types.add_override(
+        "/_xmlsignatures/reachable.xml",
+        "application/vnd.openxmlformats-package.digital-signature-xmlsignature+xml",
+    );
+    package.get_or_create_part_rels(&image).add_with_id(
+        "signature",
+        "urn:f276:integrity-bound",
+        "/_xmlsignatures/reachable.xml",
+    );
+    let mut output = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut output).unwrap();
+    let source = Document::from_bytes(output.get_ref()).unwrap();
+    let body = f254_story(&source, StoryKind::Body);
+    let fragment = DocumentFragment::from_range(
+        &source,
+        &f254_item(&source, &body, 0),
+        &ContentLocation::end(body),
+        false,
+    )
+    .unwrap();
+    let mut destination = Document::new();
+    let before = destination.to_bytes().unwrap();
+    let body = f254_story(&destination, StoryKind::Body);
+    let error = destination
+        .import_fragment(
+            &ContentLocation::end(body),
+            &fragment,
+            FragmentConflictPolicy::rename_all(),
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("integrity-bound signature"), "{error}");
+    assert_eq!(destination.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn fragment_import_numbering_maps_do_not_cascade_across_companions() {
+    let mut source = Document::new();
+    source.add_list_definition(&[ListLevel::decimal()]);
+    let first = source.add_list_definition(&[ListLevel::decimal()]);
+    let second = source.add_list_definition(&[ListLevel::bullet()]);
+    assert_eq!((first, second), (2, 3));
+    source.add_paragraph("first list").set_numbering(first, 0);
+    source.add_paragraph("second list").set_numbering(second, 0);
+    let body = f254_story(&source, StoryKind::Body);
+    source
+        .create_footnote(&f254_item(&source, &body, 0), "numbered note")
+        .unwrap();
+    source
+        .add_comment(
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "numbered comment",
+        )
+        .unwrap();
+    let mut package = f249_package(&source.to_bytes().unwrap());
+    package.set_part("/word/numbering.xml", format!(r#"<w:numbering xmlns:w="{W_NS}"><w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl></w:abstractNum><w:abstractNum w:abstractNumId="2"><w:lvl w:ilvl="0"><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/></w:lvl></w:abstractNum><w:num w:numId="2"><w:abstractNumId w:val="1"/></w:num><w:num w:numId="3"><w:abstractNumId w:val="2"/></w:num></w:numbering>"#).into_bytes());
+    let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    let pieces = xml.split("<w:numId w:val=\"").collect::<Vec<_>>();
+    assert_eq!(pieces.len(), 3);
+    let xml = format!(
+        "{}<w:numId w:val=\"2\"{}<w:numId w:val=\"3\"{}",
+        pieces[0],
+        pieces[1].split_once('"').unwrap().1,
+        pieces[2].split_once('"').unwrap().1
+    );
+    package.set_part("/word/document.xml", xml.into_bytes());
+    let numbered = r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="2"/></w:numPr></w:pPr><w:r><w:t>first companion list</w:t></w:r></w:p><w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="3"/></w:numPr></w:pPr><w:r><w:t>second companion list</w:t></w:r></w:p>"#;
+    for (part, end) in [
+        ("/word/footnotes.xml", "</w:footnote>"),
+        ("/word/comments.xml", "</w:comment>"),
+    ] {
+        let xml = std::str::from_utf8(package.get_part(part).unwrap())
+            .unwrap()
+            .replacen(end, &format!("{numbered}{end}"), 1);
+        package.set_part(part, xml.into_bytes());
+    }
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let source = Document::from_bytes(bytes.get_ref()).unwrap();
+    let body = f254_story(&source, StoryKind::Body);
+    let fragment = DocumentFragment::from_range(
+        &source,
+        &f254_item(&source, &body, 0),
+        &ContentLocation::end(body),
+        false,
+    )
+    .unwrap();
+    let mut previous = None;
+    for _ in 0..32 {
+        let mut destination = Document::new();
+        let existing_first = destination.add_list_definition(&[ListLevel::decimal()]);
+        let existing_second = destination.add_list_definition(&[ListLevel::decimal()]);
+        destination
+            .add_paragraph("existing first")
+            .set_numbering(existing_first, 0);
+        destination
+            .add_paragraph("existing second")
+            .set_numbering(existing_second, 0);
+        let body = f254_story(&destination, StoryKind::Body);
+        destination
+            .import_fragment(
+                &ContentLocation::end(body),
+                &fragment,
+                FragmentConflictPolicy::rename_all(),
+            )
+            .unwrap();
+        let package = f249_package(&destination.to_bytes().unwrap());
+        for part in [
+            "/word/document.xml",
+            "/word/footnotes.xml",
+            "/word/comments.xml",
+        ] {
+            let xml = std::str::from_utf8(package.get_part(part).unwrap()).unwrap();
+            let ids = xml
+                .split("<w:numId w:val=\"")
+                .skip(1)
+                .map(|value| value.split('"').next().unwrap())
+                .collect::<Vec<_>>();
+            let expected = if part == "/word/document.xml" {
+                vec!["1", "2", "3", "4"]
+            } else {
+                vec!["3", "4"]
+            };
+            assert_eq!(ids, expected, "{part}: {xml}");
+        }
+        assert_eq!(destination.numbering_is_bullet(3), Some(false));
+        assert_eq!(destination.numbering_is_bullet(4), Some(true));
+        if let Some(previous) = &previous {
+            assert_eq!(&package.parts, previous);
+        }
+        previous = Some(package.parts);
+    }
+}
+
+#[test]
+fn fragment_import_leaf_reuse_requires_destination_leaf() {
+    let mut source = Document::new();
+    source.add_picture(
+        b"f276-leaf-image",
+        "leaf.png",
+        Length::pt(12.0),
+        Length::pt(12.0),
+    );
+    let body = f254_story(&source, StoryKind::Body);
+    let fragment = DocumentFragment::from_range(
+        &source,
+        &f254_item(&source, &body, 0),
+        &ContentLocation::end(body),
+        false,
+    )
+    .unwrap();
+    let mut package = f249_package(&source.to_bytes().unwrap());
+    let image = package
+        .parts
+        .iter()
+        .find_map(|(part, bytes)| (bytes.as_slice() == b"f276-leaf-image").then(|| part.clone()))
+        .unwrap();
+    package
+        .get_or_create_part_rels(&image)
+        .add_external("urn:f276:unrelated", "https://example.test/original-only");
+    let original_relationships = package.get_part_rels(&image).unwrap().to_xml().unwrap();
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut destination = Document::from_bytes(bytes.get_ref()).unwrap();
+    let body = f254_story(&destination, StoryKind::Body);
+    destination
+        .import_fragment(
+            &ContentLocation::end(body),
+            &fragment,
+            FragmentConflictPolicy::reuse_equivalent(),
+        )
+        .unwrap();
+    let package = f249_package(&destination.to_bytes().unwrap());
+    let images = package
+        .parts
+        .iter()
+        .filter(|(_, bytes)| bytes.as_slice() == b"f276-leaf-image")
+        .collect::<Vec<_>>();
+    assert_eq!(images.len(), 2);
+    assert_eq!(
+        package.get_part_rels(&image).unwrap().to_xml().unwrap(),
+        original_relationships
+    );
+    let imported = images.iter().find(|(part, _)| *part != &image).unwrap().0;
+    assert!(
+        package
+            .get_part_rels(imported)
+            .is_none_or(|rels| rels.items.is_empty())
+    );
+}
+
+#[test]
+fn fragment_import_numbering_style_links_keep_inherited_namespace_scope() {
+    for prefix in ["w", "producer"] {
+        let mut source = f256_dependency_source();
+        let mut package = f249_package(&source.to_bytes().unwrap());
+        let xml = std::str::from_utf8(package.get_part("/word/numbering.xml").unwrap()).unwrap().replacen("<w:abstractNum w:abstractNumId=\"41\">", "<w:abstractNum w:abstractNumId=\"41\"><w:styleLink w:val=\"FragmentStyle\"/><w:numStyleLink w:val=\"FragmentNumberStyle\"/>", 1).replace("w:", &format!("{prefix}:")).replace("xmlns:w=", &format!("xmlns:{prefix}="));
+        package.set_part("/word/numbering.xml", xml.into_bytes());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let source = Document::from_bytes(bytes.get_ref()).unwrap();
+        let fragment = f256_fragment(&source);
+        let mut destination = f256_dependency_source();
+        let body = f254_story(&destination, StoryKind::Body);
+        destination
+            .import_fragment(
+                &ContentLocation::end(body),
+                &fragment,
+                FragmentConflictPolicy::rename_all(),
+            )
+            .unwrap();
+        let package = f249_package(&destination.to_bytes().unwrap());
+        let xml = std::str::from_utf8(package.get_part("/word/numbering.xml").unwrap()).unwrap();
+        assert!(
+            xml.split(":styleLink")
+                .nth(1)
+                .unwrap()
+                .split('>')
+                .next()
+                .unwrap()
+                .contains("val=\"FragmentStyleMerge1\""),
+            "{prefix}: {xml}"
+        );
+        assert!(
+            xml.split(":numStyleLink")
+                .nth(1)
+                .unwrap()
+                .split('>')
+                .next()
+                .unwrap()
+                .contains("val=\"FragmentNumberStyleMerge1\""),
+            "{prefix}: {xml}"
+        );
+    }
+}
+
+#[test]
+fn fragment_import_store_allocation_reserves_incoming_companion_identities() {
+    let original = "{11111111-1111-1111-1111-111111111111}";
+    let companion = "{F2760000-0000-4000-8000-000000000001}";
+    let binding = |id: &str, text: &str| {
+        format!(
+            r#"<w:sdt><w:sdtPr><w:tag w:val="{text}"/><w:dataBinding w:storeItemID="{id}" w:xpath="/root"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:sdtContent></w:sdt>"#
+        )
+    };
+    let mut source = Document::new();
+    source.add_paragraph("source root");
+    let body = f254_story(&source, StoryKind::Body);
+    source
+        .create_footnote(&f254_item(&source, &body, 0), "store companion")
+        .unwrap();
+    let mut package = f249_package(&source.to_bytes().unwrap());
+    let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap())
+        .unwrap()
+        .replacen(
+            "<w:sectPr",
+            &format!("{}<w:sectPr", binding(original, "original store")),
+            1,
+        );
+    package.set_part("/word/document.xml", xml.into_bytes());
+    let xml = std::str::from_utf8(package.get_part("/word/footnotes.xml").unwrap())
+        .unwrap()
+        .replacen(
+            "</w:footnote>",
+            &format!(
+                "{}</w:footnote>",
+                binding("f2760000-0000-4000-8000-000000000001", "second store")
+            ),
+            1,
+        );
+    package.set_part("/word/footnotes.xml", xml.into_bytes());
+    for (ordinal, id) in [(1, original), (2, companion)] {
+        let item = format!("/customXml/itemF276{ordinal}.xml");
+        let props = format!("/customXml/itemPropsF276{ordinal}.xml");
+        package.set_part(&item, format!("<root>store {ordinal}</root>").into_bytes());
+        package.set_part(&props, format!(r#"<ds:datastoreItem xmlns:ds="http://schemas.openxmlformats.org/officeDocument/2006/customXml" ds:itemID="{id}"><ds:schemaRefs/></ds:datastoreItem>"#).into_bytes());
+        package.content_types.add_override(&item, "application/xml");
+        package.content_types.add_override(
+            &props,
+            "application/vnd.openxmlformats-officedocument.customXmlProperties+xml",
+        );
+        package
+            .get_or_create_part_rels("/word/document.xml")
+            .add_with_id(
+                &format!("store{ordinal}"),
+                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml",
+                &format!("../customXml/itemF276{ordinal}.xml"),
+            );
+        package.get_or_create_part_rels(&item).add_with_id(
+            "props",
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXmlProps",
+            &format!("itemPropsF276{ordinal}.xml"),
+        );
+    }
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let source = Document::from_bytes(bytes.get_ref()).unwrap();
+    let body = f254_story(&source, StoryKind::Body);
+    let fragment = DocumentFragment::from_range(
+        &source,
+        &f254_item(&source, &body, 0),
+        &ContentLocation::end(body),
+        false,
+    )
+    .unwrap();
+    let mut destination = document_with_bound_content_controls(
+        &wrap_word_body(&binding(original, "destination")),
+        Some("<root>destination</root>"),
+    );
+    let body = f254_story(&destination, StoryKind::Body);
+    destination
+        .import_fragment(
+            &ContentLocation::end(body),
+            &fragment,
+            FragmentConflictPolicy::rename_all(),
+        )
+        .unwrap();
+    let package = f249_package(&destination.to_bytes().unwrap());
+    let body_xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(
+        body_xml.contains("{F2760000-0000-4000-8000-000000000002}"),
+        "{body_xml}"
+    );
+    let properties = package
+        .parts
+        .iter()
+        .filter(|(name, _)| {
+            package.content_types.content_type_for(name)
+                == Some("application/vnd.openxmlformats-officedocument.customXmlProperties+xml")
+        })
+        .map(|(_, bytes)| std::str::from_utf8(bytes).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(properties.len(), 3);
+    for id in [
+        original,
+        companion,
+        "{F2760000-0000-4000-8000-000000000002}",
+    ] {
+        assert_eq!(
+            properties.iter().filter(|xml| xml.contains(id)).count(),
+            1,
+            "{properties:?}"
+        );
+    }
+    assert_eq!(destination.content_controls().len(), 2);
+    assert_eq!(
+        destination
+            .set_content_control_value_by_tag("original store", "changed")
+            .unwrap(),
+        1
+    );
+    let changed = f249_package(&destination.to_bytes().unwrap());
+    assert!(
+        changed
+            .parts
+            .values()
+            .any(|bytes| bytes.as_slice() == b"<root>store 2</root>")
+    );
+}
+
+#[test]
+fn rich_merge_rejects_companion_external_edges_while_fragment_import_preserves_them() {
+    for part in ["/word/comments.xml", "/word/footnotes.xml"] {
+        let mut source = Document::new();
+        source.add_paragraph("source root");
+        if part == "/word/comments.xml" {
+            source
+                .add_comment(
+                    RunRange {
+                        start: RunPosition {
+                            body_index: 0,
+                            run_index: 0,
+                        },
+                        end: RunPosition {
+                            body_index: 0,
+                            run_index: 1,
+                        },
+                    },
+                    "Ada",
+                    None,
+                    "source comment",
+                )
+                .unwrap();
+        } else {
+            let body = f254_story(&source, StoryKind::Body);
+            source
+                .create_footnote(&f254_item(&source, &body, 0), "source note")
+                .unwrap();
+        }
+        let mut package = f249_package(&source.to_bytes().unwrap());
+        let id = package.get_or_create_part_rels(part).add_external(
+            oxml_opc::relationship::rel_types::HYPERLINK,
+            "https://example.test/companion",
+        );
+        let xml = std::str::from_utf8(package.get_part(part).unwrap()).unwrap().replacen("</w:p>", &format!(r#"<w:hyperlink xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="{id}"><w:r><w:t>companion link</w:t></w:r></w:hyperlink></w:p>"#), 1);
+        package.set_part(part, xml.into_bytes());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut template = document_with_content_controls(&wrap_word_body(
+            r#"<w:p><w:fldSimple w:instr="MERGEFIELD Value"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p><w:sectPr/>"#,
+        ));
+        let before = template.to_bytes().unwrap();
+        let data = MailMergeData {
+            records: vec![MailMergeRecord {
+                values: BTreeMap::from([(
+                    "Value".to_owned(),
+                    MailMergeValue::Fragment(bytes.get_ref().clone()),
+                )]),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let error = template
+            .mail_merge_rich(&data, None)
+            .err()
+            .unwrap_or_else(|| panic!("legacy rich merge accepted {part} external edge"));
+        assert!(
+            error.to_string().contains("non-internal relationship"),
+            "{error}"
+        );
+        assert_eq!(template.to_bytes().unwrap(), before);
+        let source = Document::from_bytes(bytes.get_ref()).unwrap();
+        let body = f254_story(&source, StoryKind::Body);
+        let fragment = DocumentFragment::from_range(
+            &source,
+            &f254_item(&source, &body, 0),
+            &ContentLocation::end(body),
+            false,
+        )
+        .unwrap();
+        let mut destination = Document::new();
+        let body = f254_story(&destination, StoryKind::Body);
+        destination
+            .import_fragment(
+                &ContentLocation::end(body),
+                &fragment,
+                FragmentConflictPolicy::rename_all(),
+            )
+            .unwrap();
+        let package = f249_package(&destination.to_bytes().unwrap());
+        let edges = package.get_part_rels(part).unwrap();
+        assert_eq!(edges.items.len(), 1);
+        assert_eq!(edges.items[0].target, "https://example.test/companion");
+        assert_eq!(edges.items[0].target_mode.as_deref(), Some("External"));
+        let xml = std::str::from_utf8(package.get_part(part).unwrap()).unwrap();
+        assert!(
+            xml.contains(&format!("r:id=\"{}\"", edges.items[0].id)),
+            "{xml}"
+        );
+    }
+}
+
+fn f277_block(name: &str, gallery: &str) -> rdocx::BuildingBlock {
+    let mut body = CT_Body::new();
+    body.sect_pr = None;
+    rdocx::BuildingBlock {
+        name: name.to_owned(),
+        kind: rdocx::BuildingBlockKind::BuildingBlock,
+        category: Some("reports".to_owned()),
+        description: Some("authored".to_owned()),
+        guid: None,
+        gallery: Some(gallery.to_owned()),
+        behaviors: vec!["content".to_owned()],
+        body,
+    }
+}
+
+#[test]
+fn public_created_building_blocks_insert_and_reopen() {
+    let mut source = Document::new();
+    source.add_paragraph("glossary text");
+    source.add_picture(
+        b"f277-image",
+        "glossary.png",
+        Length::pt(12.0),
+        Length::pt(12.0),
+    );
+    let body = f254_story(&source, StoryKind::Body);
+    let fragment = DocumentFragment::from_range(
+        &source,
+        &f254_item(&source, &body, 0),
+        &ContentLocation::end(body),
+        false,
+    )
+    .unwrap();
+    let mut document = document_with_content_controls(&wrap_word_body(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="existing"/><w:richText/><x:unknown xmlns:x="urn:producer" value='keep'/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>control</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    ));
+    let mut auto = f277_block("automatic", "autoTxt");
+    auto.kind = rdocx::BuildingBlockKind::AutoText;
+    let automatic = document
+        .create_building_block_from_fragment(auto, &fragment, FragmentConflictPolicy::rename_all())
+        .unwrap();
+    let block = document
+        .create_building_block_from_fragment(
+            f277_block("building", "docParts"),
+            &fragment,
+            FragmentConflictPolicy::rename_all(),
+        )
+        .unwrap();
+    let placeholder = document
+        .create_building_block_from_fragment(
+            f277_block("placeholder", "placeholder"),
+            &fragment,
+            FragmentConflictPolicy::rename_all(),
+        )
+        .unwrap();
+    let body = f254_story(&document, StoryKind::Body);
+    let control = document
+        .story_items(&body)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind() == StoryItemKind::ContentControl)
+        .unwrap()
+        .location()
+        .clone();
+    document
+        .bind_building_block_placeholder(&control, &placeholder)
+        .unwrap();
+    for entry in [&automatic, &block, &placeholder] {
+        let body = f254_story(&document, StoryKind::Body);
+        document
+            .insert_building_block(
+                &ContentLocation::end(body),
+                entry,
+                FragmentConflictPolicy::rename_all(),
+            )
+            .unwrap();
+    }
+    let bytes = document.to_bytes().unwrap();
+    let package = f249_package(&bytes);
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let entries = reopened.building_blocks().unwrap();
+    assert_eq!(entries.len(), 3);
+    assert_eq!(entries[0].block.kind, rdocx::BuildingBlockKind::AutoText);
+    assert!(
+        entries
+            .iter()
+            .all(|entry| entry.block.category.as_deref() == Some("reports")
+                && entry.block.behaviors == ["content"])
+    );
+    let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(xml.contains("richText"));
+    assert!(!xml.contains("docPartObj"));
+    assert!(xml.contains("placeholder"));
+    assert!(xml.contains("value='keep'"));
+    assert_eq!(xml.matches("glossary text").count(), 3);
+    for entry in &entries {
+        let rels = package.get_part_rels(&entry.glossary_part).unwrap();
+        for rel in &rels.items {
+            assert!(
+                package
+                    .get_part(&oxml_opc::OpcPackage::resolve_rel_target(
+                        &entry.glossary_part,
+                        &rel.target
+                    ))
+                    .is_some()
+            );
+        }
+    }
+}
+
+#[test]
+fn glossary_lifecycle_preserves_untouched_docparts() {
+    let mut document = Document::new();
+    let mut block = f277_block("first", "docParts");
+    block.body.content.push(BodyContent::Paragraph(CT_P::new()));
+    let first = document.create_building_block(block).unwrap();
+    let mut package = f249_package(&document.to_bytes().unwrap());
+    let raw = String::from(
+        r#"<p:docPart><p:docPartPr><p:name p:val='producer'/><x:keep v='exact'/></p:docPartPr><p:docPartBody x:attr='wrapper' xmlns:f2770='urn:collision'><p:p><p:r><p:t>producer text</p:t></p:r></p:p></p:docPartBody></p:docPart>"#,
+    );
+    let xml = std::str::from_utf8(package.get_part(&first.glossary_part).unwrap())
+        .unwrap()
+        .replace("w:", "p:")
+        .replace("xmlns:w=", "xmlns:p=")
+        .replace(
+            "<p:docParts>",
+            &format!("<p:docParts xmlns:x=\"urn:producer\"><x:before/>{raw}"),
+        )
+        .replace("</p:docParts>", "<x:after/></p:docParts>");
+    package.set_part(&first.glossary_part, xml.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+    let producer = document.building_blocks().unwrap()[0].clone();
+    let mut third = f277_block("third", "docParts");
+    third.body.content.push(BodyContent::Paragraph(CT_P::new()));
+    let third = document.create_building_block(third).unwrap();
+    let mut changed = third.block.clone();
+    changed.category = Some("changed".to_owned());
+    let third = document.update_building_block(&third, changed).unwrap();
+    let body = f254_story(&document, StoryKind::Body);
+    document
+        .insert_building_block(
+            &ContentLocation::end(body),
+            &producer,
+            FragmentConflictPolicy::rename_all(),
+        )
+        .unwrap();
+    document.remove_building_block(&third).unwrap();
+    let package = f249_package(&document.to_bytes().unwrap());
+    let xml = std::str::from_utf8(package.get_part(&producer.glossary_part).unwrap()).unwrap();
+    assert!(xml.contains(&raw), "{xml}");
+    assert!(xml.contains("<x:before/>") && xml.contains("<x:after/>"));
+    let body = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(body.contains("producer text"));
+}
+
+#[test]
+fn last_entry_removal_keeps_a_reopenable_empty_glossary() {
+    for empty in [false, true] {
+        let mut document = Document::new();
+        let entry = document
+            .create_building_block(f277_block("only", "docParts"))
+            .unwrap();
+        document.remove_building_block(&entry).unwrap();
+        let mut package = f249_package(&document.to_bytes().unwrap());
+        assert_eq!(
+            package.content_types.override_for(&entry.glossary_part),
+            Some(oxml_opc::content_types::WORD_GLOSSARY)
+        );
+        if empty {
+            package.set_part(&entry.glossary_part, format!(r#"<producer:glossaryDocument xmlns:producer="{W_NS}"><producer:docParts/></producer:glossaryDocument>"#).into_bytes());
+        }
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut reopened = Document::from_bytes(bytes.get_ref()).unwrap();
+        assert!(reopened.building_blocks().unwrap().is_empty());
+        let added = reopened
+            .create_building_block(f277_block("again", "docParts"))
+            .unwrap();
+        assert_eq!(added.glossary_part, entry.glossary_part);
+        assert_eq!(reopened.building_blocks().unwrap().len(), 1);
+    }
+}
+
+#[test]
+fn invalid_glossary_graph_rolls_back_atomically() {
+    let mut document = Document::new();
+    let first = document
+        .create_building_block(f277_block("first", "docParts"))
+        .unwrap();
+    let second = document
+        .create_building_block(f277_block("second", "docParts"))
+        .unwrap();
+    let before = document.to_bytes().unwrap();
+    assert!(
+        document
+            .create_building_block(f277_block("first", "docParts"))
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let mut changed = second.block.clone();
+    changed.description = Some("changed".to_owned());
+    let current = document.update_building_block(&second, changed).unwrap();
+    let before = document.to_bytes().unwrap();
+    assert!(document.remove_building_block(&second).is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+    document.remove_building_block(&first).unwrap();
+    let before = document.to_bytes().unwrap();
+    assert!(document.remove_building_block(&current).is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let mut invalid = f277_block("invalid", "docParts");
+    invalid.name.clear();
+    assert!(document.create_building_block(invalid).is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+    for content in [
+        r#"<w:p><w:pPr><w:pStyle w:val="missing"/></w:pPr></w:p>"#,
+        r#"<w:p><w:pPr><w:numPr><w:numId w:val="42"/></w:numPr></w:pPr></w:p>"#,
+        r#"<w:sdt><w:sdtPr><w:dataBinding w:storeItemID="missing"/></w:sdtPr><w:sdtContent/></w:sdt>"#,
+        r#"<w:p><w:r><w:footnoteReference w:id="42"/></w:r></w:p>"#,
+        r#"<w:p><w:hyperlink xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="missing"/></w:p>"#,
+    ] {
+        let mut block = f277_block("invalid dependency", "docParts");
+        block.body = rdocx_oxml::document::CT_Document::from_xml(
+            format!(r#"<w:document xmlns:w="{W_NS}"><w:body>{content}</w:body></w:document>"#)
+                .as_bytes(),
+        )
+        .unwrap()
+        .body;
+        assert!(document.create_building_block(block).is_err(), "{content}");
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+    let mut package = f249_package(&before);
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add_with_id(
+            "duplicate-glossary",
+            oxml_opc::relationship::rel_types::GLOSSARY_DOCUMENT,
+            "glossary/document.xml",
+        );
+    assert!(Document::from_bytes(&f236_package_bytes(package)).is_err());
+    let mut source = Document::new();
+    source.add_paragraph("section-bearing fragment");
+    let story = f254_story(&source, StoryKind::Body);
+    let fragment = DocumentFragment::from_range(
+        &source,
+        &f254_item(&source, &story, 0),
+        &ContentLocation::end(story),
+        true,
+    )
+    .unwrap();
+    assert!(
+        document
+            .create_building_block_from_fragment(
+                f277_block("bad fragment", "docParts"),
+                &fragment,
+                FragmentConflictPolicy::rename_all(),
+            )
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn glossary_placeholder_binding_preserves_related_control_variants_and_unknown_values() {
+    for kind in ["docPartObj", "docPartList"] {
+        let mut document = f276_all_story_fixture();
+        let mut package = f249_package(&document.to_bytes().unwrap());
+        let raw = format!(
+            r#"<w:sdt><w:sdtPr><w:tag w:val="bound"/><w:placeholder><w:docPart w:val="old" xmlns:x="urn:producer" x:keep='leaf'><x:inside/></w:docPart><x:other xmlns:x="urn:producer"/></w:placeholder><w:{kind}><w:docPartGallery w:val="autoTxt"/><w:docPartCategory w:val="old"/><w:docPartUnique/><x:opaque xmlns:x="urn:producer"/></w:{kind}></w:sdtPr><w:sdtContent><w:p><w:r><w:t>related</w:t></w:r></w:p></w:sdtContent></w:sdt>"#
+        );
+        package.set_part(
+            "/word/header-f276.xml",
+            format!(r#"<w:hdr xmlns:w="{W_NS}">{raw}</w:hdr>"#).into_bytes(),
+        );
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+        let entry = document
+            .create_building_block(f277_block("prompt", "placeholder"))
+            .unwrap();
+        let header = f254_story(&document, StoryKind::Header);
+        let location = document
+            .story_items(&header)
+            .unwrap()
+            .into_iter()
+            .find(|item| item.kind() == StoryItemKind::ContentControl)
+            .unwrap()
+            .location()
+            .clone();
+        document
+            .bind_building_block_placeholder(&location, &entry)
+            .unwrap();
+        let package = f249_package(&document.to_bytes().unwrap());
+        let xml = std::str::from_utf8(package.get_part("/word/header-f276.xml").unwrap()).unwrap();
+        assert!(xml.contains(&format!("w:{kind}")), "{xml}");
+        assert!(
+            xml.contains("docPartUnique")
+                && xml.contains("<x:inside/>")
+                && xml.contains("<x:opaque")
+                && xml.contains("<x:other"),
+            "{xml}"
+        );
+        assert!(
+            xml.contains("x:keep=") && xml.contains("w:val=\"prompt\""),
+            "{xml}"
+        );
+        assert!(!xml.contains("w:val=\"old\""), "{xml}");
+    }
+}
+
+#[test]
+fn glossary_fragment_updates_retain_wrapper_and_dependency_content() {
+    let mut source = Document::new();
+    source.add_paragraph("new body");
+    source.add_picture(
+        b"f277-update",
+        "new.png",
+        Length::pt(12.0),
+        Length::pt(12.0),
+    );
+    let body = f254_story(&source, StoryKind::Body);
+    let fragment = DocumentFragment::from_range(
+        &source,
+        &f254_item(&source, &body, 0),
+        &ContentLocation::end(body),
+        false,
+    )
+    .unwrap();
+    let mut document = Document::new();
+    let entry = document
+        .create_building_block(f277_block("update", "docParts"))
+        .unwrap();
+    let mut package = f249_package(&document.to_bytes().unwrap());
+    let xml = std::str::from_utf8(package.get_part(&entry.glossary_part).unwrap())
+        .unwrap()
+        .replace(
+            "<w:docPartBody>",
+            "<w:docPartBody xmlns:x=\"urn:producer\" x:wrapper='keep'>",
+        );
+    package.set_part(&entry.glossary_part, xml.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+    let entry = document.building_blocks().unwrap().remove(0);
+    let updated = document
+        .update_building_block_from_fragment(
+            &entry,
+            f277_block("update", "docParts"),
+            &fragment,
+            FragmentConflictPolicy::rename_all(),
+        )
+        .unwrap();
+    let before = document.to_bytes().unwrap();
+    assert!(document.remove_building_block(&entry).is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let body = f254_story(&document, StoryKind::Body);
+    document
+        .insert_building_block(
+            &ContentLocation::end(body),
+            &updated,
+            FragmentConflictPolicy::rename_all(),
+        )
+        .unwrap();
+    let package = f249_package(&document.to_bytes().unwrap());
+    let glossary = std::str::from_utf8(package.get_part(&entry.glossary_part).unwrap()).unwrap();
+    assert!(glossary.contains("x:wrapper='keep'"), "{glossary}");
+    assert!(glossary.contains("new body"));
+}
+
+#[test]
+fn glossary_fragment_update_keeps_ancestor_prefixes_and_exact_body_wrapper() {
+    let mut source = Document::new();
+    source.add_paragraph("replacement");
+    let story = f254_story(&source, StoryKind::Body);
+    let fragment = DocumentFragment::from_range(
+        &source,
+        &f254_item(&source, &story, 0),
+        &ContentLocation::end(story),
+        false,
+    )
+    .unwrap();
+    let mut document = f249_minimal_building_block_document();
+    let entry = document.building_blocks().unwrap().remove(0);
+    let mut package = f249_package(&document.to_bytes().unwrap());
+    let raw = format!(
+        r#"<p:glossaryDocument xmlns:p="{W_NS}" xmlns:x="urn:root"><p:docParts xmlns:y="urn:container"><p:docPart x:entry='keep'><p:docPartPr><p:name p:val="entry"/></p:docPartPr><p:docPartBody x:wrapper='root' y:wrapper='container'><p:p><p:r><p:t>old</p:t></p:r></p:p></p:docPartBody><x:keep/></p:docPart></p:docParts></p:glossaryDocument>"#
+    );
+    package.set_part(&entry.glossary_part, raw.into_bytes());
+    let mut document = Document::from_bytes(&f236_package_bytes(package)).unwrap();
+    let entry = document.building_blocks().unwrap().remove(0);
+    document
+        .update_building_block_from_fragment(
+            &entry,
+            f277_block("entry", "docParts"),
+            &fragment,
+            FragmentConflictPolicy::rename_all(),
+        )
+        .unwrap();
+    let package = f249_package(&document.to_bytes().unwrap());
+    let xml = std::str::from_utf8(package.get_part(&entry.glossary_part).unwrap()).unwrap();
+    assert!(
+        xml.contains("<p:docPartBody x:wrapper='root' y:wrapper='container'>"),
+        "{xml}"
+    );
+    assert!(
+        xml.contains("x:entry='keep'") && xml.contains("<x:keep/>") && xml.contains("replacement"),
+        "{xml}"
+    );
+}
+
+#[test]
+fn glossary_placeholder_missing_selectors_follow_schema_order() {
+    for kind in ["docPartObj", "docPartList"] {
+        for selectors in [
+            "<w:docPartUnique/>",
+            "<w:docPartCategory w:val='old'/><w:docPartUnique/>",
+        ] {
+            let mut document = Document::new();
+            document.add_paragraph("seed");
+            let mut package = f249_package(&document.to_bytes().unwrap());
+            let xml = format!(
+                r#"<w:document xmlns:w="{W_NS}"><w:body><w:sdt><w:sdtPr><w:{kind} xmlns:x="urn:producer" x:keep='attr'><x:before/>{selectors}<x:after/></w:{kind}></w:sdtPr><w:sdtContent><w:p/></w:sdtContent></w:sdt></w:body></w:document>"#
+            );
+            package.set_part("/word/document.xml", xml.into_bytes());
+            let mut document = Document::from_bytes(&f236_package_bytes(package)).unwrap();
+            let entry = document
+                .create_building_block(f277_block("placeholder", "placeholder"))
+                .unwrap();
+            let story = f254_story(&document, StoryKind::Body);
+            let location = f254_item(&document, &story, 0);
+            document
+                .bind_building_block_placeholder(&location, &entry)
+                .unwrap();
+            let package = f249_package(&document.to_bytes().unwrap());
+            let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+            let gallery = xml.find("docPartGallery").unwrap();
+            let category = xml.find("docPartCategory").unwrap();
+            let unique = xml.find("docPartUnique").unwrap();
+            assert!(gallery < category && category < unique, "{xml}");
+            assert!(
+                xml.contains("x:keep='attr'")
+                    && xml.contains("<x:before/>")
+                    && xml.contains("<x:after/>"),
+                "{xml}"
+            );
+        }
+    }
+}
+
+#[test]
+fn glossary_block_grammar_rejects_inline_xml_and_preserves_opaque_blocks() {
+    for content in [
+        r#"<w:r><w:t>inline</w:t></w:r>"#,
+        r#"<w:sdt><w:sdtPr/><w:sdtContent><w:r><w:t>inline</w:t></w:r></w:sdtContent></w:sdt>"#,
+    ] {
+        let mut document = Document::new();
+        let before = document.to_bytes().unwrap();
+        let mut block = f277_block("inline", "docParts");
+        block
+            .body
+            .content
+            .push(BodyContent::RawXml(content.as_bytes().to_vec()));
+        assert!(document.create_building_block(block).is_err(), "{content}");
+        assert_eq!(document.to_bytes().unwrap(), before);
+        let mut producer = f249_minimal_building_block_document();
+        let entry = producer.building_blocks().unwrap().remove(0);
+        let mut package = f249_package(&producer.to_bytes().unwrap());
+        package.set_part(&entry.glossary_part,format!(r#"<w:glossaryDocument xmlns:w="{W_NS}"><w:docParts><w:docPart><w:docPartPr><w:name w:val="entry"/></w:docPartPr><w:docPartBody>{content}</w:docPartBody></w:docPart></w:docParts></w:glossaryDocument>"#).into_bytes());
+        let mut producer = Document::from_bytes(&f236_package_bytes(package)).unwrap();
+        let entry = producer.building_blocks().unwrap().remove(0);
+        let before = producer.to_bytes().unwrap();
+        assert!(
+            producer.building_block_fragment(&entry).is_err(),
+            "{content}"
+        );
+        let story = f254_story(&producer, StoryKind::Body);
+        assert!(
+            producer
+                .insert_building_block(
+                    &ContentLocation::end(story),
+                    &entry,
+                    FragmentConflictPolicy::rename_all()
+                )
+                .is_err()
+        );
+        assert_eq!(producer.to_bytes().unwrap(), before);
+    }
+    let mut document = Document::new();
+    let mut block = f277_block("opaque", "docParts");
+    let content = br#"<x:block xmlns:x="urn:producer"><x:keep/></x:block>"#;
+    block
+        .body
+        .content
+        .push(BodyContent::RawXml(content.to_vec()));
+    let entry = document.create_building_block(block).unwrap();
+    let story = f254_story(&document, StoryKind::Body);
+    document
+        .insert_building_block(
+            &ContentLocation::end(story),
+            &entry,
+            FragmentConflictPolicy::rename_all(),
+        )
+        .unwrap();
+    let package = f249_package(&document.to_bytes().unwrap());
+    assert!(
+        std::str::from_utf8(package.get_part("/word/document.xml").unwrap())
+            .unwrap()
+            .contains("<x:keep/>")
+    );
 }

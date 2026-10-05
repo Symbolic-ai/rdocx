@@ -118,7 +118,7 @@ pub struct NumberingState {
     bookmark_sources: HashMap<String, SourceNodeId>,
     resolved_by_bookmark: HashMap<String, (SourceNodeId, ResolvedNumbering)>,
     main_story_sources: HashSet<SourceNodeId>,
-    note_labels: HashMap<NoteRef, i32>,
+    note_labels: HashMap<NoteRef, String>,
 }
 
 impl Default for NumberingState {
@@ -233,12 +233,15 @@ impl NumberingState {
         }
     }
 
-    pub(crate) fn set_note_labels(&mut self, labels: HashMap<NoteRef, i32>) {
+    pub(crate) fn set_note_labels(&mut self, labels: HashMap<NoteRef, String>) {
         self.note_labels = labels;
     }
 
-    pub(crate) fn note_label(&self, note: NoteRef) -> i32 {
-        self.note_labels.get(&note).copied().unwrap_or(note.id)
+    pub(crate) fn note_label(&self, note: NoteRef) -> String {
+        self.note_labels
+            .get(&note)
+            .cloned()
+            .unwrap_or_else(|| note.id.to_string())
     }
 
     pub(crate) fn merge_references(&mut self, other: &Self) {
@@ -724,7 +727,7 @@ fn format_lvl_text(
 }
 
 /// Format a number according to ST_NumberFormat.
-fn format_number(n: u32, fmt: ST_NumberFormat) -> String {
+pub(crate) fn format_number(n: u32, fmt: ST_NumberFormat) -> String {
     match fmt {
         ST_NumberFormat::Decimal => n.to_string(),
         ST_NumberFormat::UpperRoman => to_roman(n, true),

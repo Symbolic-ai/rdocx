@@ -67,6 +67,12 @@ different TTC indices share one byte buffer. Both process caches are compiled
 only with `system-fonts`, and poisoned file-cache locks recover by rebuilding
 the requested entry.
 
+Font sources enabled by Cargo dependency feature unification, including
+`fontdb/memmap` shared files, use `Database::with_face_data` to retain owned
+font bytes and the selected face index. This also handles file sources when
+host discovery is disabled. Binary and ordinary system-file caches retain
+their existing paths. Unified source features do not enable host discovery.
+
 The Word SSIM harness reaches that deterministic path through the production
 `rdocx-cli render` command. Oracle-only normalization happens after both raster
 trees exist. It cannot alter layout, pagination, font selection, or renderer

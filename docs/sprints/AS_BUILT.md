@@ -17374,3 +17374,103 @@ closure. The 18-page Word SSIM trend is advisory and below its target.
 **Hash harness.** Unchanged on the integrated sprint tree, all 49 entries match.
 
 **Notes for future sessions.** Keep `work/f-x176-codex` through sprint close. After hosted build-only and CI pass, close S88 and prepare both releases from its exact reviewed main SHA. Obtain a separate final `/release` approval for each tag. After both registry and GitHub releases are verified, comment on Issue 266 with `rpptx-v0.13.1` and `v0.15.0` and their direct release links.
+
+### F-274, Note separators, markers, and restart policy
+
+**Sprint.** S89
+**Completed.** 2026-10-04
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** Checked document and section note policies now control numbering format, start, restart and placement for footnotes and endnotes. Normal and custom labels use one occurrence-based stream in body and note areas. Authored separator, continuation-separator and continuation-notice records retain their relationship-resolved note ownership. The deterministic layout places notes at the selected page, section or document boundary and carries long notes with authored continuation content.
+
+**Non-obvious choices.** Word for Mac 16.113.2 ignored a valid document and final-section `beneathText` policy and placed the fixture footnote at page bottom. The native renderer follows the OOXML value and places it beneath body text. The approved design gate and rendering spec assert this observed divergence explicitly. The additive pre-1.0 note policy API uses checked staging and save-and-reopen publication. The three changed crate archive measurements were refreshed for the scoped package gate.
+
+**Deviations from the design plan.** The pinned Word `beneathText` observation clarified the differential gate. No note-placement behavior was removed. The first three microscope passes found and resolved special-record selection, XML preservation and continuation progress defects before pass 4 reported zero defects and zero smells.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`, DOCX-036 and DOCX-041, `docs/hld/03-architecture.md`, note policy facade, `docs/hld/04-opc-and-packaging.md`, note part ownership, `docs/hld/08-rendering-spec.md`, note placement, `docs/hld/12-testing-strategy.md`, pinned Word gate, and `docs/hld/14-development-backlog.md`, F-274 acceptance.
+
+**Tests.** The named note differential gate passed on the worker and its two-page expectation failed against the claimed base, which produced three pages. Pinned Word fixtures covered both note families, markers, restarts, separators and carryover. Scoped changed-crate tests, Clippy, formatting, 140 policy tests with two skips, prose, generated skills and the patched workspace publish dry run passed with pinned LibreOffice and Poppler and a larger macOS test stack. All archives were below 10 MiB. The integrated full sprint gate and sprint review remain due.
+
+**Hash harness.** Unchanged on the worker, all 49 entries match. The integrated sprint gate remains due.
+
+**Notes for future sessions.** F-276 consumes this completed note contract. Keep `work/f-274-codex` through final sprint verification and review. Its clean worktree was removed after the integration commit.
+
+### F-275, Cross-story bookmarks, ranges, and annotations
+
+**Sprint.** S89
+**Completed.** 2026-10-04
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** Checked story-qualified range snapshots and add, move and remove operations now cover bookmarks, comment endpoints, permission ranges and proofing ranges. The source-backed path resolves body, table cell, text box, header, footer, footnote, endnote and comment owners, including nested block controls. Paired endpoints validate in accepted-view order and publish only after a staged package reopens.
+
+**Non-obvious choices.** Permission starts retain editor or group metadata, while proofing pairs retain their error kind without inventing an ID. A moved comment range carries its reference run and definition. Removing a comment range leaves a valid point comment with its reference and definition. Unrelated and unsupported XML siblings retain their bytes. The new public API is additive under the current pre-1.0 version.
+
+**Deviations from the design plan.** None. Microscope pass 1 found a nested body control routed through the direct-body path. The worker fixed it and added a physically ordered but lexically reversed path fixture. Pass 3 reported zero defects and zero smells.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`, DOCX-042, `docs/hld/03-architecture.md`, checked story ranges, `docs/hld/04-opc-and-packaging.md`, source-backed owner edits, `docs/hld/10-bindings-spec.md`, native API, `docs/hld/12-testing-strategy.md`, paired range gate, and `docs/hld/14-development-backlog.md`, F-275 acceptance.
+
+**Tests.** The named gate passed across eight story kinds and nested controls, then failed to compile against the claimed base because the new range API was absent. The changed `rdocx` and `rdocx-oxml` suites, Clippy, formatting, 140 policy tests with two skips, prose, generated skills and the patched workspace publish dry run passed. All archives remained below 10 MiB. The integrated full sprint gate and sprint review remain due.
+
+**Hash harness.** Unchanged on the worker, all 49 entries match. The integrated sprint gate remains due.
+
+**Notes for future sessions.** F-276 consumes these paired-range identities during fragment import. Keep `work/f-275-codex` through final sprint verification and review. Its clean worktree was removed after the integration commit.
+
+### F-276, Complete fragment conflict and dependency policy
+
+**Sprint.** S89
+**Completed.** 2026-10-05
+**Size.** L, estimated 5 days, actual 2 days
+
+**What was built.** Native block fragments now capture and import across body, headers, footers, notes, comments, table cells, text boxes and supported nested block-control boundaries. The transaction closes styles and numbering, custom XML bindings and item properties, notes, comment threads, paired markers, revisions and reachable chart, diagram, embedding and opaque package graphs. Conflict maps preserve exact references and deterministic identities before one staged candidate serializes and reopens.
+
+**Non-obvious choices.** Explicit fragment imports retain external edges without fetching. Legacy rich merge retains its external-edge prohibition. Opaque companions keep payload bytes and local relationship IDs, while internal targets change together. Unsafe embedded part-name references and integrity-bound signatures reject atomically. Equivalent related-part reuse requires both parts to be leaves. Binding GUID aliases share semantic identity, and allocation reserves incoming companion stores as well as destination stores.
+
+**Deviations from the design plan.** The existing native API exposes block boundaries, so the plan clarifies its nested control path and rejects inline selections. The HLD impact gained the native bindings section that still said main-body only. Three independent microscope passes found and resolved six defects involving overlapping numbering maps, leaf reuse, GUID aliases, inherited numbering namespaces, store reservations and legacy companion external edges. Pass 3 reported zero defects and zero smells.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`, DOCX-043, `docs/hld/03-architecture.md`, fragment ownership and closure, `docs/hld/04-opc-and-packaging.md`, graph and transaction integrity, `docs/hld/10-bindings-spec.md`, native API, `docs/hld/12-testing-strategy.md`, dependency gate, `docs/hld/13-risks-and-open-questions.md`, fragment integrity, and `docs/hld/14-development-backlog.md`, F-276 acceptance.
+
+**Tests.** The named full-story gate covers all 64 image-bearing owner pairs and two complete conflict imports. It fails against the claimed base at the original main-body restriction. Final scoped verification passed 488 unit, 360 integration, 769 regression and 2 doctests, plus 17 focused all-feature tests and 140 policy tests with two existing skips. Formatting, Clippy, prose and generated adapter checks passed. The verified workspace dry run used all 22 local patches with `--allow-dirty`, followed by archive regeneration proving every package below 10 MiB. Source and policy scripts on the integrated prefix are identical to the verified worker. Focused live-owner and roadmap reconciliation checks passed after integration. The final integrated full gate and sprint review remain due.
+
+**Hash harness.** Unchanged on the worker, all 49 entries match. Its source graph is unchanged on the integrated dependency prefix. Final integrated sprint verification remains due.
+
+**Notes for future sessions.** F-277 consumes the completed fragment transaction. Keep `work/f-276-codex` through sprint close. PR 269 is separately approved as F-X177 and runs before F-277 because archive and HLD files are exclusive. No new decoding or rendering support for opaque companions is claimed.
+
+### F-X177, Accept unified fontdb source features
+
+**Sprint.** S89
+**Completed.** 2026-10-05
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The font loader accepts source variants enabled by downstream Cargo feature unification through fontdb's face-data callback. The four-line fix from PR 269 at `7949573b92fd988a682a11b8e674af85e5df622e` is retained with credit to `changjoon-park`. Binary and ordinary file caches retain their existing paths.
+
+**Non-obvious choices.** The fallback copies borrowed bytes into owned storage and keeps the original face index. Its unreachable-pattern allowance permits the same source to compile when memmap is absent. Defaults, dependency versions, public APIs and bundled font assets are unchanged.
+
+**Deviations from the design plan.** None. Only the changed crate's archive evidence was refreshed.
+
+**Spec sections touched.** `docs/hld/14-development-backlog.md`, F-X177 compilation contract, and `docs/hld/15-build-and-toolchain.md`, font feature unification.
+
+**Tests.** The original base reproduced E0004 for `Source::SharedFile`. All four default and memmap combinations pass checks and font tests, including the no-default path. Scoped Clippy, formatting, 140 policy tests with two existing skips, prose and generated skills pass. Microscope pass 1 reports zero defects and zero smells. The integrated full gate at `88149051` passed workspace formatting, Clippy and all-feature tests, the four font feature configurations, 140 policy tests with two existing skips, both WASM targets, docs, README examples, the verified 22-package dry run, archive sizes and cargo-deny. Compilation used isolated artifacts and Rust 1.97.1 was pinned for temporary examples after interrupted cache stalls and a mixed-toolchain failure.
+
+**Hash harness.** Unchanged on the integrated sprint tree, all 49 entries match.
+
+**Notes for future sessions.** Keep `work/f-x177-codex` through sprint close. PR 269 remains open until `/close-sprint` pushes the reviewed main merge, then reconcile it as superseded with contributor credit and a link to that merge.
+
+### F-277, Glossary and building-block creation
+
+**Sprint.** S89
+**Completed.** 2026-10-05
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** Native callers can create, classify, update, capture, insert and remove AutoText, building-block and placeholder entries. Fragment-backed entries bring reachable dependencies through the shared F-276 staged transaction. Placeholder binding keeps the existing control type. First creation adds a safe glossary bundle, and last removal retains a valid empty glossary.
+
+**Non-obvious choices.** Typed creation accepts dependency-free content. Package-backed content uses owned document fragments. Inventory snapshots reject stale values or ordinals. Structural OXML edits retain producer entries and unknown siblings, while drawing IDs held by glossary content remain reserved through document staging. This is an additive pre-1.0 Rust API. Python, WASM and CLI surfaces remain unchanged.
+
+**Deviations from the design plan.** None. Microscope pass 1 found inherited namespace validation, selector child order, a block-grammar bypass and stale capability metadata. All four were corrected. The three behavior regressions failed before their fixes, and pass 2 found zero defects and zero smells.
+
+**Spec sections touched.** The approved impact list comprises `docs/hld/02-scope-and-non-goals.md`, `03-architecture.md`, `04-opc-and-packaging.md`, `10-bindings-spec.md`, `12-testing-strategy.md` and `14-development-backlog.md` for glossary lifecycle, ownership, bindings and acceptance evidence.
+
+**Tests.** The named `public_created_building_blocks_insert_and_reopen` gate passed and failed with five missing-API errors against reverted source. Final scoped suites passed 488 Word unit, 360 integration, 778 regression, 604 OXML and three doctests. Eight focused glossary regressions passed. The integrated full gate at `88149051` passed workspace formatting, Clippy and all-feature tests, the four font feature configurations, 140 policy tests with two existing skips, both WASM targets, docs, README examples, the verified 22-package dry run, archive sizes and cargo-deny. Compilation used isolated artifacts and Rust 1.97.1 was pinned for temporary examples after interrupted cache stalls and a mixed-toolchain failure.
+
+**Hash harness.** Unchanged on the integrated sprint tree, all 49 entries match.
+
+**Notes for future sessions.** Keep `work/f-277-codex` through sprint close. Content-control creation remains with F-285. Implicit AutoText expansion and new binding entry points remain outside this story.

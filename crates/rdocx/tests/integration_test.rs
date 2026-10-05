@@ -18434,6 +18434,7 @@ for image in (first, second):
                 num_fmt: Some("chicago".to_owned()),
                 num_start: Some(4),
                 num_restart: Some("eachSect".to_owned()),
+                special_references: Vec::new(),
                 extra_xml: Vec::new(),
             });
             section.set_endnote_properties(CT_NoteProperties {
@@ -19541,6 +19542,7 @@ mod advanced_table_authoring_and_geometry {
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
             math_properties: None,
+            note_defaults: [None, None],
             document,
             styles: rdocx_oxml::styles::CT_Styles::new_default(),
             numbering: None,
@@ -22600,4 +22602,1556 @@ fn mixed_rich_notes_match_word_at_section_and_document_end_boundaries() {
     assert!(!pages[1].contains("first endnote body"), "{text}");
     assert!(pages[2].contains("first endnote body"), "{text}");
     assert!(pages[2].contains("second endnote body"), "{text}");
+}
+
+#[test]
+fn note_policies_match_pinned_word_markers_and_page_placement() {
+    use rdocx::{NoteFamily, NoteNumberFormat, NotePlacement, NotePolicy, NoteRestart};
+    const WORD_ORACLE: &str = "Microsoft Word 16.113.2 build 16.113.26092012";
+    let mut document = Document::new();
+    document.add_paragraph("First section body");
+    let first = document.paragraph_story_location(0).unwrap().unwrap();
+    document.create_endnote(&first, "First endnote").unwrap();
+    document
+        .add_paragraph("Section boundary")
+        .section_break(SectionBreak::NextPage);
+    document.add_paragraph("Second section body");
+    let second = document.paragraph_story_location(2).unwrap().unwrap();
+    document.create_endnote(&second, "Second endnote").unwrap();
+    document
+        .set_note_policy(
+            NoteFamily::Endnote,
+            NotePolicy {
+                placement: NotePlacement::DocumentEnd,
+                format: NoteNumberFormat::LowerRoman,
+                start: 1,
+                restart: NoteRestart::Continuous,
+            },
+        )
+        .unwrap();
+    if std::env::var_os("F274_ORACLE_DUMP").is_some() {
+        document.save("/private/tmp/f274-note-oracle.docx").unwrap();
+    }
+    let pdf = document.to_pdf_deterministic().unwrap();
+    let source = std::env::temp_dir().join(format!("f274-note-{}.pdf", std::process::id()));
+    std::fs::write(&source, pdf).unwrap();
+    let output = std::process::Command::new("pdftotext")
+        .arg("-layout")
+        .arg(&source)
+        .arg("-")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&source);
+    assert!(output.status.success(), "{WORD_ORACLE}");
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.contains("First section bodyi"),
+        "{WORD_ORACLE}: {text}"
+    );
+    assert!(
+        text.contains("Second section bodyii"),
+        "{WORD_ORACLE}: {text}"
+    );
+    let pages = text
+        .trim_end_matches('\u{c}')
+        .split('\u{c}')
+        .collect::<Vec<_>>();
+    assert_eq!(pages.len(), 2, "{WORD_ORACLE}: {text}");
+    assert!(pages[1].contains("First endnote"), "{WORD_ORACLE}: {text}");
+    assert!(pages[1].contains("Second endnote"), "{WORD_ORACLE}: {text}");
+
+    for (format, label) in [
+        (NoteNumberFormat::Decimal, "2"),
+        (NoteNumberFormat::UpperRoman, "II"),
+        (NoteNumberFormat::LowerRoman, "ii"),
+        (NoteNumberFormat::UpperLetter, "B"),
+        (NoteNumberFormat::LowerLetter, "b"),
+    ] {
+        let mut sample = Document::new();
+        sample.add_paragraph("Foot format");
+        let foot = sample.paragraph_story_location(0).unwrap().unwrap();
+        sample.create_footnote(&foot, "Foot note text").unwrap();
+        sample.add_paragraph("End format");
+        let end = sample.paragraph_story_location(1).unwrap().unwrap();
+        sample.create_endnote(&end, "End note text").unwrap();
+        for (family, placement) in [
+            (NoteFamily::Footnote, NotePlacement::PageBottom),
+            (NoteFamily::Endnote, NotePlacement::DocumentEnd),
+        ] {
+            let policy = NotePolicy {
+                format,
+                start: 2,
+                restart: NoteRestart::Continuous,
+                placement,
+            };
+            sample.set_note_policy(family, policy).unwrap();
+            sample
+                .section_mut(0)
+                .unwrap()
+                .set_note_policy(family, policy)
+                .unwrap();
+        }
+        let pdf = sample.to_pdf_deterministic().unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "f274-formats-{format:?}-{}.pdf",
+            std::process::id()
+        ));
+        std::fs::write(&path, pdf).unwrap();
+        let output = std::process::Command::new("pdftotext")
+            .arg("-layout")
+            .arg(&path)
+            .arg("-")
+            .output()
+            .unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert!(output.status.success());
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            text.contains(&format!("Foot format{label}")),
+            "{format:?}: {text}"
+        );
+        assert!(
+            text.contains(&format!("End format{label}")),
+            "{format:?}: {text}"
+        );
+        assert!(text.contains("Foot note text"), "{format:?}: {text}");
+        assert!(text.contains("End note text"), "{format:?}: {text}");
+    }
+    endnotes_at_section_end_follow_each_sections_body();
+    footnote_markers_restart_on_each_physical_page();
+    body_and_note_markers_share_formatted_labels();
+    authored_separator_replaces_only_its_special_record();
+    beneath_text_footnotes_follow_the_body_in_page_flow();
+    authored_endnote_separator_flows_with_final_body_page();
+    carried_footnote_uses_authored_separator_and_notice();
+    custom_endnote_mark_keeps_numeric_endnote_stream();
+    removing_note_policy_keeps_special_record_selection();
+    special_records_require_selected_ids();
+    carried_endnote_uses_authored_continuation_content();
+    oversized_endnote_continuation_separator_does_not_stall_flow();
+}
+
+#[test]
+fn endnotes_at_section_end_follow_each_sections_body() {
+    use rdocx::{NoteFamily, NoteNumberFormat, NotePlacement, NotePolicy, NoteRestart};
+    let mut document = Document::new();
+    document.add_paragraph("First section body");
+    let first = document.paragraph_story_location(0).unwrap().unwrap();
+    document
+        .create_endnote(&first, "First section endnote")
+        .unwrap();
+    document
+        .add_paragraph("Section boundary")
+        .section_break(SectionBreak::NextPage);
+    document.add_paragraph("Second section body");
+    let second = document.paragraph_story_location(2).unwrap().unwrap();
+    document
+        .create_endnote(&second, "Second section endnote")
+        .unwrap();
+    document
+        .set_note_policy(
+            NoteFamily::Endnote,
+            NotePolicy {
+                placement: NotePlacement::SectionEnd,
+                format: NoteNumberFormat::LowerRoman,
+                start: 1,
+                restart: NoteRestart::EachSection,
+            },
+        )
+        .unwrap();
+    document
+        .section_mut(1)
+        .unwrap()
+        .set_note_policy(
+            NoteFamily::Endnote,
+            NotePolicy {
+                placement: NotePlacement::SectionEnd,
+                format: NoteNumberFormat::LowerRoman,
+                start: 1,
+                restart: NoteRestart::EachSection,
+            },
+        )
+        .unwrap();
+    if std::env::var_os("F274_ORACLE_DUMP").is_some() {
+        document
+            .save("/private/tmp/f274-sectend-override-oracle.docx")
+            .unwrap();
+    }
+    let pdf = document.to_pdf_deterministic().unwrap();
+    let path = std::env::temp_dir().join(format!("f274-sectend-{}.pdf", std::process::id()));
+    std::fs::write(&path, pdf).unwrap();
+    let output = std::process::Command::new("pdftotext")
+        .arg("-layout")
+        .arg(&path)
+        .arg("-")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    let pages = text
+        .trim_end_matches('\u{c}')
+        .split('\u{c}')
+        .collect::<Vec<_>>();
+    assert_eq!(pages.len(), 2, "{text}");
+    assert!(pages[0].contains("First section bodyi"), "{text}");
+    assert!(pages[0].contains("First section endnote"), "{text}");
+    assert!(!pages[0].contains("Second section endnote"), "{text}");
+    assert!(pages[1].contains("Second section bodyi"), "{text}");
+    assert!(pages[1].contains("Second section endnote"), "{text}");
+    assert!(!pages[1].contains("First section endnote"), "{text}");
+}
+
+#[test]
+fn footnote_markers_restart_on_each_physical_page() {
+    use rdocx::{NoteFamily, NoteNumberFormat, NotePlacement, NotePolicy, NoteRestart};
+    let mut document = Document::new();
+    document.add_paragraph("First page body");
+    let first = document.paragraph_story_location(0).unwrap().unwrap();
+    document.create_footnote(&first, "First page note").unwrap();
+    document
+        .add_paragraph("Page boundary")
+        .page_break_before(true);
+    document.add_paragraph("Second page body");
+    let second = document.paragraph_story_location(2).unwrap().unwrap();
+    document
+        .create_footnote(&second, "Second page note")
+        .unwrap();
+    let policy = NotePolicy {
+        placement: NotePlacement::PageBottom,
+        format: NoteNumberFormat::UpperLetter,
+        start: 2,
+        restart: NoteRestart::EachPage,
+    };
+    document
+        .set_note_policy(NoteFamily::Footnote, policy)
+        .unwrap();
+    for index in 0..document.section_count() {
+        document
+            .section_mut(index)
+            .unwrap()
+            .set_note_policy(NoteFamily::Footnote, policy)
+            .unwrap();
+    }
+    if std::env::var_os("F274_ORACLE_DUMP").is_some() {
+        document
+            .save("/private/tmp/f274-page-restart-oracle.docx")
+            .unwrap();
+    }
+    let pdf = document.to_pdf_deterministic().unwrap();
+    let path = std::env::temp_dir().join(format!("f274-page-{}.pdf", std::process::id()));
+    std::fs::write(&path, pdf).unwrap();
+    let output = std::process::Command::new("pdftotext")
+        .arg("-layout")
+        .arg(&path)
+        .arg("-")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    let pages = text
+        .trim_end_matches('\u{c}')
+        .split('\u{c}')
+        .collect::<Vec<_>>();
+    assert_eq!(pages.len(), 2, "{text}");
+    assert!(pages[0].contains("First page bodyB"), "{text}");
+    assert!(pages[0].contains("B\n    First page note"), "{text}");
+    assert!(pages[1].contains("Second page bodyB"), "{text}");
+    assert!(pages[1].contains("B\n    Second page note"), "{text}");
+}
+
+#[test]
+fn body_and_note_markers_share_formatted_labels() {
+    let mut document = Document::new();
+    document.add_paragraph("First normal");
+    let first = document.paragraph_story_location(0).unwrap().unwrap();
+    let first_id = document.create_footnote(&first, "first note text").unwrap();
+    document.add_paragraph("Custom mark");
+    let custom = document.paragraph_story_location(1).unwrap().unwrap();
+    let custom_id = document
+        .create_footnote_with_mark(&custom, "custom note text", "*")
+        .unwrap();
+    document.add_paragraph("Second normal");
+    let second = document.paragraph_story_location(2).unwrap().unwrap();
+    let second_id = document
+        .create_footnote(&second, "second note text")
+        .unwrap();
+    assert_ne!(first_id, custom_id);
+    assert_ne!(custom_id, second_id);
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert!(reopened.footnote_story(custom_id).unwrap().is_some());
+    if std::env::var_os("F274_ORACLE_DUMP").is_some() {
+        document
+            .save("/private/tmp/f274-custom-mark-oracle.docx")
+            .unwrap();
+    }
+    let pdf = document.to_pdf_deterministic().unwrap();
+    let path = std::env::temp_dir().join(format!("f274-custom-{}.pdf", std::process::id()));
+    std::fs::write(&path, pdf).unwrap();
+    let output = std::process::Command::new("pdftotext")
+        .arg("-layout")
+        .arg(&path)
+        .arg("-")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("First normal1"), "{text}");
+    assert!(text.contains("Custom mark*"), "{text}");
+    assert!(text.contains("Second normal2"), "{text}");
+    assert!(text.contains("first note text"), "{text}");
+    assert!(text.contains("custom note text"), "{text}");
+    assert!(text.contains("second note text"), "{text}");
+}
+
+#[test]
+fn authored_separator_replaces_only_its_special_record() {
+    let mut document = Document::new();
+    document.add_paragraph("Referenced body");
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    let normal_id = document.create_footnote(&location, "Normal note").unwrap();
+    let mut separator = rdocx_oxml::text::CT_P::new();
+    separator.add_run("Author separator");
+    let id = document
+        .set_note_special_record(
+            rdocx::NoteFamily::Footnote,
+            rdocx::NoteSpecialRecord::Separator,
+            vec![separator],
+        )
+        .unwrap();
+    let mut replacement = rdocx_oxml::text::CT_P::new();
+    replacement.add_run("Replacement separator");
+    assert_eq!(
+        document
+            .set_note_special_record(
+                rdocx::NoteFamily::Footnote,
+                rdocx::NoteSpecialRecord::Separator,
+                vec![replacement],
+            )
+            .unwrap(),
+        id
+    );
+    assert!(document.footnote_story(normal_id).unwrap().is_some());
+    let bytes = document.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let xml = String::from_utf8(package.get_part("/word/footnotes.xml").unwrap().to_vec()).unwrap();
+    assert_eq!(xml.matches("Replacement separator").count(), 1);
+    assert!(!xml.contains("Author separator"));
+    assert!(xml.contains("Normal note"));
+    if std::env::var_os("F274_ORACLE_DUMP").is_some() {
+        document
+            .save("/private/tmp/f274-separator-oracle.docx")
+            .unwrap();
+    }
+    let pdf = document.to_pdf_deterministic().unwrap();
+    let path = std::env::temp_dir().join(format!("f274-separator-{}.pdf", std::process::id()));
+    std::fs::write(&path, pdf).unwrap();
+    let output = std::process::Command::new("pdftotext")
+        .arg("-layout")
+        .arg(&path)
+        .arg("-")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("Replacement separator"), "{text}");
+}
+
+#[test]
+fn invalid_note_policy_rolls_back_atomically() {
+    let mut document = Document::new();
+    document.add_paragraph("Stable body");
+    let before = document.to_bytes().unwrap();
+    let invalid_start = rdocx::NotePolicy {
+        format: rdocx::NoteNumberFormat::Decimal,
+        start: 0,
+        restart: rdocx::NoteRestart::Continuous,
+        placement: rdocx::NotePlacement::PageBottom,
+    };
+    assert!(
+        document
+            .set_note_policy(rdocx::NoteFamily::Footnote, invalid_start)
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let invalid_family = rdocx::NotePolicy {
+        start: 1,
+        placement: rdocx::NotePlacement::DocumentEnd,
+        ..invalid_start
+    };
+    assert!(
+        document
+            .set_note_policy(rdocx::NoteFamily::Footnote, invalid_family)
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+    assert!(
+        document
+            .set_note_special_record(
+                rdocx::NoteFamily::Endnote,
+                rdocx::NoteSpecialRecord::ContinuationNotice,
+                Vec::new(),
+            )
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn beneath_text_footnotes_follow_the_body_in_page_flow() {
+    fn note_y(placement: rdocx::NotePlacement) -> f64 {
+        let mut document = Document::new();
+        document.add_paragraph("Short body");
+        let location = document.paragraph_story_location(0).unwrap().unwrap();
+        document.create_footnote(&location, "Spatial note").unwrap();
+        let policy = rdocx::NotePolicy {
+            format: rdocx::NoteNumberFormat::Decimal,
+            start: 1,
+            restart: rdocx::NoteRestart::Continuous,
+            placement,
+        };
+        document
+            .set_note_policy(rdocx::NoteFamily::Footnote, policy)
+            .unwrap();
+        if placement == rdocx::NotePlacement::BeneathText {
+            document
+                .section_mut(0)
+                .unwrap()
+                .set_note_policy(rdocx::NoteFamily::Footnote, policy)
+                .unwrap();
+            let package =
+                OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+                    .unwrap();
+            for part in ["/word/document.xml", "/word/settings.xml"] {
+                let xml = String::from_utf8(package.get_part(part).unwrap().to_vec()).unwrap();
+                assert!(
+                    xml.contains(r#"<w:pos w:val="beneathText"/>"#),
+                    "{part}: {xml}"
+                );
+            }
+        }
+        if placement == rdocx::NotePlacement::BeneathText
+            && std::env::var_os("F274_ORACLE_DUMP").is_some()
+        {
+            document
+                .save("/private/tmp/f274-beneath-text-oracle.docx")
+                .unwrap();
+        }
+        let layout = document.layout_deterministic().unwrap();
+        assert_eq!(layout.layout.pages.len(), 1);
+        let mut y = None;
+        oxml_layout::walk(&layout.layout.pages[0].elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Text(run) = element
+                && run.text.contains("Spatial")
+            {
+                y = Some(run.origin.y);
+            }
+        });
+        y.expect("footnote text appears")
+    }
+    // Word for Mac 16.113.2 displayed the valid document and final-section
+    // beneathText fixture at the page bottom. Pin that observed band while
+    // asserting the native renderer applies the OOXML beneathText placement.
+    const WORD_OBSERVED_PLACEMENT: rdocx::NotePlacement = rdocx::NotePlacement::PageBottom;
+    let word_band = note_y(WORD_OBSERVED_PLACEMENT);
+    let native_beneath_text = note_y(rdocx::NotePlacement::BeneathText);
+    assert!(word_band > native_beneath_text + 100.0);
+}
+
+#[test]
+fn authored_endnote_separator_flows_with_final_body_page() {
+    let mut document = Document::new();
+    document.add_paragraph("Endnote body");
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    document
+        .create_endnote(&location, "Endnote content")
+        .unwrap();
+    let policy = rdocx::NotePolicy {
+        format: rdocx::NoteNumberFormat::Decimal,
+        start: 1,
+        restart: rdocx::NoteRestart::Continuous,
+        placement: rdocx::NotePlacement::DocumentEnd,
+    };
+    document
+        .set_note_policy(rdocx::NoteFamily::Endnote, policy)
+        .unwrap();
+    document
+        .section_mut(0)
+        .unwrap()
+        .set_note_policy(rdocx::NoteFamily::Endnote, policy)
+        .unwrap();
+    let mut separator = rdocx_oxml::text::CT_P::new();
+    separator.add_run("Endnote separator text");
+    document
+        .set_note_special_record(
+            rdocx::NoteFamily::Endnote,
+            rdocx::NoteSpecialRecord::Separator,
+            vec![separator],
+        )
+        .unwrap();
+    let pdf = document.to_pdf_deterministic().unwrap();
+    let path = std::env::temp_dir().join(format!("f274-end-separator-{}.pdf", std::process::id()));
+    std::fs::write(&path, pdf).unwrap();
+    let output = std::process::Command::new("pdftotext")
+        .arg("-layout")
+        .arg(&path)
+        .arg("-")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("Endnote separator text"), "{text}");
+    assert!(text.contains("Endnote content"), "{text}");
+    assert_eq!(
+        document.layout_deterministic().unwrap().layout.pages.len(),
+        1
+    );
+    if std::env::var_os("F274_ORACLE_DUMP").is_some() {
+        document
+            .save("/private/tmp/f274-endnote-separator-oracle.docx")
+            .unwrap();
+    }
+}
+
+#[test]
+fn carried_footnote_uses_authored_separator_and_notice() {
+    let mut document = Document::new();
+    document.add_paragraph("Carry body");
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    document
+        .create_footnote(&location, &"carry text ".repeat(1200))
+        .unwrap();
+    for (record, text) in [
+        (
+            rdocx::NoteSpecialRecord::ContinuationSeparator,
+            "Continued separator",
+        ),
+        (
+            rdocx::NoteSpecialRecord::ContinuationNotice,
+            "Continued on next page",
+        ),
+    ] {
+        let mut paragraph = rdocx_oxml::text::CT_P::new();
+        paragraph.add_run(text);
+        document
+            .set_note_special_record(rdocx::NoteFamily::Footnote, record, vec![paragraph])
+            .unwrap();
+    }
+    let pdf = document.to_pdf_deterministic().unwrap();
+    let path = std::env::temp_dir().join(format!("f274-carry-{}.pdf", std::process::id()));
+    std::fs::write(&path, pdf).unwrap();
+    let output = std::process::Command::new("pdftotext")
+        .arg("-layout")
+        .arg(&path)
+        .arg("-")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(document.layout_deterministic().unwrap().layout.pages.len() > 1);
+    assert!(text.contains("Continued separator"), "{text}");
+    assert!(text.contains("Continued on next page"), "{text}");
+    if std::env::var_os("F274_ORACLE_DUMP").is_some() {
+        document
+            .save("/private/tmp/f274-carry-oracle.docx")
+            .unwrap();
+    }
+}
+
+#[test]
+fn custom_endnote_mark_keeps_numeric_endnote_stream() {
+    let mut document = Document::new();
+    document.add_paragraph("Custom endnote");
+    let custom = document.paragraph_story_location(0).unwrap().unwrap();
+    document
+        .create_endnote_with_mark(&custom, "Custom endnote text", "†")
+        .unwrap();
+    document.add_paragraph("Ordinary endnote");
+    let ordinary = document.paragraph_story_location(1).unwrap().unwrap();
+    document
+        .create_endnote(&ordinary, "Ordinary endnote text")
+        .unwrap();
+    let policy = rdocx::NotePolicy {
+        format: rdocx::NoteNumberFormat::LowerRoman,
+        start: 1,
+        restart: rdocx::NoteRestart::Continuous,
+        placement: rdocx::NotePlacement::DocumentEnd,
+    };
+    document
+        .set_note_policy(rdocx::NoteFamily::Endnote, policy)
+        .unwrap();
+    document
+        .section_mut(0)
+        .unwrap()
+        .set_note_policy(rdocx::NoteFamily::Endnote, policy)
+        .unwrap();
+    let pdf = document.to_pdf_deterministic().unwrap();
+    let path = std::env::temp_dir().join(format!("f274-custom-end-{}.pdf", std::process::id()));
+    std::fs::write(&path, pdf).unwrap();
+    let output = std::process::Command::new("pdftotext")
+        .arg("-layout")
+        .arg(&path)
+        .arg("-")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("Custom endnote†"), "{text}");
+    assert!(text.contains("Ordinary endnotei"), "{text}");
+    assert!(text.contains("Custom endnote text"), "{text}");
+    assert!(text.contains("Ordinary endnote text"), "{text}");
+    if std::env::var_os("F274_ORACLE_DUMP").is_some() {
+        document
+            .save("/private/tmp/f274-custom-endnote-oracle.docx")
+            .unwrap();
+    }
+}
+
+#[test]
+fn removing_note_policy_keeps_special_record_selection() {
+    let mut document = Document::new();
+    document.add_paragraph("Body");
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    document.create_footnote(&location, "Note").unwrap();
+    let mut separator = rdocx_oxml::text::CT_P::new();
+    separator.add_run("Retained separator");
+    let id = document
+        .set_note_special_record(
+            rdocx::NoteFamily::Footnote,
+            rdocx::NoteSpecialRecord::Separator,
+            vec![separator],
+        )
+        .unwrap();
+    document
+        .set_note_policy(
+            rdocx::NoteFamily::Footnote,
+            rdocx::NotePolicy {
+                format: rdocx::NoteNumberFormat::UpperLetter,
+                start: 2,
+                restart: rdocx::NoteRestart::Continuous,
+                placement: rdocx::NotePlacement::PageBottom,
+            },
+        )
+        .unwrap();
+    document
+        .remove_note_policy(rdocx::NoteFamily::Footnote)
+        .unwrap();
+    assert!(
+        document
+            .remove_note_policy(rdocx::NoteFamily::Footnote)
+            .unwrap()
+            .is_none()
+    );
+    let properties = document
+        .note_properties(rdocx::NoteFamily::Footnote)
+        .unwrap();
+    assert_eq!(properties.special_references, vec![id]);
+    assert_eq!(properties.num_fmt, None);
+    let layout = document.layout_deterministic().unwrap();
+    let mut found = false;
+    oxml_layout::walk(&layout.layout.pages[0].elements, &mut |element, _| {
+        if let oxml_layout::PositionedElement::Text(run) = element
+            && run.text.contains("Retained")
+        {
+            found = true;
+        }
+    });
+    assert!(found);
+}
+
+#[test]
+fn special_records_require_selected_ids() {
+    let mut document = Document::new();
+    document.add_paragraph("Body");
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    document.create_footnote(&location, "Note").unwrap();
+    let mut separator = rdocx_oxml::text::CT_P::new();
+    separator.add_run("Selected separator");
+    document
+        .set_note_special_record(
+            rdocx::NoteFamily::Footnote,
+            rdocx::NoteSpecialRecord::Separator,
+            vec![separator],
+        )
+        .unwrap();
+    let bytes = document.to_bytes().unwrap();
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let notes =
+        String::from_utf8(package.get_part("/word/footnotes.xml").unwrap().to_vec()).unwrap();
+    package.set_part(
+        "/word/footnotes.xml",
+        notes.replace(r#"w:id="-1""#, r#"w:id="77""#).into_bytes(),
+    );
+    let settings =
+        String::from_utf8(package.get_part("/word/settings.xml").unwrap().to_vec()).unwrap();
+    package.set_part(
+        "/word/settings.xml",
+        settings
+            .replace(r#"<w:footnote w:id="-1"/>"#, "")
+            .into_bytes(),
+    );
+    let mut output = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut output).unwrap();
+    let reopened = Document::from_bytes(output.get_ref()).unwrap();
+    let layout = reopened.layout_deterministic().unwrap();
+    let mut found = false;
+    oxml_layout::walk(&layout.layout.pages[0].elements, &mut |element, _| {
+        if let oxml_layout::PositionedElement::Text(run) = element
+            && run.text.contains("Selected")
+        {
+            found = true;
+        }
+    });
+    assert!(!found);
+}
+
+#[test]
+fn carried_endnote_uses_authored_continuation_content() {
+    let mut document = Document::new();
+    document.add_paragraph("Body");
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    document
+        .create_endnote(&location, &"Endnote carry ".repeat(1500))
+        .unwrap();
+    for (record, text) in [
+        (
+            rdocx::NoteSpecialRecord::ContinuationSeparator,
+            "Endnote continued separator",
+        ),
+        (
+            rdocx::NoteSpecialRecord::ContinuationNotice,
+            "Endnote continued notice",
+        ),
+    ] {
+        let mut paragraph = rdocx_oxml::text::CT_P::new();
+        paragraph.add_run(text);
+        document
+            .set_note_special_record(rdocx::NoteFamily::Endnote, record, vec![paragraph])
+            .unwrap();
+    }
+    let layout = document.layout_deterministic().unwrap();
+    assert!(layout.layout.pages.len() > 1);
+    let mut text = String::new();
+    for page in &layout.layout.pages {
+        oxml_layout::walk(&page.elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Text(run) = element {
+                text.push_str(&run.text);
+            }
+        });
+    }
+    assert!(text.contains("Endnote continued separator"), "{text}");
+    assert!(text.contains("Endnote continued notice"), "{text}");
+}
+
+#[test]
+fn oversized_endnote_continuation_separator_does_not_stall_flow() {
+    let mut document = Document::new();
+    document.add_paragraph("Body");
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    document
+        .create_endnote(&location, &"Endnote carry ".repeat(1600))
+        .unwrap();
+    let mut separator = rdocx_oxml::text::CT_P::new();
+    separator.add_run(&"Oversized separator ".repeat(100));
+    document
+        .set_note_special_record(
+            rdocx::NoteFamily::Endnote,
+            rdocx::NoteSpecialRecord::ContinuationSeparator,
+            vec![separator],
+        )
+        .unwrap();
+    let mut notice = rdocx_oxml::text::CT_P::new();
+    notice.add_run("A continuation notice must also fit");
+    document
+        .set_note_special_record(
+            rdocx::NoteFamily::Endnote,
+            rdocx::NoteSpecialRecord::ContinuationNotice,
+            vec![notice],
+        )
+        .unwrap();
+    let layout = document.layout_deterministic().unwrap();
+    assert!(layout.layout.pages.len() > 1);
+    assert!(layout.layout.pages.len() < 12);
+}
+
+#[test]
+fn cross_story_ranges_reopen_with_exact_endpoints() {
+    let mut document = container_neutral_story_fixture();
+    for kind in [
+        StoryKind::Body,
+        StoryKind::TableCell,
+        StoryKind::TextBox,
+        StoryKind::Header,
+        StoryKind::Footer,
+        StoryKind::Footnote,
+        StoryKind::Endnote,
+        StoryKind::Comment,
+    ] {
+        let range_for = |document: &Document| {
+            let story = document
+                .stories()
+                .unwrap()
+                .into_iter()
+                .find(|story| story.kind() == kind)
+                .unwrap();
+            let location = document
+                .story_items(&story)
+                .unwrap()
+                .into_iter()
+                .find(|item| item.kind() == StoryItemKind::Paragraph)
+                .unwrap()
+                .location()
+                .clone();
+            rdocx::StoryRunRange {
+                start: rdocx::StoryRunPosition {
+                    location: location.clone(),
+                    run_index: 0,
+                },
+                end: rdocx::StoryRunPosition {
+                    location,
+                    run_index: 1,
+                },
+            }
+        };
+        let name = format!("F275{kind:?}");
+        let id = document
+            .add_story_bookmark(&name, range_for(&document))
+            .unwrap();
+        document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert!(
+            document.story_ranges().unwrap().iter().any(|entry| {
+                entry.bookmark_id() == Some(id)
+                    && entry.range().start.run_index == 0
+                    && entry.range().end.run_index == 1
+                    && entry.range().start.location.story().kind() == kind
+            }),
+            "{kind:?}"
+        );
+        let permission = document
+            .add_story_permission_range(Some("Ada"), None, range_for(&document))
+            .unwrap();
+        document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert!(document.story_ranges().unwrap().iter().any(|entry| {
+            matches!(entry.kind(), rdocx::StoryRangeKind::Permission { id, editor: Some(editor), .. }
+                if *id == permission && editor == "Ada")
+                && entry.range().start.location.story().kind() == kind
+        }), "permission {kind:?}");
+        document
+            .add_story_proofing_range("spell", range_for(&document))
+            .unwrap();
+        document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert!(document.story_ranges().unwrap().iter().any(|entry| {
+            matches!(entry.kind(), rdocx::StoryRangeKind::Proofing { kind: proof } if proof == "spell")
+                && entry.range().start.location.story().kind() == kind
+        }), "proofing {kind:?}");
+        let comment = document
+            .add_story_comment(range_for(&document), "Ada", None, "annotation")
+            .unwrap();
+        document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert!(
+            document.story_ranges().unwrap().iter().any(|entry| {
+                matches!(entry.kind(), rdocx::StoryRangeKind::Comment { id } if *id == comment)
+                    && entry.range().start.location.story().kind() == kind
+            }),
+            "comment {kind:?}"
+        );
+    }
+    let nested = document.paragraph_story_location(2).unwrap().unwrap();
+    assert_eq!(nested.index_path().len(), 2);
+    let nested_range = rdocx::StoryRunRange {
+        start: rdocx::StoryRunPosition {
+            location: nested.clone(),
+            run_index: 0,
+        },
+        end: rdocx::StoryRunPosition {
+            location: nested,
+            run_index: 1,
+        },
+    };
+    let nested_id = document
+        .add_story_bookmark("F275BlockControl", nested_range)
+        .unwrap();
+    document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert!(document.story_ranges().unwrap().iter().any(|entry| {
+        entry.bookmark_id() == Some(nested_id)
+            && entry.range().start.location.index_path().len() == 2
+    }));
+    for family in ["permission", "proofing", "comment"] {
+        let nested = document.paragraph_story_location(2).unwrap().unwrap();
+        let range = rdocx::StoryRunRange {
+            start: rdocx::StoryRunPosition {
+                location: nested.clone(),
+                run_index: 0,
+            },
+            end: rdocx::StoryRunPosition {
+                location: nested,
+                run_index: 1,
+            },
+        };
+        match family {
+            "permission" => {
+                document
+                    .add_story_permission_range(None, Some("everyone"), range)
+                    .unwrap();
+            }
+            "proofing" => document.add_story_proofing_range("gram", range).unwrap(),
+            "comment" => {
+                document
+                    .add_story_comment(range, "Ada", None, "nested annotation")
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    }
+    assert_eq!(
+        document
+            .story_ranges()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry.range().start.location.index_path().len() == 2)
+            .count(),
+        4
+    );
+}
+
+#[test]
+fn related_story_block_controls_reopen_with_all_range_families() {
+    let mut seed = container_neutral_story_fixture();
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    for (part, old, replacement) in [
+        (
+            "/word/document.xml",
+            "<w:p><w:r><w:t>cell</w:t></w:r></w:p>",
+            "<w:sdt><w:sdtContent><w:p><w:r><w:t>cell control</w:t></w:r></w:p></w:sdtContent></w:sdt>",
+        ),
+        (
+            "/word/document.xml",
+            "<w:p><w:r><w:t>text box</w:t></w:r></w:p>",
+            "<w:sdt><w:sdtContent><w:p><w:r><w:t>text box control</w:t></w:r></w:p></w:sdtContent></w:sdt>",
+        ),
+        (
+            "/word/header-story.xml",
+            "<a:p><a:r><a:t>header</a:t></a:r></a:p>",
+            "<a:sdt><a:sdtContent><a:p><a:r><a:t>header control</a:t></a:r></a:p></a:sdtContent></a:sdt>",
+        ),
+        (
+            "/word/footer-story.xml",
+            "<w:p><w:r><w:t>footer</w:t></w:r></w:p>",
+            "<w:sdt><w:sdtContent><w:p><w:r><w:t>footer control</w:t></w:r></w:p></w:sdtContent></w:sdt>",
+        ),
+        (
+            "/word/footnotes-story.xml",
+            "<w:p><w:r><w:t>footnote</w:t></w:r></w:p>",
+            "<w:sdt><w:sdtContent><w:p><w:r><w:t>footnote control</w:t></w:r></w:p></w:sdtContent></w:sdt>",
+        ),
+        (
+            "/word/endnotes-story.xml",
+            "<w:p><w:r><w:t>endnote</w:t></w:r></w:p>",
+            "<w:sdt><w:sdtContent><w:p><w:r><w:t>endnote control</w:t></w:r></w:p></w:sdtContent></w:sdt>",
+        ),
+        (
+            "/word/comments-story.xml",
+            "<w:p><w:r><w:t>comment</w:t></w:r></w:p>",
+            "<w:sdt><w:sdtContent><w:p><w:r><w:t>comment control</w:t></w:r></w:p></w:sdtContent></w:sdt>",
+        ),
+    ] {
+        let xml = std::str::from_utf8(package.get_part(part).unwrap()).unwrap();
+        assert!(xml.contains(old), "{part}");
+        package.set_part(part, xml.replacen(old, replacement, 1).into_bytes());
+    }
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(&bytes.into_inner()).unwrap();
+    for kind in [
+        StoryKind::TableCell,
+        StoryKind::TextBox,
+        StoryKind::Header,
+        StoryKind::Footer,
+        StoryKind::Footnote,
+        StoryKind::Endnote,
+        StoryKind::Comment,
+    ] {
+        let range_for = |document: &Document| {
+            let story = document
+                .stories()
+                .unwrap()
+                .into_iter()
+                .find(|story| story.kind() == kind)
+                .unwrap();
+            let control = document
+                .story_items(&story)
+                .unwrap()
+                .into_iter()
+                .find(|item| item.kind() == StoryItemKind::ContentControl)
+                .unwrap();
+            let location = rdocx::ContentLocation::new(
+                story,
+                StoryItemKind::Paragraph,
+                vec![control.location().index_path()[0], 0],
+            );
+            rdocx::StoryRunRange {
+                start: rdocx::StoryRunPosition {
+                    location: location.clone(),
+                    run_index: 0,
+                },
+                end: rdocx::StoryRunPosition {
+                    location,
+                    run_index: 1,
+                },
+            }
+        };
+        let bookmark = document
+            .add_story_bookmark(&format!("Nested{kind:?}"), range_for(&document))
+            .unwrap();
+        document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert!(
+            document
+                .story_ranges()
+                .unwrap()
+                .iter()
+                .any(|entry| entry.bookmark_id() == Some(bookmark)
+                    && entry.range().start.location.story().kind() == kind
+                    && entry.range().start.location.index_path().len() == 2)
+        );
+        let permission = document
+            .add_story_permission_range(Some("Ada"), None, range_for(&document))
+            .unwrap();
+        document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert!(document.story_ranges().unwrap().iter().any(|entry| matches!(entry.kind(), rdocx::StoryRangeKind::Permission { id, .. } if *id == permission) && entry.range().start.location.story().kind() == kind && entry.range().end.location.index_path().len() == 2));
+        document
+            .add_story_proofing_range("spell", range_for(&document))
+            .unwrap();
+        document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert!(
+            document
+                .story_ranges()
+                .unwrap()
+                .iter()
+                .any(
+                    |entry| matches!(entry.kind(), rdocx::StoryRangeKind::Proofing { .. })
+                        && entry.range().start.location.story().kind() == kind
+                        && entry.range().end.location.index_path().len() == 2
+                )
+        );
+        let comment = document
+            .add_story_comment(range_for(&document), "Ada", None, "nested annotation")
+            .unwrap();
+        document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert!(document.story_ranges().unwrap().iter().any(
+            |entry| matches!(entry.kind(), rdocx::StoryRangeKind::Comment { id } if *id == comment)
+                && entry.range().start.location.story().kind() == kind
+                && entry.range().end.location.index_path().len() == 2
+        ));
+    }
+}
+
+#[test]
+fn nested_control_ranges_follow_physical_order_not_item_index_order() {
+    let mut seed = container_neutral_story_fixture();
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    let header = std::str::from_utf8(package.get_part("/word/header-story.xml").unwrap()).unwrap();
+    let header = header.replacen(
+        "<a:p><a:r><a:t>header</a:t></a:r></a:p>",
+        "<a:sdt><a:sdtContent><a:sdt><a:sdtContent><a:p><a:r><a:t>inner</a:t></a:r></a:p></a:sdtContent></a:sdt><a:p><a:r><a:t>outer</a:t></a:r></a:p></a:sdtContent></a:sdt>",
+        1,
+    );
+    package.set_part("/word/header-story.xml", header.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(&bytes.into_inner()).unwrap();
+    let header_story = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::Header)
+        .unwrap();
+    let controls = document
+        .story_items(&header_story)
+        .unwrap()
+        .into_iter()
+        .filter(|item| item.kind() == StoryItemKind::ContentControl)
+        .map(|item| item.location().index_path()[0])
+        .collect::<Vec<_>>();
+    assert_eq!(controls.len(), 2);
+    let inner = rdocx::ContentLocation::new(
+        header_story.clone(),
+        StoryItemKind::Paragraph,
+        vec![controls[1], 0],
+    );
+    let outer =
+        rdocx::ContentLocation::new(header_story, StoryItemKind::Paragraph, vec![controls[0], 0]);
+    assert!(inner.index_path() > outer.index_path());
+    let range = rdocx::StoryRunRange {
+        start: rdocx::StoryRunPosition {
+            location: inner,
+            run_index: 0,
+        },
+        end: rdocx::StoryRunPosition {
+            location: outer,
+            run_index: 1,
+        },
+    };
+    let id = document.add_story_bookmark("PhysicalOrder", range).unwrap();
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let pair = reopened
+        .story_ranges()
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.bookmark_id() == Some(id))
+        .unwrap();
+    assert!(pair.range().start.location.index_path() > pair.range().end.location.index_path());
+}
+
+#[test]
+fn nested_body_controls_accept_physical_story_range_endpoints() {
+    let mut seed = container_neutral_story_fixture();
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    let body = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    let body = body.replacen(
+        "<w:p><w:r><w:t>body</w:t></w:r></w:p>",
+        "<w:sdt><w:sdtContent><w:sdt><w:sdtContent><w:p><w:r><w:t>inner</w:t></w:r></w:p></w:sdtContent></w:sdt><w:p><w:r><w:t>outer</w:t></w:r></w:p></w:sdtContent></w:sdt>",
+        1,
+    );
+    package.set_part("/word/document.xml", body.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(&bytes.into_inner()).unwrap();
+    let body_story = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::Body)
+        .unwrap();
+    let controls = document
+        .story_items(&body_story)
+        .unwrap()
+        .into_iter()
+        .filter(|item| item.kind() == StoryItemKind::ContentControl)
+        .map(|item| item.location().index_path()[0])
+        .collect::<Vec<_>>();
+    assert!(controls.len() >= 2);
+    let inner = rdocx::ContentLocation::new(
+        body_story.clone(),
+        StoryItemKind::Paragraph,
+        vec![controls[1], 0],
+    );
+    let outer =
+        rdocx::ContentLocation::new(body_story, StoryItemKind::Paragraph, vec![controls[0], 0]);
+    let range = rdocx::StoryRunRange {
+        start: rdocx::StoryRunPosition {
+            location: inner,
+            run_index: 0,
+        },
+        end: rdocx::StoryRunPosition {
+            location: outer,
+            run_index: 1,
+        },
+    };
+    let id = document.add_story_bookmark("BodyNested", range).unwrap();
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let pair = reopened
+        .story_ranges()
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.bookmark_id() == Some(id))
+        .unwrap();
+    assert!(pair.range().start.location.index_path() > pair.range().end.location.index_path());
+    assert_eq!(pair.range().start.run_index, 0);
+    assert_eq!(pair.range().end.run_index, 1);
+}
+
+#[test]
+fn story_marker_allocation_is_family_aware() {
+    let mut document = Document::new();
+    document.add_paragraph("alpha");
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    let range = rdocx::StoryRunRange {
+        start: rdocx::StoryRunPosition {
+            location: location.clone(),
+            run_index: 0,
+        },
+        end: rdocx::StoryRunPosition {
+            location,
+            run_index: 1,
+        },
+    };
+    let bookmark = document.add_story_bookmark("Bookmark", range).unwrap();
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    let range = rdocx::StoryRunRange {
+        start: rdocx::StoryRunPosition {
+            location: location.clone(),
+            run_index: 0,
+        },
+        end: rdocx::StoryRunPosition {
+            location,
+            run_index: 1,
+        },
+    };
+    let permission = document
+        .add_story_permission_range(Some("editor"), None, range)
+        .unwrap();
+    assert_eq!(bookmark, permission);
+}
+
+#[test]
+fn paired_marker_mutation_preserves_unknown_siblings() {
+    let mut document = Document::new();
+    document.add_paragraph("alpha");
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    let range = rdocx::StoryRunRange {
+        start: rdocx::StoryRunPosition {
+            location: location.clone(),
+            run_index: 0,
+        },
+        end: rdocx::StoryRunPosition {
+            location,
+            run_index: 1,
+        },
+    };
+    let id = document.add_story_bookmark("Anchor", range).unwrap();
+    assert!(document.remove_story_bookmark(id).unwrap());
+    assert!(document.story_ranges().unwrap().is_empty());
+
+    let mut seed = container_neutral_story_fixture();
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    let header = std::str::from_utf8(package.get_part("/word/header-story.xml").unwrap()).unwrap();
+    let header = header
+        .replacen(
+            "<a:p><a:r>",
+            "<a:p><a:bookmarkStart a:id=\"77\" a:name=\"Alias\"/><x:slot x:flag=\"exact\"/><a:r>",
+            1,
+        )
+        .replacen(
+            "</a:r></a:p>",
+            "</a:r><a:bookmarkEnd a:id=\"77\"/></a:p>",
+            1,
+        );
+    package.set_part("/word/header-story.xml", header.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(&bytes.into_inner()).unwrap();
+    assert!(document.story_ranges().unwrap().iter().any(|entry| {
+        matches!(entry.kind(), rdocx::StoryRangeKind::Bookmark { id: 77, name } if name == "Alias")
+    }));
+    let header = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::Header)
+        .unwrap();
+    let location = document.story_items(&header).unwrap()[0].location().clone();
+    let range = rdocx::StoryRunRange {
+        start: rdocx::StoryRunPosition {
+            location: location.clone(),
+            run_index: 0,
+        },
+        end: rdocx::StoryRunPosition {
+            location,
+            run_index: 1,
+        },
+    };
+    document
+        .add_story_permission_range(Some("Ada"), None, range)
+        .unwrap();
+    let bytes = document.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let header = std::str::from_utf8(package.get_part("/word/header-story.xml").unwrap()).unwrap();
+    assert!(header.contains("<a:bookmarkStart a:id=\"77\" a:name=\"Alias\"/>"));
+    assert!(header.contains("<a:bookmarkEnd a:id=\"77\"/>"));
+    assert!(header.contains("<x:slot x:flag=\"exact\"/>"));
+}
+
+#[test]
+fn story_comment_endpoint_move_keeps_one_reference_and_its_definition() {
+    let mut document = container_neutral_story_fixture();
+    let body = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::Body)
+        .unwrap();
+    let location = document
+        .story_items(&body)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind() == StoryItemKind::Paragraph)
+        .unwrap()
+        .location()
+        .clone();
+    let range = rdocx::StoryRunRange {
+        start: rdocx::StoryRunPosition {
+            location: location.clone(),
+            run_index: 0,
+        },
+        end: rdocx::StoryRunPosition {
+            location,
+            run_index: 1,
+        },
+    };
+    let id = document
+        .add_story_comment(range, "Ada", None, "moved comment")
+        .unwrap();
+    let selected = document
+        .story_ranges()
+        .unwrap()
+        .into_iter()
+        .find(|entry| matches!(entry.kind(), rdocx::StoryRangeKind::Comment { id: found } if *found == id))
+        .unwrap();
+    let header = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::Header)
+        .unwrap();
+    let location = document
+        .story_items(&header)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind() == StoryItemKind::Paragraph)
+        .unwrap()
+        .location()
+        .clone();
+    let target = rdocx::StoryRunRange {
+        start: rdocx::StoryRunPosition {
+            location: location.clone(),
+            run_index: 0,
+        },
+        end: rdocx::StoryRunPosition {
+            location,
+            run_index: 1,
+        },
+    };
+    document.move_story_range(&selected, target).unwrap();
+    assert!(
+        document
+            .move_story_range(&selected, selected.range().clone())
+            .is_err()
+    );
+    let before_stale_remove = document.to_bytes().unwrap();
+    assert!(!document.remove_story_range(&selected).unwrap());
+    assert_eq!(document.to_bytes().unwrap(), before_stale_remove);
+    let bytes = document.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let body = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    let header = std::str::from_utf8(package.get_part("/word/header-story.xml").unwrap()).unwrap();
+    let comments =
+        std::str::from_utf8(package.get_part("/word/comments-story.xml").unwrap()).unwrap();
+    assert!(!body.contains(&format!("commentRangeStart w:id=\"{id}\"")));
+    assert!(body.contains("<x:keep x:flag=\"exact\"><x:child/></x:keep>"));
+    assert!(header.contains("<x:header x:flag=\"exact\"/>"));
+    assert!(header.contains(&format!("commentRangeStart w:id=\"{id}\"")));
+    assert_eq!(
+        body.matches(&format!("commentReference w:id=\"{id}\""))
+            .count(),
+        0
+    );
+    assert_eq!(
+        header
+            .matches(&format!("commentReference w:id=\"{id}\""))
+            .count(),
+        1
+    );
+    assert!(comments.contains("moved comment"));
+    let moved = document
+        .story_ranges()
+        .unwrap()
+        .into_iter()
+        .find(|entry| matches!(entry.kind(), rdocx::StoryRangeKind::Comment { id: found } if *found == id))
+        .unwrap();
+    assert!(document.remove_story_range(&moved).unwrap());
+    let package =
+        OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+    let header = std::str::from_utf8(package.get_part("/word/header-story.xml").unwrap()).unwrap();
+    let comments =
+        std::str::from_utf8(package.get_part("/word/comments-story.xml").unwrap()).unwrap();
+    assert!(!header.contains(&format!("commentRangeStart w:id=\"{id}\"")));
+    assert!(!header.contains(&format!("commentRangeEnd w:id=\"{id}\"")));
+    assert_eq!(
+        header
+            .matches(&format!("commentReference w:id=\"{id}\""))
+            .count(),
+        1
+    );
+    assert!(comments.contains("moved comment"));
+}
+
+#[test]
+fn proofing_ranges_without_ids_remove_only_the_selected_pair() {
+    let mut document = Document::new();
+    document.add_paragraph("first");
+    document.add_paragraph("second");
+    for index in 0..2 {
+        let location = document.paragraph_story_location(index).unwrap().unwrap();
+        let range = rdocx::StoryRunRange {
+            start: rdocx::StoryRunPosition {
+                location: location.clone(),
+                run_index: 0,
+            },
+            end: rdocx::StoryRunPosition {
+                location,
+                run_index: 1,
+            },
+        };
+        document.add_story_proofing_range("spell", range).unwrap();
+    }
+    let selected = document
+        .story_ranges()
+        .unwrap()
+        .into_iter()
+        .find(|entry| {
+            matches!(entry.kind(), rdocx::StoryRangeKind::Proofing { kind } if kind == "spell")
+                && entry.range().start.location.index_path() == [1]
+        })
+        .unwrap();
+    assert!(document.remove_story_range(&selected).unwrap());
+    let remaining = document.story_ranges().unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].range().start.location.index_path(), [0]);
+}
+
+#[test]
+fn hidden_markers_do_not_shift_checked_removal_ordinals() {
+    let mut seed = Document::new();
+    seed.add_paragraph("visible");
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    let body = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    let body = body.replacen(
+        "<w:p><w:r>",
+        "<w:p><w:del><w:bookmarkStart w:id=\"80\" w:name=\"Hidden\"/></w:del><w:r>",
+        1,
+    );
+    package.set_part("/word/document.xml", body.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(&bytes.into_inner()).unwrap();
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    let range = rdocx::StoryRunRange {
+        start: rdocx::StoryRunPosition {
+            location: location.clone(),
+            run_index: 0,
+        },
+        end: rdocx::StoryRunPosition {
+            location,
+            run_index: 1,
+        },
+    };
+    let id = document.add_story_bookmark("Visible", range).unwrap();
+    let selected = document
+        .story_ranges()
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.bookmark_id() == Some(id))
+        .unwrap();
+    assert!(document.remove_story_range(&selected).unwrap());
+    let bytes = document.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let body = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(body.contains("Hidden"));
+    assert!(!body.contains("Visible"));
+}
+
+#[test]
+fn crossing_story_markers_reject_addition_without_partial_edit() {
+    let mut seed = Document::new();
+    seed.add_paragraph("text");
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    let body = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    let body = body.replacen(
+        "<w:p><w:r>",
+        "<w:p><w:bookmarkStart w:id=\"17\" w:name=\"Outer\"/><w:permStart w:id=\"17\" w:ed=\"Ada\"/><w:r>",
+        1,
+    ).replacen(
+        "</w:r></w:p>",
+        "</w:r><w:bookmarkEnd w:id=\"17\"/><w:permEnd w:id=\"17\"/></w:p>",
+        1,
+    );
+    package.set_part("/word/document.xml", body.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(&bytes.into_inner()).unwrap();
+    let before = document.to_bytes().unwrap();
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    let range = rdocx::StoryRunRange {
+        start: rdocx::StoryRunPosition {
+            location: location.clone(),
+            run_index: 0,
+        },
+        end: rdocx::StoryRunPosition {
+            location,
+            run_index: 1,
+        },
+    };
+    assert!(document.add_story_bookmark("Another", range).is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn invalid_story_range_moves_are_atomic() {
+    let mut document = container_neutral_story_fixture();
+    let body = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::Body)
+        .unwrap();
+    let body_location = document.story_items(&body).unwrap()[0].location().clone();
+    let original = rdocx::StoryRunRange {
+        start: rdocx::StoryRunPosition {
+            location: body_location.clone(),
+            run_index: 0,
+        },
+        end: rdocx::StoryRunPosition {
+            location: body_location,
+            run_index: 1,
+        },
+    };
+    let id = document.add_story_bookmark("Atomic", original).unwrap();
+    let selected = document
+        .story_ranges()
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.bookmark_id() == Some(id))
+        .unwrap();
+    let header = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::Header)
+        .unwrap();
+    let header_location = document.story_items(&header).unwrap()[0].location().clone();
+    let invalid = rdocx::StoryRunRange {
+        start: selected.range().start.clone(),
+        end: rdocx::StoryRunPosition {
+            location: header_location,
+            run_index: 1,
+        },
+    };
+    let before = document.to_bytes().unwrap();
+    assert!(document.move_story_range(&selected, invalid).is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let reversed = rdocx::StoryRunRange {
+        start: rdocx::StoryRunPosition {
+            location: selected.range().start.location.clone(),
+            run_index: 1,
+        },
+        end: rdocx::StoryRunPosition {
+            location: selected.range().end.location.clone(),
+            run_index: 0,
+        },
+    };
+    assert!(document.move_story_range(&selected, reversed).is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
 }

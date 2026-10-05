@@ -50,14 +50,14 @@ contracts require integrated gates at each sprint boundary.
 M23 closes the five-document from-scratch business-document boundary. M24 then
 classifies and closes the broader modern DOCX authoring surface before M19 may
 begin. The spreadsheet programme remains a business decision and proceeds only
-if F-184 confirms a material gap in the Rust ecosystem at S92.
+if F-184 confirms a material gap in the Rust ecosystem at S95.
 
 The stopping and compression choices are:
 
 - **Stop after M23.** S73 can generate the five private reference documents
   from `Document::new()` through public modeled APIs, with no base template,
   raw OOXML, or LibreOffice field-update pass.
-- **Stop after M24.** S91 provides the complete modern DOCX authoring boundary.
+- **Stop after M24.** S94 provides the complete modern DOCX authoring boundary.
   Every in-scope feature is authorable, readable, mutable, round-trip safe,
   rendered where applicable, and classified across the public bindings.
 - **Archive M19 at its decision gate.** F-184 may still find that the advanced
@@ -1604,7 +1604,7 @@ decision lands.
 OPC, DrawingML, the chart engine, the layout engine and the PDF backend all
 exist and are format-neutral, which lowers the cost of a third family. That is
 not sufficient reason to build one. F-184 must reassess the Rust ecosystem when
-S92 begins. M19 proceeds only if no credible maintained crate provides the
+S95 begins. M19 proceeds only if no credible maintained crate provides the
 combined lifecycle required here: open an existing advanced workbook, preserve
 what is not executed, edit typed features, recalculate formulas and local
 pivots, refresh a declared Power Query subset, automate it through an Office
@@ -1626,7 +1626,7 @@ render to PDF.
 
 ### F-184, Advanced spreadsheet go or no-go (S)
 The go or no-go decision record. Reassess the maintained Rust spreadsheet
-ecosystem at S92, state whether the combined lifecycle gap still exists, and
+ecosystem at S95, state whether the combined lifecycle gap still exists, and
 archive M19 if it does not. If it does, amend `02-scope-and-non-goals.md`, define
 the boundary between `oxml-sml` as chart support and `rxlsx` as a library, and
 publish the preserve, model, and execute classification for every advanced
@@ -2233,8 +2233,8 @@ diagnostics. The closed matrix contains 85 stable rows and maps the five private
 documents only as anonymous, non-identifying capability families. The audit
 found no duplicate scope, missing owner, dangling dependency, dependency cycle,
 or scheduling conflict in F-243 through F-310. Their boundaries, sizes, and
-dependencies remain authoritative. The current plan places them across S71
-through S91.
+dependencies remain authoritative. The current plan places them in S71 through
+S75, S86, and S89 through S94.
 **Capability matrix owner**: `docs/hld/02-scope-and-non-goals.md`, "Modern DOCX
 capability matrix".
 **Test gate**: regression. Every in-scope matrix row has evidence, an owner
@@ -2796,8 +2796,8 @@ with a separator rule, while the single-column path bypasses the track
 arithmetic so all 49 hash entries stay unchanged. Page borders, margin line
 numbering excluded from the PDF reading order, vertical page alignment and
 mirrored margins all render. `ST_VerticalJc` gains `Both` and
-`#[non_exhaustive]`, which is a breaking change to `rdocx-oxml`. DOCX-036 stays
-`partial` and its remaining owner is F-274.
+`#[non_exhaustive]`, which is a breaking change to `rdocx-oxml`. DOCX-036
+has checked note policies and placement through F-274.
 
 ### F-269a, Word GUI confirmation for section page semantics (S)
 Record the Word-authored oracle for columns, page borders, line numbering,
@@ -2868,31 +2868,48 @@ The native facade stages each mutation and reopens the package before
 publication. Common story editing preserves exact untouched XML, separator
 records, and endnote-owned picture and hyperlink relationships. Body references
 across sections number independently from footnotes, and the endnote stream
-appends after the final body page under the current placement policy.
+flows from the section or document boundary under the selected placement policy.
 **Depends on**: F-272.
 **Test gate**: differential. Word confirms independent occurrence order across
-sections. The gate asserts the current renderer's documented fresh-page and
-decimal-label divergence at the document end. F-274 owns those policies.
+sections and the selected policy places formatted labels and endnote bodies.
 
 ### F-274, Note separators, markers, and restart policy (L)
-Author separator and continuation stories, custom reference marks, number
-formats, start values, placement, and section restart behavior for both note
-families.
+Checked document and section policies select number format, start, restart,
+and placement for both note families. Special-record mutation authors the
+separator, continuation separator, and continuation notice in each
+relationship-resolved note part while preserving unrelated XML. Body and note
+markers share one formatted label stream, and custom marks leave numeric
+numbering untouched. Footnotes reserve their page area. Endnotes flow from
+their section or document boundary and carry to later pages. The pinned Word
+build ignores `beneathText` even with a section override, while native layout
+places the footnote beneath body text.
 **Depends on**: F-269, F-272, F-273.
-**Test gate**: differential. Every note policy produces the pinned marker and
-page placement without disturbing unrelated section numbering.
+**Test gate**: differential. The pinned Word fixtures confirm document and
+section end placement, section and page restart, custom marks, separators,
+and carried-note notices. A native deterministic test records the pinned
+`beneathText` divergence. Round-trip and atomic tests cover source XML and
+invalid mutations without disturbing unrelated section numbering.
 
 ### F-275, Cross-story bookmarks, ranges, and annotations (L)
-Create and mutate bookmarks, comment ranges, permission ranges, proofing ranges,
-and other supported paired markers in every valid story and nested container.
+Create and mutate bookmark pairs, comment endpoints, permission ranges and
+spelling or grammar proofing ranges in every valid story and nested block
+control. The native inventory uses immutable story-qualified endpoints.
+Comment pair removal retains the reference and definition as a point comment,
+while moving the pair moves its reference run. Modern metadata, permission
+policy and revision move ranges have separate owners.
 **Depends on**: F-253, F-254.
 **Test gate**: round-trip. Nested and crossing-invalid ranges are respectively
 preserved or rejected atomically, and valid ranges retain exact endpoints.
 
 ### F-276, Complete fragment conflict and dependency policy (L)
-Complete cross-document fragment import for style aliases, numbering overrides,
-custom XML bindings, notes, comments, revisions, charts, diagrams, embeddings,
-and package extensions.
+Cross-document block fragment import supports every story owner and nested
+block-control paragraph boundary. It closes style aliases and links, numbering
+overrides, custom XML bindings and item properties, notes, comment threads,
+paired markers, revisions, charts, diagrams, embeddings and reachable opaque
+package extensions. External edges are retained without fetching. Compatible
+imports publish one reopened candidate, with deterministic identity maps and
+atomic integrity failures. Preserved opaque companions gain no new decoding
+or rendering support.
 **Depends on**: F-256, F-270 through F-275.
 **Test gate**: regression. Importing a full-story fragment into a conflicting
 destination remaps every dependency deterministically and leaves no dangling ID.
@@ -2903,6 +2920,11 @@ building blocks, placeholders, and their related content through public APIs.
 **Depends on**: F-237, F-253, F-276.
 **Test gate**: round-trip. Public-created entries retain category, behavior,
 content, relationships, and unsupported siblings after insertion and reopen.
+Typed creation requires dependency-free content. Fragment-backed creation and
+insertion share the complete dependency transaction. Last removal retains
+one valid empty glossary part. Binding a placeholder updates an existing
+control without changing its discriminator. Stale snapshots and duplicate
+authored names fail atomically.
 
 ### F-278, General simple and complex field builder (L)
 Provide typed and raw-instruction-safe builders for simple and complex fields,
@@ -6492,6 +6514,21 @@ build-only rehearsal, full verification and a clean sprint review.
 both family version and notes contracts, manual build-only artifact rehearsal,
 hosted release regressions, full local gate and unchanged 49-entry hash harness
 all pass before `/close-sprint S88` and fresh release approvals.
+
+### F-X177, Accept unified fontdb source features (S)
+
+Adopt [PR 269](https://github.com/tensorbee/rdocx/pull/269) from
+`changjoon-park`, reviewed at `7949573b92fd988a682a11b8e674af85e5df622e`.
+Cargo may enable `fontdb/memmap` through another dependency such as `usvg`.
+The font source match compiles with that unified feature and reads the
+additional source through `Database::with_face_data`. Retain the existing
+binary and ordinary file paths and deterministic bundled-only construction.
+No public API, dependency version or default feature changes.
+**Depends on**: none.
+**Test gate**: compilation regression. `cargo check -p oxml-layout --features
+fontdb/memmap` fails on the claimed base and passes after the fix. Default,
+no-default and no-default plus memmap checks and font tests pass, with all
+49 hash entries unchanged. Record the contributor disposition for sprint close.
 
 ### F-X168, Current issue and contribution closure evidence (M)
 

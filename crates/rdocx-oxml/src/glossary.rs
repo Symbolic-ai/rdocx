@@ -5,6 +5,7 @@ use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::name::{Namespace, ResolveResult};
 use quick_xml::reader::NsReader;
 use quick_xml::{Reader, Writer};
+use std::collections::BTreeMap;
 use std::ops::Range;
 
 use crate::document::CT_Body;
@@ -19,6 +20,7 @@ use crate::raw_xml::{capture_element, capture_empty_element};
 pub struct CT_GlossaryDocument {
     pub doc_parts: Vec<CT_DocPart>,
     raw_xml: Vec<u8>,
+    source_spans: Vec<Range<usize>>,
 }
 
 /// One `w:docPart` building-block entry.
@@ -28,11 +30,14 @@ pub struct CT_DocPart {
     pub body: CT_Body,
     raw_xml: Vec<u8>,
     body_xml: Vec<u8>,
-    source_span: Range<usize>,
+    source_span: Option<Range<usize>>,
     properties_span: Option<Range<usize>>,
     body_span: Range<usize>,
     original_properties: DocPartPrSnapshot,
     original_body: CT_Body,
+    word_prefixes: Vec<String>,
+    dirty_raw: bool,
+    inherited_namespaces: BTreeMap<String, String>,
 }
 
 /// The supported properties of one building block.
@@ -255,6 +260,43 @@ fn write_value<W: std::io::Write>(
 }
 
 impl CT_DocPart {
+    /// Create an entry whose body is owned, namespace-complete XML.
+    pub fn from_body_xml(content: &[u8]) -> Result<Self> {
+        let mut xml =
+            format!(r#"<w:docPart xmlns:w="{W_NS}"><w:docPartPr/><w:docPartBody>"#).into_bytes();
+        xml.extend_from_slice(content);
+        xml.extend_from_slice(b"</w:docPartBody></w:docPart>");
+        validate_document_declarations_and_doctype(&xml)?;
+        let mut part = parse_doc_part(xml, &["w".to_owned()], 0..0)?;
+        part.source_span = None;
+        Ok(part)
+    }
+
+    /// Replace owned content while retaining body-wrapper attributes and entry siblings.
+    pub fn replace_body_content_xml(&mut self, content: &[u8]) -> Result<()> {
+        let raw = self.to_xml()?;
+        let current = parse_doc_part(raw, &self.word_prefixes, 0..0)?;
+        let (mut body, end) = expanded_root_wrapper(&current.body_xml)?;
+        body.extend_from_slice(content);
+        body.extend(end);
+        let updated = apply_structural_edits(&current.raw_xml, vec![(current.body_span, body)])?;
+        let mut writer = Writer::new(Vec::new());
+        let mut wrapper = BytesStart::new("namespaceScope");
+        for (name, namespace) in &self.inherited_namespaces {
+            wrapper.push_attribute((name.as_str(), namespace.as_str()));
+        }
+        writer.write_event(Event::Start(wrapper))?;
+        writer.get_mut().extend_from_slice(&updated);
+        writer.write_event(Event::End(BytesEnd::new("namespaceScope")))?;
+        validate_document_declarations_and_doctype(&writer.into_inner())?;
+        let mut replacement = parse_doc_part(updated, &self.word_prefixes, 0..0)?;
+        replacement.source_span = self.source_span.clone();
+        replacement.dirty_raw = true;
+        replacement.inherited_namespaces = self.inherited_namespaces.clone();
+        *self = replacement;
+        Ok(())
+    }
+
     pub fn has_unsupported_content(&self) -> bool {
         self.properties.has_unsupported_content()
             || self
@@ -265,7 +307,9 @@ impl CT_DocPart {
     }
 
     fn is_unchanged(&self) -> bool {
-        self.properties.snapshot() == self.original_properties && self.body == self.original_body
+        !self.dirty_raw
+            && self.properties.snapshot() == self.original_properties
+            && self.body == self.original_body
     }
 
     fn to_xml(&self) -> Result<Vec<u8>> {
@@ -306,6 +350,7 @@ impl CT_GlossaryDocument {
         let mut declaration_seen = false;
         let mut doc_parts_count = 0usize;
         let mut doc_parts = Vec::new();
+        let mut inherited_namespaces = BTreeMap::new();
 
         loop {
             let event_start = reader.buffer_position() as usize;
@@ -340,12 +385,14 @@ impl CT_GlossaryDocument {
                             ));
                         }
                         root_seen = true;
+                        collect_namespace_declarations(&element, &mut inherited_namespaces)?;
                         stack.push(local);
                         prefix_scopes.push(std::mem::replace(&mut word_prefixes, local_prefixes));
                     } else if stack.len() == 1
                         && stack[0].as_deref() == Some("glossaryDocument")
                         && local.as_deref() == Some("docParts")
                     {
+                        collect_namespace_declarations(&element, &mut inherited_namespaces)?;
                         doc_parts_count += 1;
                         if doc_parts_count > 1 {
                             return Err(OxmlError::InvalidValue(
@@ -361,7 +408,9 @@ impl CT_GlossaryDocument {
                     {
                         let raw = capture_element(&mut reader, &element)?;
                         let source_span = event_start..reader.buffer_position() as usize;
-                        doc_parts.push(parse_doc_part(raw, &local_prefixes, source_span)?);
+                        let mut part = parse_doc_part(raw, &local_prefixes, source_span)?;
+                        part.inherited_namespaces = inherited_namespaces.clone();
+                        doc_parts.push(part);
                     } else {
                         stack.push(local);
                         prefix_scopes.push(std::mem::replace(&mut word_prefixes, local_prefixes));
@@ -396,11 +445,13 @@ impl CT_GlossaryDocument {
                         && local.as_deref() == Some("docPart")
                     {
                         let source_span = event_start..reader.buffer_position() as usize;
-                        doc_parts.push(parse_doc_part(
+                        let mut part = parse_doc_part(
                             capture_empty_element(&element)?,
                             &local_prefixes,
                             source_span,
-                        )?);
+                        )?;
+                        part.inherited_namespaces = inherited_namespaces.clone();
+                        doc_parts.push(part);
                     }
                 }
                 Event::End(_) => {
@@ -446,25 +497,148 @@ impl CT_GlossaryDocument {
             }
             buffer.clear();
         }
-        if !root_seen || !root_closed || doc_parts_count != 1 || doc_parts.is_empty() {
+        if !root_seen || !root_closed || doc_parts_count != 1 {
             return Err(OxmlError::MissingElement(
                 "w:glossaryDocument root with one direct w:docParts".to_owned(),
             ));
         }
+        let source_spans = doc_parts
+            .iter()
+            .filter_map(|part| part.source_span.clone())
+            .collect();
         Ok(Self {
             doc_parts,
             raw_xml: xml.to_vec(),
+            source_spans,
         })
     }
 
-    pub fn to_xml(&self) -> Result<Vec<u8>> {
-        let edits = self
+    /// Construct the retained empty glossary used by facade authoring.
+    pub fn new() -> Result<Self> {
+        Self::from_xml(format!(r#"<w:glossaryDocument xmlns:w="{W_NS}"><w:docParts></w:docParts></w:glossaryDocument>"#).as_bytes())
+    }
+
+    /// Absolute source range of one body wrapper in an unchanged parsed root.
+    pub fn body_range(&self, ordinal: usize) -> Result<Range<usize>> {
+        let part = self
             .doc_parts
-            .iter()
-            .filter(|part| !part.is_unchanged())
-            .map(|part| Ok((part.source_span.clone(), part.to_xml()?)))
-            .collect::<Result<Vec<_>>>()?;
+            .get(ordinal)
+            .ok_or_else(|| OxmlError::InvalidValue("stale glossary ordinal".to_owned()))?;
+        let span = part.source_span.as_ref().ok_or_else(|| {
+            OxmlError::InvalidValue("new glossary entry has no source range".to_owned())
+        })?;
+        Ok(span.start + part.body_span.start..span.start + part.body_span.end)
+    }
+
+    pub fn to_xml(&self) -> Result<Vec<u8>> {
+        let (container, empty) = doc_parts_close(&self.raw_xml)?;
+        if empty {
+            if self.doc_parts.is_empty() {
+                return Ok(self.raw_xml.clone());
+            }
+            if self.doc_parts.iter().any(|part| part.source_span.is_some()) {
+                return Err(OxmlError::InvalidValue(
+                    "entry source does not belong to empty glossary".to_owned(),
+                ));
+            }
+            let (start, end) = expanded_root_wrapper(&self.raw_xml[container.clone()])?;
+            let mut replacement = start;
+            for part in &self.doc_parts {
+                replacement.extend(part.to_xml()?);
+            }
+            replacement.extend(end);
+            return apply_structural_edits(&self.raw_xml, vec![(container, replacement)]);
+        }
+        let mut edits = Vec::new();
+        let mut retained = Vec::new();
+        let mut pending = Vec::new();
+        let mut previous = None;
+        for part in &self.doc_parts {
+            if let Some(span) = &part.source_span {
+                let index = self
+                    .source_spans
+                    .iter()
+                    .position(|source| source == span)
+                    .ok_or_else(|| {
+                        OxmlError::InvalidValue("foreign glossary source span".to_owned())
+                    })?;
+                if previous.is_some_and(|previous| index <= previous) {
+                    return Err(OxmlError::InvalidValue(
+                        "reordered or duplicate retained glossary entries".to_owned(),
+                    ));
+                }
+                previous = Some(index);
+                retained.push(span.clone());
+                if !pending.is_empty() {
+                    edits.push((span.start..span.start, std::mem::take(&mut pending)));
+                }
+                if !part.is_unchanged() {
+                    edits.push((span.clone(), part.to_xml()?));
+                }
+            } else {
+                pending.extend(part.to_xml()?);
+            }
+        }
+        if !pending.is_empty() {
+            edits.push((container.start..container.start, pending));
+        }
+        for span in &self.source_spans {
+            if !retained.contains(span) {
+                edits.push((span.clone(), Vec::new()));
+            }
+        }
         apply_structural_edits(&self.raw_xml, edits)
+    }
+}
+
+fn collect_namespace_declarations(
+    element: &BytesStart<'_>,
+    scope: &mut BTreeMap<String, String>,
+) -> Result<()> {
+    for attribute in element.attributes() {
+        let attribute = attribute?;
+        let name = std::str::from_utf8(attribute.key.as_ref())
+            .map_err(|error| OxmlError::InvalidValue(error.to_string()))?;
+        if name == "xmlns" || name.starts_with("xmlns:") {
+            scope.insert(
+                name.to_owned(),
+                attribute
+                    .decoded_and_normalized_value(
+                        quick_xml::XmlVersion::Implicit1_0,
+                        element.decoder(),
+                    )?
+                    .into_owned(),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn doc_parts_close(xml: &[u8]) -> Result<(Range<usize>, bool)> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (namespace, event) = reader.read_resolved_event_into(&mut buffer)?;
+        let is_word = namespace_is(&namespace, W_NS);
+        match event {
+            Event::Start(_) => depth += 1,
+            Event::Empty(element)
+                if depth == 1 && is_word && element.local_name().as_ref() == b"docParts" =>
+            {
+                return Ok((before..reader.buffer_position() as usize, true));
+            }
+            Event::End(element) => {
+                if depth == 2 && is_word && element.local_name().as_ref() == b"docParts" {
+                    return Ok((before..before, false));
+                }
+                depth = depth.saturating_sub(1);
+            }
+            Event::Eof => return Err(OxmlError::MissingElement("w:docParts".to_owned())),
+            _ => {}
+        }
+        buffer.clear();
     }
 }
 
@@ -750,11 +924,14 @@ fn parse_doc_part(
     Ok(CT_DocPart {
         original_properties: properties.snapshot(),
         original_body: body.clone(),
+        word_prefixes: owner_prefixes.clone(),
+        dirty_raw: false,
+        inherited_namespaces: BTreeMap::new(),
         properties,
         body,
         raw_xml,
         body_xml,
-        source_span,
+        source_span: Some(source_span),
         properties_span,
         body_span,
     })
@@ -2015,6 +2192,27 @@ mod tests {
     }
 
     #[test]
+    fn untouched_empty_glossary_retains_self_closing_container_bytes() {
+        let xml = format!(
+            r#"<p:glossaryDocument xmlns:p="{W_NS}" xmlns:x="urn:producer"><x:before/><p:docParts x:keep='yes'/><x:after/></p:glossaryDocument>"#
+        );
+        let glossary = CT_GlossaryDocument::from_xml(xml.as_bytes()).unwrap();
+        assert_eq!(glossary.to_xml().unwrap(), xml.as_bytes());
+    }
+
+    #[test]
+    fn public_entry_reordering_is_rejected_without_discarding_root_siblings() {
+        let xml = format!(
+            r#"<w:glossaryDocument xmlns:w="{W_NS}" xmlns:x="urn:producer"><x:before/><w:docParts><w:docPart><w:docPartPr><w:name w:val="first"/></w:docPartPr><w:docPartBody/></w:docPart><x:between/><w:docPart><w:docPartPr><w:name w:val="second"/></w:docPartPr><w:docPartBody/></w:docPart></w:docParts><x:after/></w:glossaryDocument>"#
+        );
+        let mut glossary = CT_GlossaryDocument::from_xml(xml.as_bytes()).unwrap();
+        glossary.doc_parts.swap(0, 1);
+        assert!(glossary.to_xml().is_err());
+        glossary.doc_parts.swap(0, 1);
+        assert_eq!(glossary.to_xml().unwrap(), xml.as_bytes());
+    }
+
+    #[test]
     fn glossary_parser_rejects_character_references_outside_the_root() {
         let root = format!(
             r#"<w:glossaryDocument xmlns:w="{W_NS}"><w:docParts><w:docPart><w:docPartBody/></w:docPart></w:docParts></w:glossaryDocument>"#
@@ -2203,9 +2401,8 @@ mod tests {
     }
 
     #[test]
-    fn required_glossary_collections_must_not_be_empty() {
+    fn required_entry_collections_must_not_be_empty() {
         for xml in [
-            format!(r#"<w:glossaryDocument xmlns:w="{W_NS}"><w:docParts/></w:glossaryDocument>"#),
             format!(
                 r#"<w:glossaryDocument xmlns:w="{W_NS}"><w:docParts><w:docPart><w:docPartPr><w:name w:val="entry"/><w:types/></w:docPartPr><w:docPartBody/></w:docPart></w:docParts></w:glossaryDocument>"#
             ),

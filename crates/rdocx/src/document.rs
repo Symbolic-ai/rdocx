@@ -76,6 +76,133 @@ pub struct RenderOptions {
     pub revision_view: rdocx_layout::RevisionView,
 }
 
+/// Which of Word's independent note streams a policy governs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoteFamily {
+    Footnote,
+    Endnote,
+}
+
+/// Special content placed before or after a note that continues across pages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoteSpecialRecord {
+    Separator,
+    ContinuationSeparator,
+    ContinuationNotice,
+}
+
+impl NoteSpecialRecord {
+    fn note_type(self) -> rdocx_oxml::footnotes::NoteType {
+        use rdocx_oxml::footnotes::NoteType;
+        match self {
+            Self::Separator => NoteType::Separator,
+            Self::ContinuationSeparator => NoteType::ContinuationSeparator,
+            Self::ContinuationNotice => NoteType::ContinuationNotice,
+        }
+    }
+}
+
+/// Marker formats the native renderer can reproduce.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoteNumberFormat {
+    Decimal,
+    UpperRoman,
+    LowerRoman,
+    UpperLetter,
+    LowerLetter,
+}
+
+impl NoteNumberFormat {
+    fn xml_value(self) -> &'static str {
+        match self {
+            Self::Decimal => "decimal",
+            Self::UpperRoman => "upperRoman",
+            Self::LowerRoman => "lowerRoman",
+            Self::UpperLetter => "upperLetter",
+            Self::LowerLetter => "lowerLetter",
+        }
+    }
+}
+
+/// Boundary at which numeric note markers start over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoteRestart {
+    Continuous,
+    EachSection,
+    EachPage,
+}
+
+impl NoteRestart {
+    fn xml_value(self) -> &'static str {
+        match self {
+            Self::Continuous => "continuous",
+            Self::EachSection => "eachSect",
+            Self::EachPage => "eachPage",
+        }
+    }
+}
+
+/// Boundary at which note content appears.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotePlacement {
+    PageBottom,
+    BeneathText,
+    SectionEnd,
+    DocumentEnd,
+}
+
+impl NotePlacement {
+    fn xml_value(self) -> &'static str {
+        match self {
+            Self::PageBottom => "pageBottom",
+            Self::BeneathText => "beneathText",
+            Self::SectionEnd => "sectEnd",
+            Self::DocumentEnd => "docEnd",
+        }
+    }
+}
+
+/// A complete visible note policy. `start` is one-based.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NotePolicy {
+    pub format: NoteNumberFormat,
+    pub start: u32,
+    pub restart: NoteRestart,
+    pub placement: NotePlacement,
+}
+
+impl NotePolicy {
+    fn properties(self, family: NoteFamily) -> Result<CT_NoteProperties> {
+        if self.start == 0 {
+            return Err(Error::Other(
+                "note numbering must start above zero".to_owned(),
+            ));
+        }
+        let valid = matches!(
+            (family, self.placement),
+            (
+                NoteFamily::Footnote,
+                NotePlacement::PageBottom | NotePlacement::BeneathText
+            ) | (
+                NoteFamily::Endnote,
+                NotePlacement::SectionEnd | NotePlacement::DocumentEnd
+            )
+        );
+        if !valid {
+            return Err(Error::Other(
+                "placement is invalid for this note family".to_owned(),
+            ));
+        }
+        Ok(CT_NoteProperties {
+            pos: Some(self.placement.xml_value().to_owned()),
+            num_fmt: Some(self.format.xml_value().to_owned()),
+            num_start: Some(self.start),
+            num_restart: Some(self.restart.xml_value().to_owned()),
+            ..CT_NoteProperties::default()
+        })
+    }
+}
+
 /// The package class declared by a Word main document part.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WordPackageClass {
@@ -887,7 +1014,7 @@ pub struct ReplacementCountMismatch {
     pub found: usize,
 }
 
-/// An owned main-body range and the package dependencies it can reach.
+/// An owned story range and the package dependencies it can reach.
 #[derive(Debug, Clone)]
 pub struct DocumentFragment {
     package: Vec<u8>,
@@ -960,7 +1087,48 @@ impl Default for FragmentConflictPolicy {
 }
 
 impl DocumentFragment {
-    /// Capture one non-empty, half-open range of direct main-body items.
+    pub(crate) fn from_part_content(
+        document: &Document,
+        source_part: &str,
+        selected: Vec<u8>,
+    ) -> Result<Self> {
+        validate_fragment_block_content(&selected)?;
+        let mut candidate = document.clone_for_staging();
+        candidate.prepare_staged_package()?;
+        candidate.project_fragment_part_content(source_part, selected)?;
+        let mut output = std::io::Cursor::new(Vec::new());
+        candidate.package.write_to(&mut output)?;
+        Ok(Self {
+            package: output.into_inner(),
+            include_final_section_properties: false,
+        })
+    }
+
+    pub(crate) fn import_content_staged(
+        &self,
+        candidate: &mut Document,
+        destination_part: &str,
+        policy: FragmentConflictPolicy,
+    ) -> Result<Vec<u8>> {
+        let xml = crate::field::import_document_fragment_content(
+            candidate,
+            &self.package,
+            self.include_final_section_properties,
+            policy,
+            destination_part,
+        )?;
+        package_authoritative_body_fragment(
+            &xml,
+            self.include_final_section_properties,
+            &BTreeMap::new(),
+        )
+    }
+
+    pub(crate) fn contains_section_properties(&self) -> bool {
+        self.include_final_section_properties
+    }
+
+    /// Capture one non-empty, half-open range of direct story items.
     ///
     /// `start` is included and `end` is excluded. Section properties can be
     /// included only when `end` is the main body's final boundary.
@@ -972,24 +1140,33 @@ impl DocumentFragment {
     ) -> Result<Self> {
         let mut candidate = document.clone_for_staging();
         candidate.prepare_staged_package()?;
-        if start.story != end.story
-            || start.story.kind != StoryKind::Body
-            || start.story.part_name != candidate.doc_part_name
-        {
+        if start.story != end.story {
             return Err(Error::Other(
-                "document fragment ranges must share the checked main-body owner".to_owned(),
+                "document fragment ranges must share one checked story owner".to_owned(),
             ));
         }
-        let (source, owner) = candidate.story_source_and_owner(&start.story)?;
+        let (source, owner) = candidate.fragment_story_source_and_owner(&start.story)?;
         let source_xml = source.xml.into_owned();
-        let (_, start_index, item_count) = validated_content_boundary(&source_xml, &owner, start)?;
-        let (_, end_index, _) = validated_content_boundary(&source_xml, &owner, end)?;
+        let (owner, _, start_index, item_count) =
+            fragment_content_boundary(&source_xml, &owner, start)?;
+        let (_, checked_owner) = candidate.fragment_story_source_and_owner(&end.story)?;
+        let (end_owner, _, end_index, _) =
+            fragment_content_boundary(&source_xml, &checked_owner, end)?;
+        if owner.full != end_owner.full {
+            return Err(Error::Other(
+                "document fragment range splits block ownership".to_owned(),
+            ));
+        }
         if start_index >= end_index {
             return Err(Error::Other(
                 "document fragment range must contain at least one direct body item".to_owned(),
             ));
         }
-        if include_final_section_properties && end_index != item_count {
+        if include_final_section_properties
+            && (start.story.kind != StoryKind::Body
+                || start.index_path.len() != 1
+                || end_index != item_count)
+        {
             return Err(Error::Other(
                 "section-inclusive document fragments must end at the main-body boundary"
                     .to_owned(),
@@ -1000,6 +1177,11 @@ impl DocumentFragment {
             .first()
             .map(|item| item.full.start)
             .ok_or_else(|| Error::Other("document fragment source body is empty".to_owned()))?;
+        for item in &items[start_index..end_index] {
+            let scope = story_namespace_scope_at(&source_xml, item.full.start)?;
+            let xml = close_content_fragment_namespaces(&source_xml[item.full.clone()], &scope)?;
+            validate_fragment_block_item(&xml)?;
+        }
         let content_end = story_owner_content_end(&source_xml, &owner)?;
         let selected_start = items[start_index].full.start;
         let selected_end = if end_index == item_count {
@@ -1007,12 +1189,28 @@ impl DocumentFragment {
         } else {
             items[end_index].full.start
         };
-        let selected = source_xml[selected_start..selected_end].to_vec();
-        let mut updated = source_xml;
-        updated.splice(content_start..content_end, selected);
-        candidate
-            .package
-            .set_part(&candidate.doc_part_name, updated);
+        if start.story.kind == StoryKind::Body
+            && start.story.part_name == candidate.doc_part_name
+            && start.index_path.len() == 1
+            && (end.is_end || end.index_path.len() == 1)
+        {
+            let selected = source_xml[selected_start..selected_end].to_vec();
+            let mut updated = source_xml;
+            updated.splice(content_start..content_end, selected);
+            candidate
+                .package
+                .set_part(&candidate.doc_part_name, updated);
+        } else {
+            let mut selected = Vec::new();
+            for item in &items[start_index..end_index] {
+                let scope = story_namespace_scope_at(&source_xml, item.full.start)?;
+                selected.extend(close_content_fragment_namespaces(
+                    &source_xml[item.full.clone()],
+                    &scope,
+                )?);
+            }
+            candidate.project_fragment_part_content(&source.part_name, selected)?;
+        }
         let mut output = std::io::Cursor::new(Vec::new());
         candidate.package.write_to(&mut output)?;
         Ok(Self {
@@ -3185,6 +3383,46 @@ impl Section<'_> {
         self.inner.endnote_pr = Some(Box::new(properties));
     }
 
+    /// Set a checked section override while retaining unmodelled note-property children.
+    pub fn set_note_policy(&mut self, family: NoteFamily, policy: NotePolicy) -> Result<()> {
+        let checked = policy.properties(family)?;
+        let slot = match family {
+            NoteFamily::Footnote => &mut self.inner.footnote_pr,
+            NoteFamily::Endnote => &mut self.inner.endnote_pr,
+        };
+        let properties = slot.get_or_insert_with(Box::default);
+        properties.pos = checked.pos;
+        properties.num_fmt = checked.num_fmt;
+        properties.num_start = checked.num_start;
+        properties.num_restart = checked.num_restart;
+        Ok(())
+    }
+
+    /// Remove an explicit section note override so document defaults apply.
+    pub fn remove_note_policy(&mut self, family: NoteFamily) -> Option<CT_NoteProperties> {
+        let slot = match family {
+            NoteFamily::Footnote => &mut self.inner.footnote_pr,
+            NoteFamily::Endnote => &mut self.inner.endnote_pr,
+        };
+        let properties = slot.as_mut()?;
+        if properties.pos.is_none()
+            && properties.num_fmt.is_none()
+            && properties.num_start.is_none()
+            && properties.num_restart.is_none()
+        {
+            return None;
+        }
+        let removed = (**properties).clone();
+        properties.pos = None;
+        properties.num_fmt = None;
+        properties.num_start = None;
+        properties.num_restart = None;
+        if properties.special_references.is_empty() && properties.extra_xml.is_empty() {
+            *slot = None;
+        }
+        Some(removed)
+    }
+
     /// Return the printer trays feeding the first page and every later page.
     pub fn paper_source(&self) -> Option<(Option<u32>, Option<u32>)> {
         SectionRef {
@@ -3902,6 +4140,7 @@ impl DocumentIdentifiers {
             rel_types::SETTINGS => "rdocxDeferredSettings",
             rel_types::FOOTNOTES => "rdocxDeferredFootnotes",
             rel_types::ENDNOTES => "rdocxDeferredEndnotes",
+            rel_types::GLOSSARY_DOCUMENT => "rdocxDeferredGlossary",
             rel_types::COMMENTS => "rdocxDeferredComments",
             crate::comments::COMMENTS_EXTENDED_REL_TYPE => "rdocxDeferredCommentsExtended",
             _ => {
@@ -4177,6 +4416,11 @@ impl DocumentIdentifiers {
                 Error::Other("rich mail merge part-name range is exhausted".to_owned())
             })?;
         }
+    }
+
+    pub(crate) fn preserve_fragment_part(&mut self, part_name: &str) {
+        self.preserved_part_names
+            .insert(part_name_identity(part_name));
     }
 
     pub(crate) fn observe_package_graph(&mut self, package: &OpcPackage) -> Result<()> {
@@ -6102,6 +6346,47 @@ fn direct_story_content_items(xml: &[u8], owner: &StoryOwnerSpan) -> Result<Vec<
     Ok(items)
 }
 
+pub(crate) fn validate_fragment_block_content(content: &[u8]) -> Result<()> {
+    let mut xml = format!(
+        r#"<w:document xmlns:w="{}"><w:body>"#,
+        rdocx_oxml::namespace::W_NS
+    )
+    .into_bytes();
+    xml.extend_from_slice(content);
+    xml.extend_from_slice(b"</w:body></w:document>");
+    let owner = scan_story_owners(&xml, StoryKind::Body)?
+        .into_iter()
+        .find(|owner| owner.kind == StoryKind::Body)
+        .ok_or_else(|| Error::Other("fragment content has no body owner".to_owned()))?;
+    for item in direct_story_content_items(&xml, &owner)? {
+        let scope = story_namespace_scope_at(&xml, item.full.start)?;
+        let item_xml = close_content_fragment_namespaces(&xml[item.full], &scope)?;
+        validate_fragment_block_item(&item_xml)?;
+    }
+    Ok(())
+}
+
+fn validate_fragment_block_item(xml: &[u8]) -> Result<()> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    if let (namespace, Event::Start(element) | Event::Empty(element)) = reader
+        .read_resolved_event_into(&mut buffer)
+        .map_err(|error| Error::Other(format!("invalid document fragment item: {error}")))?
+        && word_element(&namespace)
+    {
+        match element.local_name().as_ref() {
+            b"sdt" => validate_serialized_block_content_control(xml)?,
+            b"r" | b"hyperlink" | b"fldSimple" | b"drawing" | b"pict" => {
+                return Err(Error::Other(
+                    "document fragment boundaries admit block content only".to_owned(),
+                ));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 fn story_owner_content_end(xml: &[u8], owner: &StoryOwnerSpan) -> Result<usize> {
     if owner.kind == StoryKind::Body {
         for item in scan_story_items(xml, owner)? {
@@ -6599,6 +6884,101 @@ fn validated_direct_content_item(
     Ok(item)
 }
 
+// Nested paragraph paths use the enclosing block control's content as the
+// effective block owner while keeping the underlying part's relationship scope.
+fn fragment_content_boundary(
+    xml: &[u8],
+    owner: &StoryOwnerSpan,
+    location: &ContentLocation,
+) -> Result<(StoryOwnerSpan, usize, usize, usize)> {
+    if location.is_end || location.index_path.len() == 1 {
+        let (boundary, index, count) = validated_content_boundary(xml, owner, location)?;
+        return Ok((owner.clone(), boundary, index, count));
+    }
+    let [control_index, paragraph_index] = location.index_path.as_slice() else {
+        return Err(StoryError::InvalidPath {
+            path: location.index_path.clone(),
+        }
+        .into());
+    };
+    if location.item_kind != StoryItemKind::Paragraph {
+        return Err(StoryError::InvalidPath {
+            path: location.index_path.clone(),
+        }
+        .into());
+    }
+    let items = scan_story_items(xml, owner)?;
+    let control = items.get(*control_index).ok_or(StoryError::OutOfBounds {
+        index: *control_index,
+        len: items.len(),
+    })?;
+    if control.kind != StoryItemKind::ContentControl
+        || control.sdt_context != Some(StorySdtContext::Block)
+    {
+        return Err(StoryError::InvalidPath {
+            path: location.index_path.clone(),
+        }
+        .into());
+    }
+    let paragraphs = scan_story_control_paragraphs(xml, control)?;
+    let paragraph = paragraphs
+        .get(*paragraph_index)
+        .ok_or(StoryError::OutOfBounds {
+            index: *paragraph_index,
+            len: paragraphs.len(),
+        })?;
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut stack = Vec::new();
+    let mut enclosing = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("fragment control owner scan failed: {error}")))?
+        {
+            Event::Start(element) => {
+                let (namespace, local) = reader.resolver().resolve_element(element.name());
+                stack.push((
+                    word_element(&namespace) && local.as_ref() == b"sdtContent",
+                    before,
+                ));
+            }
+            Event::End(_) => {
+                if let Some((true, start)) = stack.pop() {
+                    let end = reader.buffer_position() as usize;
+                    if start >= control.full.start
+                        && end <= control.full.end
+                        && start < paragraph.start
+                        && end > paragraph.end
+                    {
+                        enclosing.push(start..end);
+                    }
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    let full = enclosing
+        .into_iter()
+        .min_by_key(|span| span.end - span.start)
+        .ok_or_else(|| Error::Other("fragment paragraph has no block control owner".to_owned()))?;
+    let effective = StoryOwnerSpan {
+        full,
+        ..owner.clone()
+    };
+    let direct = direct_story_content_items(xml, &effective)?;
+    let index = direct
+        .iter()
+        .position(|item| item.kind == StoryItemKind::Paragraph && item.full == *paragraph)
+        .ok_or_else(|| {
+            Error::Other("fragment paragraph is not a direct block control child".to_owned())
+        })?;
+    Ok((effective, paragraph.start, index, direct.len()))
+}
+
 fn validated_content_boundary(
     xml: &[u8],
     owner: &StoryOwnerSpan,
@@ -6940,7 +7320,7 @@ fn serialized_note_fragment(
         StoryKind::Endnote => notes.to_xml_endnotes()?,
         _ => return Err(Error::Other("invalid note story kind".to_owned())),
     };
-    let owner = scan_story_owners(&serialized, kind)?
+    let owner = scan_story_owners_with_special(&serialized, kind, true)?
         .into_iter()
         .next()
         .ok_or_else(|| Error::Other("serialized note has no story owner".to_owned()))?;
@@ -7660,6 +8040,14 @@ fn accepted_story_text_visible(stack: &[XmlElementFrame]) -> bool {
 }
 
 fn scan_story_owners(xml: &[u8], root_kind: StoryKind) -> Result<Vec<StoryOwnerSpan>> {
+    scan_story_owners_with_special(xml, root_kind, false)
+}
+
+fn scan_story_owners_with_special(
+    xml: &[u8],
+    root_kind: StoryKind,
+    include_special: bool,
+) -> Result<Vec<StoryOwnerSpan>> {
     let mut reader = NsReader::from_reader(xml);
     reader.config_mut().trim_text(false);
     let mut stack: Vec<XmlElementFrame> = Vec::new();
@@ -7697,6 +8085,7 @@ fn scan_story_owners(xml: &[u8], root_kind: StoryKind) -> Result<Vec<StoryOwnerS
                     .then(|| owner_kind(&local_name))
                     .flatten();
                 if matches!(candidate, Some(StoryKind::Footnote | StoryKind::Endnote))
+                    && !include_special
                     && !editable_note_owner(&reader, &element)?
                 {
                     candidate = None;
@@ -7745,6 +8134,7 @@ fn scan_story_owners(xml: &[u8], root_kind: StoryKind) -> Result<Vec<StoryOwnerS
                             || matches!(kind, StoryKind::TableCell | StoryKind::TextBox)
                     })
                     && (!matches!(kind, StoryKind::Footnote | StoryKind::Endnote)
+                        || include_special
                         || editable_note_owner(&reader, &element)?)
                 {
                     owners.push(StoryOwnerSpan {
@@ -7967,6 +8357,56 @@ fn typed_complex_field_candidate_is_admitted(
     Ok(sources.iter().any(|source| source == &isolated))
 }
 
+fn scan_story_control_paragraphs(xml: &[u8], control: &StoryItemSpan) -> Result<Vec<Range<usize>>> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut stack = Vec::<(bool, Vec<u8>, usize)>::new();
+    let mut paragraphs = Vec::new();
+    let mut buffer = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("control paragraph scan failed: {error}")))?;
+        let is_word = word_element(&namespace);
+        drop(namespace);
+        let after = reader.buffer_position() as usize;
+        match event {
+            Event::Start(element) => {
+                let name = element.local_name().as_ref().to_vec();
+                let direct_content = stack
+                    .last()
+                    .is_some_and(|(word, parent, _)| *word && parent.as_slice() == b"sdtContent");
+                let owning_control = stack
+                    .iter()
+                    .rev()
+                    .find(|(word, local, _)| *word && local.as_slice() == b"sdt");
+                if before >= control.full.start
+                    && before < control.full.end
+                    && is_word
+                    && name == b"p"
+                    && direct_content
+                    && owning_control.is_some_and(|(_, _, start)| *start == control.full.start)
+                {
+                    paragraphs.push(before..story_element_end(xml, before)?);
+                }
+                stack.push((is_word, name, before));
+            }
+            Event::Empty(_) => {}
+            Event::End(_) => {
+                stack.pop();
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        if after >= control.full.end {
+            break;
+        }
+        buffer.clear();
+    }
+    Ok(paragraphs)
+}
+
 fn scan_story_items(xml: &[u8], owner: &StoryOwnerSpan) -> Result<Vec<StoryItemSpan>> {
     let mut reader = NsReader::from_reader(xml);
     reader.config_mut().trim_text(false);
@@ -7999,7 +8439,11 @@ fn scan_story_items(xml: &[u8], owner: &StoryOwnerSpan) -> Result<Vec<StoryItemS
             Event::Start(element) => {
                 let is_word = is_word_namespace;
                 let local_name = element.local_name().as_ref().to_vec();
-                let sdt_context = story_element_sdt_context(&stack, namespace_kind, &local_name);
+                let sdt_context = if stack.is_empty() && is_word && local_name == b"sdtContent" {
+                    Some(StorySdtContext::Block)
+                } else {
+                    story_element_sdt_context(&stack, namespace_kind, &local_name)
+                };
                 let depth = stack.len();
                 let in_nested_owner = stack.iter().skip(1).any(|frame| {
                     frame.is_word && matches!(frame.local_name.as_slice(), b"tc" | b"txbxContent")
@@ -13877,7 +14321,7 @@ impl Document {
         Ok(())
     }
 
-    fn reserve_document_part_bundle(
+    pub(crate) fn reserve_document_part_bundle(
         &mut self,
         existing: Option<&str>,
         preferred: &str,
@@ -14003,7 +14447,7 @@ impl Document {
         Ok(id)
     }
 
-    fn add_relative_internal_relationship_checked(
+    pub(crate) fn add_relative_internal_relationship_checked(
         &mut self,
         owner: &str,
         rel_type: &str,
@@ -14035,7 +14479,7 @@ impl Document {
         self.add_relative_internal_relationship_checked(owner, rel_types::IMAGE, &part_name)
     }
 
-    fn add_external_relationship_checked(
+    pub(crate) fn add_external_relationship_checked(
         &mut self,
         owner: &str,
         rel_type: &str,
@@ -14421,6 +14865,141 @@ impl Document {
         Ok((source, owner))
     }
 
+    /// Bind an existing control to a snapshot-checked placeholder entry.
+    pub fn bind_building_block_placeholder(
+        &mut self,
+        control: &ContentLocation,
+        entry: &crate::BuildingBlockInfo,
+    ) -> Result<()> {
+        self.checked_building_block(entry)?;
+        if entry.block.gallery.as_deref() != Some("placeholder") {
+            return Err(Error::Other(
+                "placeholder binding requires the placeholder gallery".to_owned(),
+            ));
+        }
+        if control.item_kind != StoryItemKind::ContentControl
+            || control.index_path.len() != 1
+            || control.is_end
+        {
+            return Err(Error::Other(
+                "placeholder binding requires an existing content control location".to_owned(),
+            ));
+        }
+        let mut candidate = self.clone_for_staging();
+        candidate.prepare_staged_package()?;
+        let (source, owner) = candidate.fragment_story_source_and_owner(&control.story)?;
+        let part = source.part_name.clone();
+        let mut xml = source.xml.into_owned();
+        let item = scan_story_items(&xml, &owner)?
+            .get(control.index_path[0])
+            .cloned()
+            .ok_or_else(|| Error::Other("stale content control index".to_owned()))?;
+        if item.kind != StoryItemKind::ContentControl {
+            return Err(Error::Other(
+                "content control location changed kind".to_owned(),
+            ));
+        }
+        let scope = story_namespace_scope_at(&xml, item.full.start)?;
+        let raw = close_content_fragment_namespaces(&xml[item.full.clone()], &scope)?;
+        let updated = crate::building_block::bind_placeholder_xml(&raw, entry)?;
+        xml.splice(item.full, updated);
+        set_story_source_xml(&mut candidate, &part, xml)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
+    pub(crate) fn preserve_glossary_drawing_ids_staged(&mut self) -> Result<()> {
+        if let Some(glossary) = &self.glossary {
+            let ids = drawing_ids_in_xml(&glossary.to_xml()?)?;
+            self.identifiers.drawing_ids.extend(ids.iter().copied());
+            self.identifiers.preserved_drawing_ids.extend(ids);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn project_fragment_part_content(
+        &mut self,
+        source_part: &str,
+        mut selected: Vec<u8>,
+    ) -> Result<()> {
+        if source_part != self.doc_part_name {
+            let source_rels = self
+                .package
+                .get_part_rels(source_part)
+                .cloned()
+                .unwrap_or_default();
+            let mut relationship_map = BTreeMap::new();
+            for relationship_id in crate::field::relationship_ids_in_xml(&selected)? {
+                let relationship = source_rels.get_by_id(&relationship_id).ok_or_else(|| {
+                        Error::Other(format!(
+                            "fragment source relationship {relationship_id} is missing from {source_part}"
+                        ))
+                    })?;
+                let destination_part = self.doc_part_name.clone();
+                let new_id = if relationship_is_internal(relationship) {
+                    let target_part =
+                        OpcPackage::resolve_rel_target(source_part, &relationship.target);
+                    self.add_internal_relationship_checked(
+                        &destination_part,
+                        &relationship.rel_type,
+                        &relative_target(&destination_part, &target_part),
+                    )?
+                } else {
+                    self.add_external_relationship_checked(
+                        &destination_part,
+                        &relationship.rel_type,
+                        &relationship.target,
+                    )?
+                };
+                relationship_map.insert(relationship_id, new_id);
+            }
+            selected = crate::field::patch_relationship_ids(&selected, &relationship_map)?;
+        }
+        let main_xml = self
+            .package
+            .get_part(&self.doc_part_name)
+            .ok_or_else(|| Error::Other("document fragment main part is missing".to_owned()))?
+            .to_vec();
+        let main_owner = scan_story_owners(&main_xml, StoryKind::Body)?
+            .into_iter()
+            .find(|owner| owner.kind == StoryKind::Body)
+            .ok_or_else(|| Error::Other("document fragment main body is missing".to_owned()))?;
+        let main_items = direct_story_content_items(&main_xml, &main_owner)?;
+        let main_end = story_owner_content_end(&main_xml, &main_owner)?;
+        let main_start = main_items.first().map_or(main_end, |item| item.full.start);
+        let mut updated = main_xml;
+        updated.splice(main_start..main_end, selected);
+        self.package.set_part(&self.doc_part_name, updated);
+        Ok(())
+    }
+
+    fn fragment_story_source_and_owner<'a>(
+        &'a self,
+        story: &StoryId,
+    ) -> Result<(StorySource<'a>, StoryOwnerSpan)> {
+        let (canonical, _) = self.story_source_and_owner(story)?;
+        let xml = self.package.get_part(&canonical.part_name).ok_or_else(|| {
+            Error::Other(format!(
+                "document fragment story part {} is missing",
+                canonical.part_name
+            ))
+        })?;
+        let owner = scan_story_owners(xml, canonical.root_kind)?
+            .into_iter()
+            .find(|owner| owner.kind == story.kind && owner.owner_index == story.owner_index)
+            .ok_or_else(|| StoryError::OwnerNotFound {
+                story: story.clone(),
+            })?;
+        Ok((
+            StorySource {
+                xml: Cow::Borrowed(xml),
+                ..canonical
+            },
+            owner,
+        ))
+    }
+
     pub(crate) fn story_paragraph_mut(&mut self, location: &ContentLocation) -> Result<&mut CT_P> {
         let (part_name, paragraph_slot, ordinal, cell_route) = {
             let (source, owner) = self.story_source_and_owner(&location.story)?;
@@ -14539,27 +15118,78 @@ impl Document {
         }
     }
 
-    pub(crate) fn anchor_related_story_comment(
+    pub(crate) fn anchor_story_range(
         &mut self,
-        start: &ContentLocation,
-        start_run: usize,
-        end: &ContentLocation,
-        end_run: usize,
-        id: i32,
+        range: &crate::comments::StoryRunRange,
+        anchor: RangeAnchor<'_>,
+        label: &str,
     ) -> Result<()> {
-        if !matches!(
-            start.story.kind,
-            StoryKind::Header | StoryKind::Footer | StoryKind::Footnote | StoryKind::Endnote
-        ) || start.story != end.story
-        {
-            return Err(Error::Other(
-                "comment range must stay within one header, footer, or note story".to_owned(),
-            ));
+        let start = &range.start.location;
+        let end = &range.end.location;
+        let start_run = range.start.run_index;
+        let end_run = range.end.run_index;
+        if start.story != end.story {
+            return Err(Error::Other(format!(
+                "{label} range endpoints must be ordered in one story owner"
+            )));
         }
-        let (source, start_item) = self.story_item_source(start)?;
+        let nested_body_control = [start, end].iter().any(|location| {
+            location.index_path.len() == 2
+                && self
+                    .story_item_source(&ContentLocation::new(
+                        location.story.clone(),
+                        StoryItemKind::ContentControl,
+                        vec![location.index_path[0]],
+                    ))
+                    .is_ok_and(|(_, control)| !control.direct_owner_child)
+        });
+        if start.story.kind() == StoryKind::Body
+            && (start.index_path.len() == 2 || end.index_path.len() == 2)
+            && !nested_body_control
+        {
+            if start.index_path > end.index_path {
+                return Err(Error::Other(format!(
+                    "{label} range endpoints must be ordered in one story owner"
+                )));
+            }
+            let mut first = self.story_paragraph_mut(start)?.clone();
+            let mut last = if start == end {
+                first.clone()
+            } else {
+                self.story_paragraph_mut(end)?.clone()
+            };
+            if start == end {
+                first
+                    .anchor_accepted_range(Some(start_run), Some(end_run), anchor)
+                    .map_err(|error| {
+                        Error::Other(format!("{label} range cannot be anchored: {error}"))
+                    })?;
+            } else {
+                first
+                    .anchor_accepted_range(Some(start_run), None, anchor)
+                    .map_err(|error| {
+                        Error::Other(format!("{label} range cannot be anchored: {error}"))
+                    })?;
+                last.anchor_accepted_range(None, Some(end_run), anchor)
+                    .map_err(|error| {
+                        Error::Other(format!("{label} range cannot be anchored: {error}"))
+                    })?;
+            }
+            *self.story_paragraph_mut(start)? = first;
+            if start != end {
+                *self.story_paragraph_mut(end)? = last;
+            }
+            return Ok(());
+        }
+        let (source, start_item) = self.story_range_paragraph_source(start)?;
         let part_name = source.part_name.clone();
         let source_xml = source.xml.into_owned();
-        let (_, end_item) = self.story_item_source(end)?;
+        let (_, end_item) = self.story_range_paragraph_source(end)?;
+        if start_item.full.start > end_item.full.start {
+            return Err(Error::Other(format!(
+                "{label} range endpoints must be ordered in one story owner"
+            )));
+        }
         let read_paragraph = |item: &StoryItemSpan| -> Result<CT_P> {
             if item.kind != StoryItemKind::Paragraph {
                 return Err(Error::Other(
@@ -14576,34 +15206,35 @@ impl Document {
         } else {
             read_paragraph(&end_item)?
         };
-        for (label, index, paragraph) in [("start", start_run, &first), ("end", end_run, &last)] {
+        for (boundary, index, paragraph) in [("start", start_run, &first), ("end", end_run, &last)]
+        {
             let count = paragraph.accepted_run_paths().len();
             if index > count {
                 return Err(Error::Other(format!(
-                    "comment range {label} run index {index} exceeds paragraph run count {count}"
+                    "{label} range {boundary} run index {index} exceeds paragraph run count {count}"
                 )));
             }
         }
         if start_item.full == end_item.full {
             if start_run > end_run {
-                return Err(Error::Other(
-                    "comment story range start must not follow its end".to_owned(),
-                ));
+                return Err(Error::Other(format!(
+                    "{label} range start must not follow its end"
+                )));
             }
             first
-                .anchor_accepted_range(Some(start_run), Some(end_run), RangeAnchor::Comment(id))
+                .anchor_accepted_range(Some(start_run), Some(end_run), anchor)
                 .map_err(|error| {
-                    Error::Other(format!("comment range cannot be anchored: {error}"))
+                    Error::Other(format!("{label} range cannot be anchored: {error}"))
                 })?;
         } else {
             first
-                .anchor_accepted_range(Some(start_run), None, RangeAnchor::Comment(id))
+                .anchor_accepted_range(Some(start_run), None, anchor)
                 .map_err(|error| {
-                    Error::Other(format!("comment range cannot be anchored: {error}"))
+                    Error::Other(format!("{label} range cannot be anchored: {error}"))
                 })?;
-            last.anchor_accepted_range(None, Some(end_run), RangeAnchor::Comment(id))
+            last.anchor_accepted_range(None, Some(end_run), anchor)
                 .map_err(|error| {
-                    Error::Other(format!("comment range cannot be anchored: {error}"))
+                    Error::Other(format!("{label} range cannot be anchored: {error}"))
                 })?;
         }
         let same_paragraph = start_item.full == end_item.full;
@@ -14618,6 +15249,186 @@ impl Document {
             let xml = serialize_content_fragment(BodyContent::Paragraph(paragraph))?;
             let xml = close_content_fragment_namespaces(&xml, &scope)?;
             updated.splice(span, xml);
+        }
+        set_story_source_xml(self, &part_name, updated)
+    }
+
+    pub(crate) fn remove_story_range_markers(
+        &mut self,
+        entry: &crate::comments::StoryRangeRef,
+        move_comment_reference: bool,
+    ) -> Result<()> {
+        use crate::comments::StoryRangeKind;
+        let (source, owner) = self.story_source_and_owner(entry.range().start.location.story())?;
+        let part_name = source.part_name.clone();
+        let xml = source.xml.as_ref();
+        let mut paragraphs = Vec::new();
+        for item in scan_story_items(xml, &owner)? {
+            match item.kind {
+                StoryItemKind::Paragraph => paragraphs.push(item.full),
+                StoryItemKind::ContentControl => {
+                    paragraphs.extend(scan_story_control_paragraphs(xml, &item)?);
+                }
+                _ => {}
+            }
+        }
+        let (start_tag, end_tag, identity) = match entry.kind() {
+            StoryRangeKind::Bookmark { id, .. } => (
+                b"bookmarkStart".as_slice(),
+                b"bookmarkEnd".as_slice(),
+                id.to_string(),
+            ),
+            StoryRangeKind::Comment { id } => (
+                b"commentRangeStart".as_slice(),
+                b"commentRangeEnd".as_slice(),
+                id.to_string(),
+            ),
+            StoryRangeKind::Permission { id, .. } => (
+                b"permStart".as_slice(),
+                b"permEnd".as_slice(),
+                id.to_string(),
+            ),
+            StoryRangeKind::Proofing { kind } => {
+                (b"proofErr".as_slice(), b"proofErr".as_slice(), kind.clone())
+            }
+        };
+        let mut reader = NsReader::from_reader(xml);
+        reader.config_mut().trim_text(false);
+        let mut ranges = Vec::new();
+        let mut ordinal = 0usize;
+        let mut stack = Vec::<(bool, Vec<u8>)>::new();
+        let mut buffer = Vec::new();
+        loop {
+            let before = reader.buffer_position() as usize;
+            let (namespace, event) = reader
+                .read_resolved_event_into(&mut buffer)
+                .map_err(|error| Error::Other(format!("range removal scan failed: {error}")))?;
+            let is_word = word_element(&namespace);
+            drop(namespace);
+            let after = reader.buffer_position() as usize;
+            let hidden = stack.iter().any(|(word, name)| {
+                *word
+                    && matches!(
+                        name.as_slice(),
+                        b"del"
+                            | b"moveFrom"
+                            | b"txbxContent"
+                            | b"smartTag"
+                            | b"customXml"
+                            | b"fldSimple"
+                    )
+            });
+            if let Event::End(_) = &event {
+                stack.pop();
+            }
+            if let Event::Start(element) = &event {
+                stack.push((is_word, element.local_name().as_ref().to_vec()));
+            }
+            let element = match &event {
+                Event::Start(element) | Event::Empty(element)
+                    if paragraphs
+                        .iter()
+                        .any(|paragraph| paragraph.contains(&before))
+                        && !hidden
+                        && is_word
+                        && matches!(
+                            element.local_name().as_ref(),
+                            b"bookmarkStart"
+                                | b"bookmarkEnd"
+                                | b"commentRangeStart"
+                                | b"commentRangeEnd"
+                                | b"permStart"
+                                | b"permEnd"
+                                | b"proofErr"
+                                | b"commentReference"
+                        ) =>
+                {
+                    element
+                }
+                Event::Eof => break,
+                _ => {
+                    buffer.clear();
+                    continue;
+                }
+            };
+            let mut id_value = None;
+            let mut type_value = None;
+            for attribute in element.attributes() {
+                let attribute = attribute.map_err(|error| Error::Other(error.to_string()))?;
+                let (namespace, local) = reader.resolver().resolve_attribute(attribute.key);
+                if word_element(&namespace) && matches!(local.as_ref(), b"id" | b"type") {
+                    let value = attribute
+                        .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                        .map_err(|error| Error::Other(error.to_string()))?;
+                    if local.as_ref() == b"id" {
+                        id_value = Some(value.into_owned());
+                    } else {
+                        type_value = Some(value.into_owned());
+                    }
+                }
+            }
+            let name = element.local_name();
+            let name = name.as_ref();
+            let paired = matches!(
+                name,
+                b"bookmarkStart"
+                    | b"bookmarkEnd"
+                    | b"commentRangeStart"
+                    | b"commentRangeEnd"
+                    | b"permStart"
+                    | b"permEnd"
+            ) || name == b"proofErr"
+                && matches!(
+                    type_value.as_deref(),
+                    Some("spellStart" | "spellEnd" | "gramStart" | "gramEnd")
+                );
+            let this_ordinal = paired.then(|| {
+                let current = ordinal;
+                ordinal += 1;
+                current
+            });
+            let matched = if name == b"commentReference" {
+                move_comment_reference
+                    && matches!(entry.kind(), StoryRangeKind::Comment { .. })
+                    && id_value.as_deref() == Some(identity.as_str())
+            } else {
+                (name == start_tag || name == end_tag)
+                    && this_ordinal.is_some_and(|index| {
+                        index == entry.start_ordinal || index == entry.end_ordinal
+                    })
+                    && if matches!(entry.kind(), StoryRangeKind::Proofing { .. }) {
+                        type_value.as_deref() == Some(format!("{identity}Start").as_str())
+                            || type_value.as_deref() == Some(format!("{identity}End").as_str())
+                    } else {
+                        id_value.as_deref() == Some(identity.as_str())
+                    }
+            };
+            if matched {
+                let end = if matches!(event, Event::Empty(_)) {
+                    after
+                } else {
+                    story_element_end(xml, before)?
+                };
+                ranges.push(before..end);
+            }
+            buffer.clear();
+        }
+        let expected =
+            if move_comment_reference && matches!(entry.kind(), StoryRangeKind::Comment { .. }) {
+                3
+            } else {
+                2
+            };
+        if ranges.len() != expected {
+            return Err(Error::Other(format!(
+                "range marker identity {} has {} selected elements, expected {expected}",
+                identity,
+                ranges.len()
+            )));
+        }
+        let mut updated = xml.to_vec();
+        for range in ranges.into_iter().rev() {
+            updated.splice(range, []);
         }
         set_story_source_xml(self, &part_name, updated)
     }
@@ -14649,6 +15460,56 @@ impl Document {
         Ok((source, item))
     }
 
+    fn story_range_paragraph_source<'a>(
+        &'a self,
+        location: &ContentLocation,
+    ) -> Result<(StorySource<'a>, StoryItemSpan)> {
+        if location.index_path.len() == 1 {
+            return self.story_item_source(location);
+        }
+        if location.index_path.len() != 2 || location.item_kind != StoryItemKind::Paragraph {
+            return Err(StoryError::InvalidPath {
+                path: location.index_path.clone(),
+            }
+            .into());
+        }
+        let (source, owner) = self.story_source_and_owner(&location.story)?;
+        let items = scan_story_items(source.xml.as_ref(), &owner)?;
+        let control_index = location.index_path[0];
+        let control = items.get(control_index).ok_or(StoryError::OutOfBounds {
+            index: control_index,
+            len: items.len(),
+        })?;
+        if control.kind != StoryItemKind::ContentControl {
+            return Err(StoryError::KindMismatch {
+                expected: StoryItemKind::ContentControl,
+                actual: control.kind,
+            }
+            .into());
+        }
+        let paragraphs = scan_story_control_paragraphs(source.xml.as_ref(), control)?;
+        let paragraph_index = location.index_path[1];
+        let full = paragraphs
+            .get(paragraph_index)
+            .cloned()
+            .ok_or(StoryError::OutOfBounds {
+                index: paragraph_index,
+                len: paragraphs.len(),
+            })?;
+        Ok((
+            source,
+            StoryItemSpan {
+                kind: StoryItemKind::Paragraph,
+                scan: full.clone(),
+                full,
+                direct_owner_child: false,
+                complex_field: false,
+                complex_ancestors: Vec::new(),
+                sdt_context: None,
+            },
+        ))
+    }
+
     /// Traverse one story's supported content without constructing a second
     /// document tree.
     pub fn story_items<'a>(&'a self, story: &StoryId) -> Result<Vec<StoryItemRef<'a>>> {
@@ -14666,6 +15527,43 @@ impl Document {
                     is_end: false,
                 },
             })
+            .collect())
+    }
+
+    pub(crate) fn story_range_paragraphs(&self) -> Result<Vec<(ContentLocation, Vec<u8>)>> {
+        let mut paragraphs = Vec::new();
+        for (story_index, story) in self.stories()?.into_iter().enumerate() {
+            let (source, owner) = self.story_source_and_owner(&story)?;
+            let source_xml = source.xml.as_ref();
+            for (index, item) in scan_story_items(source_xml, &owner)?.iter().enumerate() {
+                let spans = match item.kind {
+                    StoryItemKind::Paragraph => vec![(vec![index], item.full.clone())],
+                    StoryItemKind::ContentControl => {
+                        scan_story_control_paragraphs(source_xml, item)?
+                            .into_iter()
+                            .enumerate()
+                            .map(|(paragraph_index, span)| (vec![index, paragraph_index], span))
+                            .collect()
+                    }
+                    _ => continue,
+                };
+                for (path, span) in spans {
+                    let scope = story_namespace_scope_at(source_xml, span.start)?;
+                    let order = span.start;
+                    let xml = close_content_fragment_namespaces(&source_xml[span], &scope)?;
+                    paragraphs.push((
+                        story_index,
+                        order,
+                        ContentLocation::new(story.clone(), StoryItemKind::Paragraph, path),
+                        xml,
+                    ));
+                }
+            }
+        }
+        paragraphs.sort_by_key(|(story_index, offset, _, _)| (*story_index, *offset));
+        Ok(paragraphs
+            .into_iter()
+            .map(|(_, _, location, xml)| (location, xml))
             .collect())
     }
 
@@ -15829,11 +16727,11 @@ impl Document {
         })
     }
 
-    /// Import an owned cross-document main-body fragment at a checked boundary.
+    /// Import an owned cross-document fragment at a checked story boundary.
     ///
     /// The complete supported dependency closure is allocated on a staged
-    /// candidate. Unsupported or external relationships return an error before
-    /// the destination changes.
+    /// candidate. Unreconcilable dependencies return an error before the
+    /// destination changes.
     pub fn import_fragment(
         &mut self,
         destination: &ContentLocation,
@@ -15842,31 +16740,37 @@ impl Document {
     ) -> Result<()> {
         let mut candidate = self.clone_for_staging();
         candidate.flush_to_package()?;
-        if destination.story.kind != StoryKind::Body
-            || destination.story.part_name != candidate.doc_part_name
-        {
-            return Err(Error::Other(
-                "document fragments can be imported only into the main body".to_owned(),
-            ));
-        }
-        let (source, owner) = candidate.story_source_and_owner(&destination.story)?;
+        let (source, owner) = candidate.fragment_story_source_and_owner(&destination.story)?;
         let part_name = source.part_name.clone();
         let mut source_xml = source.xml.into_owned();
-        let (boundary, _, _) = validated_content_boundary(&source_xml, &owner, destination)?;
-        let imported_document_xml = crate::field::import_document_fragment_content(
-            &mut candidate,
-            &fragment.package,
-            fragment.include_final_section_properties,
-            policy,
-        )?;
-        let destination_scope = story_namespace_scope_at(&source_xml, owner.full.start)?;
-        let imported_xml = package_authoritative_body_fragment(
-            &imported_document_xml,
-            fragment.include_final_section_properties,
-            &destination_scope,
-        )?;
-        insert_story_fragment(&mut source_xml, &owner, boundary, imported_xml)?;
+        let (mut owner, mut boundary, _, _) =
+            fragment_content_boundary(&source_xml, &owner, destination)?;
+        if fragment.include_final_section_properties
+            && (destination.story.kind != StoryKind::Body
+                || (!destination.is_end && destination.index_path.len() != 1))
+        {
+            return Err(Error::Other(
+                "section-inclusive fragments require the main body destination".to_owned(),
+            ));
+        }
+        let imported_xml = fragment.import_content_staged(&mut candidate, &part_name, policy)?;
+        // Companion closure may append notes or comment threads to the same
+        // physical part that owns the destination. Refresh that part before
+        // inserting, so publishing the selected owner cannot discard them.
         candidate.prepare_staged_package()?;
+        let companion_owner = candidate.comments_part_name.as_deref() == Some(&part_name)
+            || candidate.note_part_name(StoryKind::Footnote)?.as_deref() == Some(&part_name)
+            || candidate.note_part_name(StoryKind::Endnote)?.as_deref() == Some(&part_name);
+        if companion_owner {
+            let (updated_source, updated_owner) =
+                candidate.fragment_story_source_and_owner(&destination.story)?;
+            source_xml = updated_source.xml.into_owned();
+            let (updated_owner, updated_boundary, _, _) =
+                fragment_content_boundary(&source_xml, &updated_owner, destination)?;
+            owner = updated_owner;
+            boundary = updated_boundary;
+        }
+        insert_story_fragment(&mut source_xml, &owner, boundary, imported_xml)?;
         set_story_source_xml(&mut candidate, &part_name, source_xml)?;
         let reopened = candidate.reopen_prepared_staged()?;
         self.commit_staged_mutation(reopened);
@@ -16180,6 +17084,11 @@ impl Document {
         }
         candidate.reserve_footnotes_bundle()?;
         let mut paragraph = CT_P::new();
+        let mut note_marker = CT_R::new("");
+        note_marker.content.clear();
+        note_marker.extra_xml.push(b"<w:footnoteRef/>".to_vec());
+        note_marker.extra_xml_positions.push(0);
+        paragraph.runs.push(note_marker);
         paragraph.add_run(text);
         candidate
             .footnotes
@@ -16194,7 +17103,10 @@ impl Document {
         candidate.refresh_related_story_caches()?;
         candidate.invalidate_layout();
         let mut run = CT_R::new("");
-        run.content = vec![RunContent::FootnoteRef { id }];
+        run.content = vec![RunContent::FootnoteRef {
+            id,
+            custom_mark: None,
+        }];
         candidate.story_paragraph_mut(reference)?.runs.push(run);
         let reopened = candidate.prepare_and_reopen_staged()?;
         self.commit_staged_mutation(reopened);
@@ -16236,6 +17148,11 @@ impl Document {
                 .ok_or_else(|| Error::Other("endnote ID range is exhausted".to_owned()))?;
         }
         let mut paragraph = CT_P::new();
+        let mut note_marker = CT_R::new("");
+        note_marker.content.clear();
+        note_marker.extra_xml.push(b"<w:endnoteRef/>".to_vec());
+        note_marker.extra_xml_positions.push(0);
+        paragraph.runs.push(note_marker);
         paragraph.add_run(text);
         let note = rdocx_oxml::footnotes::CT_Footnote {
             id,
@@ -16248,8 +17165,230 @@ impl Document {
         set_story_source_xml(&mut candidate, &part_name, updated)?;
         candidate.invalidate_layout();
         let mut run = CT_R::new("");
-        run.content = vec![RunContent::EndnoteRef { id }];
+        run.content = vec![RunContent::EndnoteRef {
+            id,
+            custom_mark: None,
+        }];
         candidate.story_paragraph_mut(reference)?.runs.push(run);
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(id)
+    }
+
+    /// Create a footnote whose visible reference is an authored mark.
+    pub fn create_footnote_with_mark(
+        &mut self,
+        reference: &ContentLocation,
+        text: &str,
+        mark: &str,
+    ) -> Result<i32> {
+        self.create_note_with_mark(NoteFamily::Footnote, reference, text, mark)
+    }
+
+    /// Create an endnote whose visible reference is an authored mark.
+    pub fn create_endnote_with_mark(
+        &mut self,
+        reference: &ContentLocation,
+        text: &str,
+        mark: &str,
+    ) -> Result<i32> {
+        self.create_note_with_mark(NoteFamily::Endnote, reference, text, mark)
+    }
+
+    fn create_note_with_mark(
+        &mut self,
+        family: NoteFamily,
+        reference: &ContentLocation,
+        text: &str,
+        mark: &str,
+    ) -> Result<i32> {
+        if mark.is_empty() {
+            return Err(Error::Other(
+                "custom note mark must not be empty".to_owned(),
+            ));
+        }
+        let mut candidate = self.clone_for_staging();
+        let (kind, id) = match family {
+            NoteFamily::Footnote => (
+                StoryKind::Footnote,
+                candidate.create_footnote(reference, text)?,
+            ),
+            NoteFamily::Endnote => (
+                StoryKind::Endnote,
+                candidate.create_endnote(reference, text)?,
+            ),
+        };
+        let paragraph_index = reference.index_path.first().copied().ok_or_else(|| {
+            Error::Other("note reference must identify a direct body paragraph".to_owned())
+        })?;
+        let refreshed = candidate
+            .paragraph_story_location(paragraph_index)?
+            .ok_or_else(|| Error::Other("new note reference paragraph is missing".to_owned()))?;
+        let paragraph = candidate.story_paragraph_mut(&refreshed)?;
+        let marker = paragraph
+            .runs
+            .last_mut()
+            .and_then(|run| run.content.first_mut())
+            .ok_or_else(|| Error::Other("new note reference is missing".to_owned()))?;
+        match marker {
+            RunContent::FootnoteRef { custom_mark, .. }
+            | RunContent::EndnoteRef { custom_mark, .. } => {
+                *custom_mark = Some(mark.to_owned());
+            }
+            _ => return Err(Error::Other("new note reference is malformed".to_owned())),
+        }
+        candidate.invalidate_layout();
+        candidate.flush_to_package()?;
+        let story = candidate
+            .note_story(kind, id)?
+            .ok_or_else(|| Error::Other("new note story is missing".to_owned()))?;
+        let part_name = story.part_name.clone();
+        let mut xml = candidate
+            .package
+            .get_part(&part_name)
+            .ok_or_else(|| Error::Other("new note part is missing".to_owned()))?
+            .to_vec();
+        let owner = scan_story_owners(&xml, kind)?
+            .into_iter()
+            .find(|owner| owner.kind == kind && owner.owner_index == story.owner_index)
+            .ok_or_else(|| Error::Other("new note owner is missing".to_owned()))?;
+        let mut paragraph = CT_P::new();
+        let marker_run = CT_R::new(mark);
+        paragraph.runs.push(marker_run);
+        paragraph.add_run(text);
+        let note = rdocx_oxml::footnotes::CT_Footnote {
+            id,
+            note_type: rdocx_oxml::footnotes::NoteType::Normal,
+            paragraphs: vec![paragraph],
+        };
+        let fragment = serialized_note_fragment(&note, kind)?;
+        xml.splice(owner.full, fragment);
+        set_story_source_xml(&mut candidate, &part_name, xml)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(id)
+    }
+
+    /// Create or replace an authored note separator or continuation record.
+    /// The supplied paragraphs are written into the special note owner without
+    /// changing other note owners or unmodelled XML in the part.
+    pub fn set_note_special_record(
+        &mut self,
+        family: NoteFamily,
+        record: NoteSpecialRecord,
+        paragraphs: Vec<CT_P>,
+    ) -> Result<i32> {
+        if paragraphs.is_empty() {
+            return Err(Error::Other(
+                "special note record needs a paragraph".to_owned(),
+            ));
+        }
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let (kind, part_name, root, item) = match family {
+            NoteFamily::Footnote => {
+                candidate.reserve_footnotes_bundle()?;
+                (
+                    StoryKind::Footnote,
+                    candidate
+                        .footnotes_part_name
+                        .clone()
+                        .ok_or_else(|| Error::Other("footnotes part is missing".to_owned()))?,
+                    b"footnotes".as_slice(),
+                    b"footnote".as_slice(),
+                )
+            }
+            NoteFamily::Endnote => {
+                let existing = candidate.note_part_name(StoryKind::Endnote)?;
+                let part = candidate.reserve_document_part_bundle(
+                    existing.as_deref(),
+                    "/word/endnotes.xml",
+                    rel_types::ENDNOTES,
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml",
+                )?;
+                (
+                    StoryKind::Endnote,
+                    part,
+                    b"endnotes".as_slice(),
+                    b"endnote".as_slice(),
+                )
+            }
+        };
+        let source = match candidate.package.get_part(&part_name) {
+            Some(xml) => xml.to_vec(),
+            None if family == NoteFamily::Footnote => {
+                rdocx_oxml::footnotes::CT_Footnotes::new().to_xml_footnotes()?
+            }
+            None => rdocx_oxml::footnotes::CT_Footnotes::new().to_xml_endnotes()?,
+        };
+        let parsed = rdocx_oxml::footnotes::CT_Footnotes::from_xml(&source)?;
+        let matches = parsed
+            .footnotes
+            .iter()
+            .enumerate()
+            .filter(|(_, note)| note.note_type == record.note_type())
+            .collect::<Vec<_>>();
+        if matches.len() > 1 {
+            return Err(Error::Other("duplicate special note records".to_owned()));
+        }
+        let used = parsed
+            .footnotes
+            .iter()
+            .map(|note| note.id)
+            .collect::<HashSet<_>>();
+        let id = if let Some((_, note)) = matches.first() {
+            note.id
+        } else {
+            let preferred = match record {
+                NoteSpecialRecord::Separator => -1,
+                NoteSpecialRecord::ContinuationSeparator => 0,
+                NoteSpecialRecord::ContinuationNotice => -2,
+            };
+            if !used.contains(&preferred) {
+                preferred
+            } else {
+                let mut next = -2_i32;
+                while used.contains(&next) {
+                    next = next.checked_sub(1).ok_or_else(|| {
+                        Error::Other("special note ID range is exhausted".to_owned())
+                    })?;
+                }
+                next
+            }
+        };
+        let note = rdocx_oxml::footnotes::CT_Footnote {
+            id,
+            note_type: record.note_type(),
+            paragraphs,
+        };
+        let fragment = serialized_note_fragment(&note, kind)?;
+        let updated = if let Some((index, _)) = matches.first() {
+            let spans = scan_story_owners_with_special(&source, kind, true)?
+                .into_iter()
+                .filter(|owner| owner.kind == kind)
+                .collect::<Vec<_>>();
+            let span = spans
+                .get(*index)
+                .ok_or_else(|| Error::Other("special note owner cannot be located".to_owned()))?;
+            let mut xml = source;
+            xml.splice(span.full.clone(), fragment);
+            xml
+        } else {
+            append_story_fragments_to_root(&source, root, item, &[fragment])?
+        };
+        set_story_source_xml(&mut candidate, &part_name, updated)?;
+        let mut properties = candidate
+            .note_properties(family)
+            .cloned()
+            .unwrap_or_default();
+        if !properties.special_references.contains(&id) {
+            properties.special_references.push(id);
+        }
+        candidate.stage_settings_mutation(|settings| match family {
+            NoteFamily::Footnote => settings.set_footnote_properties(properties),
+            NoteFamily::Endnote => settings.set_endnote_properties(properties),
+        })?;
+        candidate.invalidate_layout();
         let reopened = candidate.prepare_and_reopen_staged()?;
         self.commit_staged_mutation(reopened);
         Ok(id)
@@ -16263,6 +17402,82 @@ impl Document {
     /// Find the current story identity for a normal endnote ID.
     pub fn endnote_story(&self, id: i32) -> Result<Option<StoryId>> {
         self.note_story(StoryKind::Endnote, id)
+    }
+
+    pub(crate) fn fragment_note_dependency(
+        &self,
+        kind: StoryKind,
+        id: i32,
+    ) -> Result<(String, Vec<u8>)> {
+        let story = self.note_story(kind, id)?.ok_or_else(|| {
+            Error::Other(format!(
+                "document fragment {kind:?} reference {id} has no note owner"
+            ))
+        })?;
+        let (source, owner) = self.story_source_and_owner(&story)?;
+        let xml = source.xml.as_ref();
+        let scope = story_namespace_scope_at(xml, owner.full.start)?;
+        Ok((
+            source.part_name,
+            close_content_fragment_namespaces(&xml[owner.full], &scope)?,
+        ))
+    }
+
+    pub(crate) fn ensure_fragment_note_part_staged(&mut self, kind: StoryKind) -> Result<String> {
+        let (preferred, relationship_type, content_type) = match kind {
+            StoryKind::Footnote => (
+                "/word/footnotes.xml",
+                rel_types::FOOTNOTES,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml",
+            ),
+            StoryKind::Endnote => (
+                "/word/endnotes.xml",
+                rel_types::ENDNOTES,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml",
+            ),
+            _ => return Err(Error::Other("invalid fragment note story kind".to_owned())),
+        };
+        let existing = self.note_part_name(kind)?;
+        let part = self.reserve_document_part_bundle(
+            existing.as_deref(),
+            preferred,
+            relationship_type,
+            content_type,
+        )?;
+        if kind == StoryKind::Footnote {
+            self.footnotes_part_name = Some(part.clone());
+        }
+        if self.package.get_part(&part).is_none() {
+            let notes = rdocx_oxml::footnotes::CT_Footnotes::new();
+            let xml = if kind == StoryKind::Footnote {
+                notes.to_xml_footnotes()?
+            } else {
+                notes.to_xml_endnotes()?
+            };
+            self.package.set_part(&part, xml);
+        }
+        Ok(part)
+    }
+
+    pub(crate) fn append_fragment_note_staged(
+        &mut self,
+        kind: StoryKind,
+        part_name: &str,
+        note_xml: Vec<u8>,
+    ) -> Result<()> {
+        let source = self.package.get_part(part_name).ok_or_else(|| {
+            Error::Other(format!(
+                "document fragment destination note part {part_name} is missing"
+            ))
+        })?;
+        let (root, item) = match kind {
+            StoryKind::Footnote => (b"footnotes".as_slice(), b"footnote".as_slice()),
+            StoryKind::Endnote => (b"endnotes".as_slice(), b"endnote".as_slice()),
+            _ => return Err(Error::Other("invalid fragment note story kind".to_owned())),
+        };
+        let updated = append_story_fragments_to_root(source, root, item, &[note_xml])?;
+        self.package.set_part(part_name, updated);
+        Ok(())
     }
 
     fn note_part_name(&self, kind: StoryKind) -> Result<Option<String>> {
@@ -21077,6 +22292,64 @@ impl Document {
         self.settings.as_ref()?.update_fields()
     }
 
+    /// Document-wide note policy in the relationship-resolved settings part.
+    pub fn note_properties(&self, family: NoteFamily) -> Option<&CT_NoteProperties> {
+        let settings = self.settings.as_ref()?;
+        match family {
+            NoteFamily::Footnote => settings.footnote_properties(),
+            NoteFamily::Endnote => settings.endnote_properties(),
+        }
+    }
+
+    /// Set a checked document-wide note policy and publish the staged package.
+    pub fn set_note_policy(&mut self, family: NoteFamily, policy: NotePolicy) -> Result<()> {
+        let mut properties = self.note_properties(family).cloned().unwrap_or_default();
+        let checked = policy.properties(family)?;
+        properties.pos = checked.pos;
+        properties.num_fmt = checked.num_fmt;
+        properties.num_start = checked.num_start;
+        properties.num_restart = checked.num_restart;
+        self.stage_settings_mutation(|settings| match family {
+            NoteFamily::Footnote => settings.set_footnote_properties(properties),
+            NoteFamily::Endnote => settings.set_endnote_properties(properties),
+        })
+    }
+
+    /// Remove an explicit document-wide note policy.
+    pub fn remove_note_policy(&mut self, family: NoteFamily) -> Result<Option<CT_NoteProperties>> {
+        let Some(mut properties) = self.note_properties(family).cloned() else {
+            return Ok(None);
+        };
+        if properties.pos.is_none()
+            && properties.num_fmt.is_none()
+            && properties.num_start.is_none()
+            && properties.num_restart.is_none()
+        {
+            return Ok(None);
+        }
+        let removed = properties.clone();
+        properties.pos = None;
+        properties.num_fmt = None;
+        properties.num_start = None;
+        properties.num_restart = None;
+        if properties.special_references.is_empty() && properties.extra_xml.is_empty() {
+            match family {
+                NoteFamily::Footnote => {
+                    self.stage_settings_removal(CT_Settings::remove_footnote_properties)?;
+                }
+                NoteFamily::Endnote => {
+                    self.stage_settings_removal(CT_Settings::remove_endnote_properties)?;
+                }
+            }
+        } else {
+            self.stage_settings_mutation(|settings| match family {
+                NoteFamily::Footnote => settings.set_footnote_properties(properties),
+                NoteFamily::Endnote => settings.set_endnote_properties(properties),
+            })?;
+        }
+        Ok(Some(removed))
+    }
+
     /// Ask Word to update fields when it opens the document, stop asking with
     /// `Some(false)`, or remove the setting with `None`.
     pub fn set_update_fields_on_open(&mut self, value: Option<bool>) -> Result<()> {
@@ -24895,6 +26168,16 @@ impl Document {
                 .as_ref()
                 .and_then(CT_Settings::math_properties)
                 .cloned(),
+            note_defaults: [
+                self.settings
+                    .as_ref()
+                    .and_then(CT_Settings::footnote_properties)
+                    .cloned(),
+                self.settings
+                    .as_ref()
+                    .and_then(CT_Settings::endnote_properties)
+                    .cloned(),
+            ],
             styles: self.styles.clone(),
             numbering: self.numbering.clone(),
             headers,

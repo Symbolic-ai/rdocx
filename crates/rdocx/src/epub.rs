@@ -2601,8 +2601,14 @@ fn render_run_content(content: &RunContent) -> RunContent {
             projected.dirty = field.dirty;
             RunContent::Field(projected)
         }
-        RunContent::FootnoteRef { id } => RunContent::FootnoteRef { id: *id },
-        RunContent::EndnoteRef { id } => RunContent::EndnoteRef { id: *id },
+        RunContent::FootnoteRef { id, custom_mark } => RunContent::FootnoteRef {
+            id: *id,
+            custom_mark: custom_mark.clone(),
+        },
+        RunContent::EndnoteRef { id, custom_mark } => RunContent::EndnoteRef {
+            id: *id,
+            custom_mark: custom_mark.clone(),
+        },
         RunContent::CommentReference { id, .. } => RunContent::CommentReference {
             id: *id,
             raw_before: 0,

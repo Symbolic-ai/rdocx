@@ -997,7 +997,10 @@ impl<'a> Paragraph<'a> {
     pub fn add_footnote_ref(&mut self, id: i32) {
         use rdocx_oxml::text::{CT_R, RunContent};
         let mut r = CT_R::new("");
-        r.content = vec![RunContent::FootnoteRef { id }];
+        r.content = vec![RunContent::FootnoteRef {
+            id,
+            custom_mark: None,
+        }];
         self.inner.runs.push(r);
     }
 

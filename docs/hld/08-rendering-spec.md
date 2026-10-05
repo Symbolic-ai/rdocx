@@ -1285,18 +1285,23 @@ footnote and endnote labels are assigned independently from the first body
 reference to each note in projected document order. The same label shapes the
 body superscript and the marker beside the note. Reordering the note part does
 not renumber either marker. A removed note leaves the remaining IDs stable
-while the displayed sequence closes the gap. Custom marks and section restart
-policy remain outside this behavior.
+while the displayed sequence closes the gap. The effective document and
+section policy selects decimal, Roman, or alphabetic labels, a one-based start,
+and continuous, section, or physical-page restart. A custom mark uses its
+authored text at both positions and does not advance numeric numbering.
 
-New normal endnotes join the independent endnote label stream. References in
-different sections retain one document-wide occurrence sequence, and their
-notes append after the final body page under the current document-end policy.
-Microsoft Word for Mac 16.113.2 places both endnotes of the F-273 mixed-section
-fixture on its second and final body page and displays endnote labels `i` and
-`ii`. The current deterministic renderer appends a third page and uses decimal
-labels `1` and `2`. The fixture asserts this known placement and format
-divergence while checking that both note streams keep independent occurrence
-order. F-274 owns placement and number-format policy.
+New normal endnotes join the independent endnote label stream. Endnotes placed
+at the section end follow that section's final body content. Document-end
+endnotes begin in the measured free band of the final body page and carry to a
+later page if needed. Footnotes reserve space on each reference page, either
+at the page bottom or beneath the body under the effective policy. Authored
+separator content replaces the synthetic rule. A carried note uses its
+continuation separator at the next page and its continuation notice at the
+page from which content continues. The pinned Word for Mac 16.113.2 build
+shows both document-end notes on the final body page, section-end notes after
+each section, and matching custom marks in body and note areas. It ignores a
+`beneathText` placement request even with an explicit section property, while
+the native renderer applies that OOXML policy.
 
 A direct footnote or endnote reference in an otherwise safe body paragraph
 remains cacheable. Its explicit
@@ -1390,8 +1395,9 @@ computed identity into the retained entry. The memo has one slot per candidate
 body block, retains at most one exact identity per populated slot, and is
 dropped before the layout returns. It does not change the persistent restart
 cache envelope.
-When restarted body pagination reaches the end, endnote pages are appended
-once. An attached exact cached tail already carries those pages. If any
+When restarted body pagination reaches the end, document-end endnotes are
+flowed once from the final body page. An attached exact cached tail already
+carries that content. If any
 equality or capacity check fails, pagination continues through the normal full
 path.
 
@@ -1618,7 +1624,7 @@ change the text measure, so nothing re-breaks. `w:paperSrc` and the book-fold
 settings reach the model and the package and change no page geometry at all.
 
 A section without a restart continues after the preceding section's displayed
-last page. Appended endnote pages continue after the final body page for fresh
+last page. Overflow endnote pages continue after the final body page for fresh
 and restarted pagination, including a restarted final section. PAGE fields on
 those pages consume the continued displayed value. Number format, chapter
 style, and chapter separator remain preserved but do not affect M23 layout.

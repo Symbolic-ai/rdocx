@@ -10,7 +10,7 @@ use oxml_layout::Diagnostic;
 pub use oxml_layout::FontFile;
 use oxml_layout::MediaId;
 use rdocx_oxml::core_properties::CoreProperties;
-use rdocx_oxml::document::CT_Document;
+use rdocx_oxml::document::{CT_Document, CT_NoteProperties};
 use rdocx_oxml::footnotes::CT_Footnotes;
 use rdocx_oxml::header_footer::CT_HdrFtr;
 use rdocx_oxml::math::MathProperties;
@@ -177,6 +177,8 @@ pub struct LayoutInput {
     pub do_not_use_html_paragraph_auto_spacing: bool,
     /// Document-wide OfficeMath defaults from the settings part.
     pub math_properties: Option<MathProperties>,
+    /// Document-wide note policies from the settings part, footnotes then endnotes.
+    pub note_defaults: [Option<CT_NoteProperties>; 2],
     /// The tracked-revision projection to lay out.
     pub revision_view: RevisionView,
     /// Style definitions.

@@ -330,7 +330,7 @@ pub struct CT_DocGrid {
 ///
 /// F-269 models the values and the authoring surface. Their effect on marker
 /// text, placement and restart belongs to F-274.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CT_NoteProperties {
     /// `w:pos/@w:val`, where the notes are placed.
     pub pos: Option<String>,
@@ -340,6 +340,8 @@ pub struct CT_NoteProperties {
     pub num_start: Option<u32>,
     /// `w:numRestart/@w:val`, where marker numbering starts over.
     pub num_restart: Option<String>,
+    /// IDs of special note records selected by document settings.
+    pub special_references: Vec<i32>,
     /// Unmodelled children retained at their schema insertion slots.
     ///
     /// A modelled child carrying an attribute this type does not read is kept
@@ -1474,7 +1476,7 @@ impl CT_SectPr {
         Ok(borders)
     }
 
-    fn parse_note_properties(
+    pub(crate) fn parse_note_properties(
         reader: &mut Reader<&[u8]>,
         word_prefixes: &[String],
         owner_bindings: &[(String, String)],
@@ -1505,6 +1507,28 @@ impl CT_SectPr {
                         slot = 4;
                         sole_val_attribute(child, &prefixes)?
                             .map(|value| properties.num_restart = Some(value))
+                    } else if is_word_element(
+                        name.as_ref(),
+                        if matches_local_name(tag, b"footnotePr") {
+                            b"footnote".as_slice()
+                        } else {
+                            b"endnote".as_slice()
+                        },
+                        &prefixes,
+                    ) {
+                        slot = 5;
+                        child
+                            .attributes()
+                            .filter_map(|attribute| attribute.ok())
+                            .find(|attribute| {
+                                is_word_attribute(attribute.key.as_ref(), b"id", &prefixes)
+                            })
+                            .and_then(|attribute| {
+                                std::str::from_utf8(&attribute.value)
+                                    .ok()
+                                    .and_then(|value| value.parse::<i32>().ok())
+                            })
+                            .map(|id| properties.special_references.push(id))
                     } else {
                         None
                     };
@@ -2027,11 +2051,16 @@ impl CT_PageBorders {
 
 impl CT_NoteProperties {
     /// Write section note properties under `tag`, in `xsd:sequence` order.
-    fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>, tag: &str) -> Result<()> {
+    pub(crate) fn to_xml<W: std::io::Write>(
+        &self,
+        writer: &mut Writer<W>,
+        tag: &str,
+    ) -> Result<()> {
         if self.pos.is_none()
             && self.num_fmt.is_none()
             && self.num_start.is_none()
             && self.num_restart.is_none()
+            && self.special_references.is_empty()
             && self.extra_xml.is_empty()
         {
             writer.write_event(Event::Empty(BytesStart::new(tag)))?;
@@ -2064,6 +2093,18 @@ impl CT_NoteProperties {
             writer.write_event(Event::Empty(e))?;
         }
         self.write_retained_children(writer, 4)?;
+        let child_tag = if tag.ends_with("footnotePr") {
+            "w:footnote"
+        } else {
+            "w:endnote"
+        };
+        for id in &self.special_references {
+            let mut buf = itoa::Buffer::new();
+            let mut child = BytesStart::new(child_tag);
+            child.push_attribute(("w:id", buf.format(*id)));
+            writer.write_event(Event::Empty(child))?;
+        }
+        self.write_retained_children(writer, 5)?;
         writer.write_event(Event::End(BytesEnd::new(tag)))?;
         Ok(())
     }

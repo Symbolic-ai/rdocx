@@ -128,6 +128,12 @@ classification, and selected building-block replacement. Prefix aliases,
 fixed-prefix changed output, schema-order insertion, structural reopen,
 byte-exact unsupported subtree retention, unsafe relationship graphs, stale
 identities, wrong value kinds, bounds, and atomic failure are focused checks.
+The public-created glossary gate authors AutoText, building-block and
+placeholder entries with image dependencies, binds an existing control,
+inserts their content and reopens the package. Lifecycle checks cover raw
+body wrapper attributes, adversarial producer prefix scopes, related-story
+control variants, retained self-closing empty containers, duplicate names,
+stale snapshots and atomic rejection of unsafe or incomplete graphs.
 The Python, WASM, and CLI surfaces and the 49-entry hash set remain unchanged.
 
 The glossary, embedded-content, and package-story malformed XML matrices run
@@ -619,16 +625,30 @@ no-date deterministic default, invalid-date rollback, and retained unrelated
 sidecar XML. Installed Python tests, strict mypy, and stubtest cover the same
 optional date keywords and frozen snapshots.
 
-The cross-document fragment gate selects a main-body range containing custom
-styles, direct and style-carried numbering, a bookmark and REF field, a
-picture, an editable chart and workbook, an exact foreign subtree, and a
-resolved comment thread with a relationship-bearing payload. Two imports must
-reopen with all references resolved, exact selected raw XML retained twice,
-unused source dependencies absent, and collision-free package identities.
-Equivalent-reuse and rename policies must produce deterministic style,
-numbering, media, chart, and workbook results. Atomic negatives cover external
-relationships, split ownership, dangling targets, malformed relationship XML,
-and relationship-id exhaustion, with destination bytes unchanged.
+The cross-document fragment gate
+`full_story_fragment_import_remaps_every_conflicting_dependency` checks all
+64 pairings of body, header, footer, footnote, endnote, comment, cell and
+text-box owners with relationship-bearing images. Nested block-control
+paragraph boundaries select and insert inside their enclosing control.
+Inline grammar and split ownership reject atomically.
+
+Two imports into a conflicting destination prove deterministic style-link
+cycles, aliases, numbering overrides, note IDs, custom XML stores and item
+properties, comment threads, paired markers, revisions, chart/workbook,
+diagram and embedding companions. Note-only formatting and comment bindings
+join closure discovery. Exact forward, backward and cyclic note references,
+companion bookmark targets, permission and revision IDs survive reopen. An
+import targeting a note or comment part retains new companions in that same
+physical part. Existing imported formatting uses the normal modeled layout
+and render paths. Opaque companion preservation adds no visual support.
+
+Round-trip checks retain selected foreign XML exactly and keep unrelated
+destination content. Opaque graph tests cover direct and nested external
+edges, internal cycles, payload equality and part-local edge resolution.
+Signature tests prove destination coverage invalidation and atomic rejection
+of a reachable integrity-bound signature. Missing or tampered targets,
+malformed relationships, unsafe embedded names, split ranges, invalid section
+placement and exhausted allocators leave destination bytes unchanged.
 
 The RTF reader differential records Microsoft Word 16.104 build
 16.104.25121423 as the oracle. Its checked input is source-encoded RTF that
@@ -1176,7 +1196,22 @@ engine and bundled-fallback facade. They also prove endnotes append once,
 changed related stories and note-reference sequences invalidate reuse, and a
 footnote continuation cannot publish a dirty checkpoint. Multi-section
 content, note-bearing tables, floating drawings, backgrounds, and mismatched
-boundary state must use the full paginator. Ordinary multi-line prose,
+boundary state must use the full paginator.
+
+The note-policy gate `note_policies_match_pinned_word_markers_and_page_placement`
+compares deterministic page placement and paired body and note labels with
+Microsoft Word for Mac 16.113.2. Focused fixtures cover document-end and
+section-end endnotes, an explicit section restart, a page restart within one
+section, custom footnote and endnote marks, authored separators, and a
+three-page carried footnote with continuation separator and notice. Package
+round trips check alias-prefixed note settings, special-record ID references,
+and exact retained XML. Invalid policies and an empty special record must
+leave complete package bytes unchanged. The pinned Word build ignores
+`beneathText` even under an explicit section override, so the deterministic
+native placement test records that divergence while proving the policy is
+applied by the renderer.
+
+Ordinary multi-line prose,
 headings, `keepNext`, and `keepLines` must publish complete-boundary restart
 records. A deterministic Issue 67 fixture requires 175 naturally wrapped
 four-line paragraphs to span 19 pages, keep the completed recorded pass, and
@@ -1827,6 +1862,14 @@ Required-corpus mode fails closed on missing artifacts, hashes, provenance,
 sample identity, dimensions, normalization provenance, or case coverage.
 
 ## The Word corpus
+
+The cross-story range gate source-builds all eight supported story owners and
+block content controls inside related owners. It adds bookmark, comment,
+permission and proofing pairs, then reopens each package to check exact
+endpoints and owner identity. Alias-prefixed marker input, unknown siblings,
+same-boundary ordering, nested pairs, crossing-invalid pairs and atomic
+failed moves are regression cases. The hash harness remains unchanged because
+these marker edits do not change the existing rendered corpus.
 
 The Issue 158 acceptance gate fetches the original report attachment by its
 SHA-256 digest `d05f9c753c00eb804c6e345126ef7a1f7a4fc635d2c9b653b829922030cd875e`.

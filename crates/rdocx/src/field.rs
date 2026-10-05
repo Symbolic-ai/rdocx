@@ -1,6 +1,6 @@
 //! Pure evaluation of Word fields against an explicit document context.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -33,7 +33,9 @@ use rdocx_oxml::text::{
 
 pub use rdocx_oxml::text::{LegacyFormFieldKind, LegacyFormFieldValue};
 
-use crate::document::{DocumentIdentifiers, FragmentConflictPolicy, uniquify_drawing_ids_in_xml};
+use crate::document::{
+    DocumentIdentifiers, FragmentConflictPolicy, StoryKind, uniquify_drawing_ids_in_xml,
+};
 use crate::{Document, Error, Result, style};
 
 /// One legacy form field and its stable story-part identity.
@@ -1842,7 +1844,9 @@ fn import_rich_fragment(
         document,
         bytes,
         false,
+        false,
         FragmentConflictPolicy::rename_all().with_style_reuse(true),
+        &document.doc_part_name.clone(),
         identity_state,
     )
     .map(|imported| imported.typed)
@@ -1853,13 +1857,16 @@ pub(crate) fn import_document_fragment_content(
     bytes: &[u8],
     include_final_section_properties: bool,
     policy: FragmentConflictPolicy,
+    destination_part: &str,
 ) -> Result<Vec<u8>> {
     let mut identity_state = BodyIdentityState::from_documents(std::slice::from_ref(document))?;
     import_fragment_content_with_state(
         document,
         bytes,
         include_final_section_properties,
+        true,
         policy,
+        destination_part,
         &mut identity_state,
     )
     .map(|imported| imported.xml)
@@ -1870,11 +1877,19 @@ struct ImportedFragmentContent {
     xml: Vec<u8>,
 }
 
+struct FragmentNoteCopy {
+    kind: StoryKind,
+    destination_part: String,
+    xml: Vec<u8>,
+}
+
 fn import_fragment_content_with_state(
     document: &mut Document,
     bytes: &[u8],
     include_final_section_properties: bool,
+    allow_external_relationships: bool,
     policy: FragmentConflictPolicy,
+    destination_part: &str,
     identity_state: &mut BodyIdentityState,
 ) -> Result<ImportedFragmentContent> {
     let mut fragment = Document::from_bytes(bytes)
@@ -1899,16 +1914,28 @@ fn import_fragment_content_with_state(
             .push(BodyContent::Paragraph(paragraph));
     }
     prune_document_fragment_dependencies(&mut fragment)?;
-    let fragment_identity_values = body_identity_values(&fragment.document.to_xml()?)?;
+    let mut fragment_identity_values = body_identity_values(&fragment_xml)?;
+    for companion in fragment_dependency_companions(&fragment)? {
+        for id in body_identity_values(&wrap_fragment_companion(&companion))?.comment_ids {
+            if !fragment_identity_values.comment_ids.contains(&id) {
+                fragment_identity_values.comment_ids.push(id);
+            }
+        }
+    }
     validate_fragment_identity_ownership(&fragment_identity_values)?;
-    let styles_changed = remap_fragment_style_collisions(
+    remap_fragment_style_collisions(
         document,
         &mut fragment,
         &mut fragment_xml,
         policy.reuse_styles(),
         policy.reuse_numbering(),
     )?;
-    let dependency_xml = fragment.document.to_xml()?;
+    let dependency_xml =
+        wrap_fragment_companion(&crate::document::package_authoritative_body_fragment(
+            &fragment_xml,
+            include_final_section_properties,
+            &BTreeMap::new(),
+        )?);
     let used_relationships = relationship_ids_in_xml(&dependency_xml)?;
     let source_rels = fragment
         .package
@@ -1917,8 +1944,9 @@ fn import_fragment_content_with_state(
         .unwrap_or_default();
     let mut relationship_map = BTreeMap::new();
     let mut comment_relationship_map = BTreeMap::new();
-    let mut part_map = HashMap::new();
+    let mut part_map = BTreeMap::new();
     let mut imports = Vec::new();
+    let mut external_imports = Vec::new();
     for relationship_id in used_relationships {
         let relationship = source_rels.get_by_id(&relationship_id).ok_or_else(|| {
             Error::Other(format!(
@@ -1926,24 +1954,73 @@ fn import_fragment_content_with_state(
             ))
         })?;
         if !crate::document::relationship_is_internal(relationship) {
-            return Err(Error::Other(format!(
-                "rich mail merge fragment relationship {relationship_id} is non-internal"
-            )));
+            if !allow_external_relationships {
+                return Err(Error::Other(
+                    "rich mail merge fragment has a non-internal relationship".to_owned(),
+                ));
+            }
+            external_imports.push((
+                true,
+                destination_part.to_owned(),
+                relationship_id,
+                relationship.clone(),
+            ));
+            continue;
         }
         let source_part =
             OpcPackage::resolve_rel_target(&fragment.doc_part_name, &relationship.target);
         imports.push((
-            document.doc_part_name.clone(),
+            true,
+            destination_part.to_owned(),
             relationship_id,
             relationship.clone(),
             source_part,
         ));
+    }
+    let mut binding_stores = Vec::new();
+    for store_item_id in fragment_store_item_ids(&dependency_xml)? {
+        let source_part = crate::content_control::resolve_custom_xml_part(
+            &fragment.package,
+            &fragment.doc_part_name,
+            &store_item_id,
+        )?;
+        let relationship = source_rels.items.iter().find(|relationship| {
+            relationship.rel_type.ends_with("/customXml")
+                && crate::document::relationship_is_internal(relationship)
+                && OpcPackage::resolve_rel_target(&fragment.doc_part_name, &relationship.target)
+                    == source_part
+        }).ok_or_else(|| Error::Other(format!(
+            "document fragment custom XML store {store_item_id} has no main-part relationship"
+        )))?;
+        if !imports
+            .iter()
+            .any(|(_, _, id, _, _)| id == &relationship.id)
+        {
+            imports.push((
+                true,
+                document.doc_part_name.clone(),
+                relationship.id.clone(),
+                relationship.clone(),
+                source_part.clone(),
+            ));
+        }
+        binding_stores.push((store_item_id, source_part));
     }
     if let Some(comment_xml) = Document::fragment_comment_dependency_xml(
         fragment.comments.as_ref(),
         fragment.comments_extended.as_ref(),
         &fragment_identity_values.comment_ids,
     )? {
+        for store_item_id in fragment_store_item_ids(&comment_xml)? {
+            let source_item_part = crate::content_control::resolve_custom_xml_part(
+                &fragment.package,
+                &fragment.doc_part_name,
+                &store_item_id,
+            )?;
+            if !binding_stores.iter().any(|(id, _)| id == &store_item_id) {
+                binding_stores.push((store_item_id, source_item_part));
+            }
+        }
         let destination_owner = document.ensure_fragment_comment_models_staged()?;
         let source_owner = fragment.comments_part_name.as_ref().ok_or_else(|| {
             Error::Other("document fragment comments part name is missing".to_owned())
@@ -1960,12 +2037,22 @@ fn import_fragment_content_with_state(
                 ))
             })?;
             if !crate::document::relationship_is_internal(relationship) {
-                return Err(Error::Other(format!(
-                    "document fragment comment relationship {relationship_id} is non-internal"
-                )));
+                if !allow_external_relationships {
+                    return Err(Error::Other(
+                        "rich mail merge fragment has a non-internal relationship".to_owned(),
+                    ));
+                }
+                external_imports.push((
+                    false,
+                    destination_owner.clone(),
+                    relationship_id,
+                    relationship.clone(),
+                ));
+                continue;
             }
             let source_part = OpcPackage::resolve_rel_target(source_owner, &relationship.target);
             imports.push((
+                false,
                 destination_owner.clone(),
                 relationship_id,
                 relationship.clone(),
@@ -1973,14 +2060,262 @@ fn import_fragment_content_with_state(
             ));
         }
     }
+    let mut note_copies: Vec<FragmentNoteCopy> = Vec::new();
+    let mut note_relationship_imports = Vec::new();
+    let mut note_external_imports = Vec::new();
+    let mut pending_notes = fragment_note_references(&dependency_xml)?;
+    if let Some(comments) = fragment.comments.as_ref()
+        && let Some(xml) = Document::fragment_comment_dependency_xml(
+            Some(comments),
+            fragment.comments_extended.as_ref(),
+            &fragment_identity_values.comment_ids,
+        )?
+    {
+        pending_notes.extend(fragment_note_references(&xml)?);
+    }
+    let mut seen_notes = HashSet::new();
+    let mut reserved_note_ids: HashMap<StoryKind, HashSet<i32>> = HashMap::new();
+    let mut note_id_maps: HashMap<StoryKind, BTreeMap<String, String>> = HashMap::new();
+    let mut note_index = 0;
+    while note_index < pending_notes.len() {
+        let (kind, old_id) = pending_notes[note_index];
+        note_index += 1;
+        if !seen_notes.insert((kind, old_id)) {
+            continue;
+        }
+        let (source_part, note_xml) = fragment.fragment_note_dependency(kind, old_id)?;
+        for store_item_id in fragment_store_item_ids(&note_xml)? {
+            let source_item_part = crate::content_control::resolve_custom_xml_part(
+                &fragment.package,
+                &fragment.doc_part_name,
+                &store_item_id,
+            )?;
+            if !binding_stores.iter().any(|(id, _)| id == &store_item_id) {
+                binding_stores.push((store_item_id, source_item_part));
+            }
+        }
+        let destination_note_part = document.ensure_fragment_note_part_staged(kind)?;
+        let current_notes = CT_Footnotes::from_xml(
+            document
+                .package
+                .get_part(&destination_note_part)
+                .ok_or_else(|| {
+                    Error::Other(format!(
+                        "document fragment destination note part {destination_note_part} is missing"
+                    ))
+                })?,
+        )?;
+        let source_notes =
+            CT_Footnotes::from_xml(fragment.package.get_part(&source_part).ok_or_else(|| {
+                Error::Other(format!(
+                    "document fragment source note part {source_part} is missing"
+                ))
+            })?)?;
+        let used = reserved_note_ids.entry(kind).or_insert_with(|| {
+            current_notes
+                .footnotes
+                .iter()
+                .chain(&source_notes.footnotes)
+                .map(|note| note.id)
+                .collect()
+        });
+        let mut new_id = 2_i32;
+        while used.contains(&new_id) {
+            new_id = new_id.checked_add(1).ok_or_else(|| {
+                Error::Other(format!("document fragment {kind:?} ID range is exhausted"))
+            })?;
+        }
+        used.insert(new_id);
+        note_id_maps
+            .entry(kind)
+            .or_default()
+            .insert(old_id.to_string(), new_id.to_string());
+        for related in fragment_note_references(&note_xml)? {
+            if !seen_notes.contains(&related) && !pending_notes.contains(&related) {
+                pending_notes.push(related);
+            }
+        }
+        let source_note_rels = fragment
+            .package
+            .get_part_rels(&source_part)
+            .cloned()
+            .unwrap_or_default();
+        for relationship_id in relationship_ids_in_xml(&note_xml)? {
+            if note_relationship_imports.iter().any(
+                |(owner, id, _, _): &(
+                    String,
+                    String,
+                    oxml_opc::relationship::Relationship,
+                    String,
+                )| owner == &destination_note_part && id == &relationship_id,
+            ) || note_external_imports.iter().any(
+                |(owner, id, _): &(String, String, oxml_opc::relationship::Relationship)| {
+                    owner == &destination_note_part && id == &relationship_id
+                },
+            ) {
+                continue;
+            }
+            let relationship = source_note_rels
+                .get_by_id(&relationship_id)
+                .ok_or_else(|| {
+                    Error::Other(format!(
+                        "document fragment {kind:?} relationship {relationship_id} is missing"
+                    ))
+                })?
+                .clone();
+            if crate::document::relationship_is_internal(&relationship) {
+                let child = OpcPackage::resolve_rel_target(&source_part, &relationship.target);
+                note_relationship_imports.push((
+                    destination_note_part.clone(),
+                    relationship_id,
+                    relationship,
+                    child,
+                ));
+            } else {
+                if !allow_external_relationships {
+                    return Err(Error::Other(
+                        "rich mail merge fragment has a non-internal relationship".to_owned(),
+                    ));
+                }
+                note_external_imports.push((
+                    destination_note_part.clone(),
+                    relationship_id,
+                    relationship,
+                ));
+            }
+        }
+        note_copies.push(FragmentNoteCopy {
+            kind,
+            destination_part: destination_note_part,
+            xml: note_xml,
+        });
+    }
+    fragment_xml = patch_fragment_note_ids(&fragment_xml, &note_id_maps)?;
+    for note in &mut note_copies {
+        note.xml = patch_fragment_note_ids(&note.xml, &note_id_maps)?;
+    }
+    if let Some(comments) = fragment.comments.as_mut() {
+        *comments = CT_Comments::from_xml(&patch_fragment_note_ids(
+            &comments.to_xml()?,
+            &note_id_maps,
+        )?)?;
+    }
+    for (_, source_part) in &binding_stores {
+        if imports.iter().any(|(_, _, _, _, part)| part == source_part) {
+            continue;
+        }
+        let relationship = source_rels
+            .items
+            .iter()
+            .find(|relationship| {
+                relationship.rel_type.ends_with("/customXml")
+                    && crate::document::relationship_is_internal(relationship)
+                    && OpcPackage::resolve_rel_target(&fragment.doc_part_name, &relationship.target)
+                        == *source_part
+            })
+            .ok_or_else(|| {
+                Error::Other(format!(
+                    "document fragment custom XML store {source_part} has no main-part relationship"
+                ))
+            })?;
+        // Binding stores are document-wide, even when selected content lives in another story.
+        imports.push((
+            true,
+            document.doc_part_name.clone(),
+            relationship.id.clone(),
+            relationship.clone(),
+            source_part.clone(),
+        ));
+    }
+    let mut occupied_store_ids = binding_stores
+        .iter()
+        .map(|(id, _)| id.clone())
+        .collect::<BTreeSet<_>>();
+    for package in [&fragment.package, &document.package] {
+        for (part, xml) in &package.parts {
+            if package.content_types.content_type_for(part)
+                == Some("application/vnd.openxmlformats-officedocument.customXmlProperties+xml")
+                && let Some(id) = crate::content_control::parse_store_item_id(xml)?
+            {
+                occupied_store_ids.insert(crate::content_control::normalize_store_item_id(&id));
+            }
+        }
+    }
+    let mut binding_remaps = Vec::new();
+    for (store_item_id, source_item_part) in &binding_stores {
+        match crate::content_control::custom_xml_store_item_count(
+            &document.package,
+            &document.doc_part_name,
+            store_item_id,
+        )? {
+            0 => {}
+            1 => {
+                let new_id = (1_u64..)
+                    .map(|index| format!("{{F2760000-0000-4000-8000-{index:012X}}}"))
+                    .find(|candidate| {
+                        !occupied_store_ids
+                            .contains(&crate::content_control::normalize_store_item_id(candidate))
+                    })
+                    .ok_or_else(|| {
+                        Error::Other(
+                            "document fragment custom XML store ID range is exhausted".to_owned(),
+                        )
+                    })?;
+                occupied_store_ids.insert(crate::content_control::normalize_store_item_id(&new_id));
+                binding_remaps.push((store_item_id.clone(), source_item_part.clone(), new_id));
+            }
+            _ => {
+                return Err(Error::Other(format!(
+                    "document fragment custom XML store {store_item_id} is ambiguous in the destination"
+                )));
+            }
+        }
+    }
+    let mut remapped_store_properties = HashSet::new();
+    for (_, item_part, _) in &binding_remaps {
+        if let Some(rels) = fragment.package.get_part_rels(item_part) {
+            for relationship in &rels.items {
+                if relationship.rel_type.ends_with("/customXmlProps")
+                    && crate::document::relationship_is_internal(relationship)
+                {
+                    remapped_store_properties.insert(OpcPackage::resolve_rel_target(
+                        item_part,
+                        &relationship.target,
+                    ));
+                }
+            }
+        }
+    }
     let mut closure = HashSet::new();
-    for (_, _, _, source_part) in &imports {
+    for (_, _, _, _, source_part) in &imports {
+        discover_fragment_part_closure(&fragment.package, source_part, &mut closure)?;
+    }
+    for (_, _, _, source_part) in &note_relationship_imports {
         discover_fragment_part_closure(&fragment.package, source_part, &mut closure)?;
     }
     let mut closure = closure.into_iter().collect::<Vec<_>>();
     closure.sort();
+    if !allow_external_relationships
+        && closure.iter().any(|part| {
+            fragment
+                .package
+                .get_part_rels(part)
+                .is_some_and(|relationships| {
+                    relationships.items.iter().any(|relationship| {
+                        !crate::document::relationship_is_internal(relationship)
+                    })
+                })
+        })
+    {
+        return Err(Error::Other(
+            "rich mail merge fragment has a non-internal relationship".to_owned(),
+        ));
+    }
+
     for source_part in closure {
-        let destination_part = if policy.reuse_related_parts() {
+        let destination_part = if policy.reuse_related_parts()
+            && !remapped_store_properties.contains(&source_part)
+        {
             equivalent_fragment_leaf_part(&fragment.package, document, &source_part).map_or_else(
                 || {
                     document
@@ -1996,8 +2331,49 @@ fn import_fragment_content_with_state(
         };
         part_map.insert(source_part, destination_part);
     }
+    for (source_part, destination_part) in &part_map {
+        let payload = fragment.package.get_part(source_part).ok_or_else(|| {
+            Error::Other(format!(
+                "document fragment reachable part {source_part} is missing"
+            ))
+        })?;
+        if let Some(relationships) = fragment.package.get_part_rels(source_part) {
+            for relationship in &relationships.items {
+                if !crate::document::relationship_is_internal(relationship) {
+                    continue;
+                }
+                let target = OpcPackage::resolve_rel_target(source_part, &relationship.target);
+                let copied_target = part_map.get(&target).ok_or_else(|| {
+                    Error::Other(format!("fragment target {target} was not reserved"))
+                })?;
+                let new_target = relative_fragment_target(destination_part, copied_target);
+                if new_target != relationship.target
+                    && !relationship.target.is_empty()
+                    && payload
+                        .windows(relationship.target.len())
+                        .any(|window| window == relationship.target.as_bytes())
+                {
+                    return Err(Error::Other(format!(
+                        "document fragment part {source_part} embeds renamed target {}; opaque payload cannot be rewritten safely",
+                        relationship.target
+                    )));
+                }
+            }
+        }
+        for (old, new) in &part_map {
+            if old != new
+                && payload
+                    .windows(old.len())
+                    .any(|window| window == old.as_bytes())
+            {
+                return Err(Error::Other(format!(
+                    "document fragment part {source_part} embeds renamed part name {old}; opaque payload cannot be rewritten safely for {destination_part}"
+                )));
+            }
+        }
+    }
     let mut copied = HashSet::new();
-    for (destination_owner, relationship_id, relationship, source_part) in imports {
+    for (selected_owner, destination_owner, relationship_id, relationship, source_part) in imports {
         let destination_part = copy_fragment_part(
             &fragment.package,
             document,
@@ -2017,33 +2393,156 @@ fn import_fragment_content_with_state(
                     "rich mail merge relationship allocation failed for {destination_owner}: {error}"
                 ))
             })?;
-        if destination_owner == document.doc_part_name {
+        if selected_owner {
             relationship_map.insert(relationship_id, destination_id);
         } else {
             comment_relationship_map.insert(relationship_id, destination_id);
         }
     }
+    for (selected_owner, destination_owner, relationship_id, relationship) in external_imports {
+        let destination_id = document.add_external_relationship_checked(
+            &destination_owner,
+            &relationship.rel_type,
+            &relationship.target,
+        )?;
+        if selected_owner {
+            relationship_map.insert(relationship_id, destination_id);
+        } else {
+            comment_relationship_map.insert(relationship_id, destination_id);
+        }
+    }
+    let mut note_relationship_maps: HashMap<String, BTreeMap<String, String>> = HashMap::new();
+    for (destination_owner, old_id, relationship, source_part) in note_relationship_imports {
+        let copied_part = copy_fragment_part(
+            &fragment.package,
+            document,
+            &source_part,
+            &part_map,
+            &mut copied,
+        )?;
+        let new_id = document.add_relative_internal_relationship_checked(
+            &destination_owner,
+            &relationship.rel_type,
+            &copied_part,
+        )?;
+        note_relationship_maps
+            .entry(destination_owner)
+            .or_default()
+            .insert(old_id, new_id);
+    }
+    for (destination_owner, old_id, relationship) in note_external_imports {
+        let new_id = document.add_external_relationship_checked(
+            &destination_owner,
+            &relationship.rel_type,
+            &relationship.target,
+        )?;
+        note_relationship_maps
+            .entry(destination_owner)
+            .or_default()
+            .insert(old_id, new_id);
+    }
+    for (store_item_id, source_item_part, new_id) in binding_remaps {
+        let item_relationships = fragment.package.get_part_rels(&source_item_part).ok_or_else(|| Error::Other(format!(
+                    "document fragment custom XML store {store_item_id} has no item properties relationship"
+                )))?;
+        let props_relationship = item_relationships.items.iter().find(|relationship| relationship.rel_type.ends_with("/customXmlProps") && crate::document::relationship_is_internal(relationship)).ok_or_else(|| Error::Other(format!(
+                    "document fragment custom XML store {store_item_id} has no item properties relationship"
+                )))?;
+        let source_props =
+            OpcPackage::resolve_rel_target(&source_item_part, &props_relationship.target);
+        let destination_props = part_map.get(&source_props).ok_or_else(|| {
+            Error::Other(format!(
+                "document fragment custom XML properties {source_props} were not copied"
+            ))
+        })?;
+        if fragment_store_item_ids(&fragment_xml)?.contains(&store_item_id) {
+            fragment_xml = replace_fragment_store_id(
+                &fragment_xml,
+                &store_item_id,
+                &new_id,
+                b"dataBinding",
+                b"storeItemID",
+            )?;
+        }
+        for note in &mut note_copies {
+            if fragment_store_item_ids(&note.xml)?.contains(&store_item_id) {
+                note.xml = replace_fragment_store_id(
+                    &note.xml,
+                    &store_item_id,
+                    &new_id,
+                    b"dataBinding",
+                    b"storeItemID",
+                )?;
+            }
+        }
+        if let Some(comments) = fragment.comments.as_mut() {
+            let comments_xml = comments.to_xml()?;
+            if fragment_store_item_ids(&comments_xml)?.contains(&store_item_id) {
+                *comments = CT_Comments::from_xml(&replace_fragment_store_id(
+                    &comments_xml,
+                    &store_item_id,
+                    &new_id,
+                    b"dataBinding",
+                    b"storeItemID",
+                )?)?;
+            }
+        }
+        let props_xml = document
+            .package
+            .get_part(destination_props)
+            .ok_or_else(|| {
+                Error::Other(format!(
+                    "document fragment custom XML properties {destination_props} are missing"
+                ))
+            })?;
+        let patched_props = replace_fragment_store_id(
+            props_xml,
+            &store_item_id,
+            &new_id,
+            b"datastoreItem",
+            b"itemID",
+        )?;
+        document.package.set_part(destination_props, patched_props);
+    }
     if !relationship_map.is_empty() {
         fragment_xml = patch_relationship_ids(&fragment_xml, &relationship_map)?;
     }
-    if styles_changed || !relationship_map.is_empty() {
-        fragment
-            .package
-            .set_part(&fragment.doc_part_name, fragment_xml.clone());
-        fragment = reopen_staged_document(fragment)?;
-        prune_document_fragment_dependencies(&mut fragment)?;
+    fragment.document = CT_Document::from_xml(&fragment_xml)?;
+    let mut identity_xml = fragment_xml.clone();
+    for note in &note_copies {
+        validate_fragment_identity_ownership(&body_identity_values(&wrap_fragment_companion(
+            &note.xml,
+        ))?)?;
+        identity_xml.extend_from_slice(&note.xml);
     }
-    let patched_comments = if comment_relationship_map.is_empty() {
-        None
-    } else {
-        let source = fragment.comments.as_ref().ok_or_else(|| {
-            Error::Other("document fragment references a missing comments part".to_owned())
-        })?;
-        Some(CT_Comments::from_xml(&patch_relationship_ids(
-            &source.to_xml()?,
-            &comment_relationship_map,
+    if let Some(comments) = Document::fragment_comment_dependency_xml(
+        fragment.comments.as_ref(),
+        fragment.comments_extended.as_ref(),
+        &fragment_identity_values.comment_ids,
+    )? {
+        identity_xml.extend(comments);
+    }
+    let (_, mut identity_remap) = remap_fragment_xml_identities(
+        &wrap_fragment_companion(&identity_xml),
+        &mut document.identifiers,
+        identity_state,
+        false,
+    )?;
+    let patched_comments = Document::fragment_comment_dependency_xml(
+        fragment.comments.as_ref(),
+        fragment.comments_extended.as_ref(),
+        &fragment_identity_values.comment_ids,
+    )?
+    .map(|xml| -> Result<CT_Comments> {
+        let xml = patch_relationship_ids(&xml, &comment_relationship_map)?;
+        let wrapped =
+            patch_body_identity_attributes(&wrap_fragment_companion(&xml), &identity_remap)?;
+        let xml = unwrap_fragment_companion(&wrapped);
+        Ok(CT_Comments::from_xml(&freshen_fragment_marker_ids(
+            document, &xml,
         )?)?)
-    };
+    })
+    .transpose()?;
     let comment_ids = document.import_fragment_comments_staged(
         patched_comments.as_ref().or(fragment.comments.as_ref()),
         fragment.comments_extended.as_ref(),
@@ -2051,21 +2550,25 @@ fn import_fragment_content_with_state(
     )?;
     if !comment_ids.is_empty() {
         let comment_remap = BodyIdentityRemap {
-            comment_ids,
+            comment_ids: comment_ids.clone(),
             ..Default::default()
         };
         fragment_xml = patch_body_identity_attributes(&fragment_xml, &comment_remap)?;
+        for note in &mut note_copies {
+            note.xml = unwrap_fragment_companion(&patch_body_identity_attributes(
+                &wrap_fragment_companion(&note.xml),
+                &comment_remap,
+            )?);
+        }
         let updated = patch_body_identity_attributes(&fragment.document.to_xml()?, &comment_remap)?;
         fragment.document = CT_Document::from_xml(&updated)?;
     }
-    let identity_remap =
-        remap_body_identities(&mut fragment, &mut document.identifiers, identity_state)?;
-    // `remap_body_identities` made the typed copy's drawing ids unique, and
-    // the same pass over the same drawings does it for the source XML.
+    identity_remap.drop_paragraph_identities = true;
     fragment_xml = patch_body_identity_attributes(
         &uniquify_drawing_ids_in_xml(&fragment_xml)?,
         &identity_remap,
     )?;
+    fragment.document = CT_Document::from_xml(&fragment_xml)?;
     let insert_at = document.document.body.content.len();
     let numbering_remap = document.insert_document_fragment_content_staged(
         insert_at,
@@ -2073,15 +2576,35 @@ fn import_fragment_content_with_state(
         policy.reuse_numbering(),
     )?;
     let typed = document.document.body.content.drain(insert_at..).collect();
-    for (old, new) in numbering_remap {
-        patch_word_value(
-            &mut fragment_xml,
-            b"numId",
-            &old.to_string(),
-            &new.to_string(),
-        )?;
+    let numbering_values = numbering_remap
+        .iter()
+        .map(|(old, new)| (old.to_string(), new.to_string()))
+        .collect::<BTreeMap<_, _>>();
+    patch_word_values(&mut fragment_xml, &[b"numId"], &numbering_values)?;
+    if let Some(comments) = document.comments.as_mut() {
+        for comment in &mut comments.comments {
+            if !comment_ids.values().any(|id| *id == comment.id.to_string()) {
+                continue;
+            }
+            let mut selected = CT_Comments::new();
+            selected.comments.push(comment.clone());
+            let mut xml = selected.to_xml()?;
+            patch_word_values(&mut xml, &[b"numId"], &numbering_values)?;
+            *comment = CT_Comments::from_xml(&xml)?.comments.remove(0);
+        }
     }
-    let xml = fragment_xml;
+    for note in note_copies {
+        let mut xml = match note_relationship_maps.get(&note.destination_part) {
+            Some(map) => patch_relationship_ids(&note.xml, map)?,
+            None => note.xml,
+        };
+        patch_word_values(&mut xml, &[b"numId"], &numbering_values)?;
+        let wrapped =
+            patch_body_identity_attributes(&wrap_fragment_companion(&xml), &identity_remap)?;
+        let xml = freshen_fragment_marker_ids(document, &unwrap_fragment_companion(&wrapped))?;
+        document.append_fragment_note_staged(note.kind, &note.destination_part, xml)?;
+    }
+    let xml = freshen_fragment_marker_ids(document, &fragment_xml)?;
     Ok(ImportedFragmentContent { typed, xml })
 }
 
@@ -2106,6 +2629,10 @@ fn equivalent_fragment_leaf_part(
             (bytes.as_slice() == source_bytes
                 && destination
                     .package
+                    .get_part_rels(part_name)
+                    .is_none_or(|relationships| relationships.items.is_empty())
+                && destination
+                    .package
                     .content_types
                     .content_type_for(part_name)
                     == Some(source_content_type))
@@ -2114,7 +2641,10 @@ fn equivalent_fragment_leaf_part(
 }
 
 fn prune_document_fragment_dependencies(fragment: &mut Document) -> Result<()> {
-    let body_xml = fragment.document.to_xml()?;
+    let mut body_xml = fragment.document.to_xml()?;
+    for companion in fragment_dependency_companions(fragment)? {
+        body_xml.extend(companion);
+    }
     let mut used_numbering = word_value_attributes(&body_xml, &[b"numId"])?
         .into_iter()
         .filter_map(|value| value.parse::<u32>().ok())
@@ -2319,29 +2849,44 @@ fn remap_fragment_style_collisions(
         }
     }
     if let Some(numbering) = &mut fragment.numbering {
-        for abstract_numbering in &mut numbering.abstract_nums {
-            for (_, raw) in &mut abstract_numbering.extra_xml {
-                for (old, new) in &replacements {
-                    for element in [b"styleLink".as_slice(), b"numStyleLink"] {
-                        patch_word_value(raw, element, old, new)?;
-                    }
-                }
-            }
-            for level in &mut abstract_numbering.levels {
-                if let Some(replacement) = level
-                    .p_style
-                    .as_ref()
-                    .and_then(|style_id| replacements.get(style_id))
-                {
-                    level.p_style = Some(replacement.clone());
-                }
-            }
-        }
+        let mut xml = numbering.to_xml()?;
+        patch_word_values(
+            &mut xml,
+            &[b"styleLink", b"numStyleLink", b"pStyle"],
+            &replacements,
+        )?;
+        *numbering = rdocx_oxml::numbering::CT_Numbering::from_xml(&xml)?;
     }
     for (old, new) in &replacements {
         for element in [b"pStyle".as_slice(), b"rStyle", b"tblStyle"] {
             patch_word_value(fragment_xml, element, old, new)?;
         }
+    }
+    for kind in [StoryKind::Footnote, StoryKind::Endnote] {
+        let stories = fragment.stories()?;
+        if let Some(story) = stories.iter().find(|story| story.kind() == kind) {
+            let part = story.part_name().to_owned();
+            let mut xml = fragment
+                .package
+                .get_part(&part)
+                .ok_or_else(|| Error::Other(format!("fragment note part {part} is missing")))?
+                .to_vec();
+            for (old, new) in &replacements {
+                for element in [b"pStyle".as_slice(), b"rStyle", b"tblStyle"] {
+                    patch_word_value(&mut xml, element, old, new)?;
+                }
+            }
+            fragment.package.set_part(&part, xml);
+        }
+    }
+    if let Some(comments) = fragment.comments.as_mut() {
+        let mut xml = comments.to_xml()?;
+        for (old, new) in &replacements {
+            for element in [b"pStyle".as_slice(), b"rStyle", b"tblStyle"] {
+                patch_word_value(&mut xml, element, old, new)?;
+            }
+        }
+        *comments = CT_Comments::from_xml(&xml)?;
     }
     let styles_part = fragment
         .package
@@ -2419,6 +2964,18 @@ fn remap_rich_rows(
 }
 
 fn patch_word_value(xml: &mut Vec<u8>, element_local: &[u8], old: &str, new: &str) -> Result<()> {
+    patch_word_values(
+        xml,
+        &[element_local],
+        &BTreeMap::from([(old.to_owned(), new.to_owned())]),
+    )
+}
+
+fn patch_word_values(
+    xml: &mut Vec<u8>,
+    elements: &[&[u8]],
+    replacements: &BTreeMap<String, String>,
+) -> Result<()> {
     let mut reader = NsReader::from_reader(xml.as_slice());
     let mut buffer = Vec::new();
     let mut edits = Vec::new();
@@ -2434,14 +2991,14 @@ fn patch_word_value(xml: &mut Vec<u8>, element_local: &[u8], old: &str, new: &st
             Event::Start(node) | Event::Empty(node) => {
                 let (namespace, local) = reader.resolver().resolve_element(node.name());
                 if namespace_is_word(&namespace)
-                    && local.as_ref() == element_local
+                    && elements.contains(&local.as_ref())
                     && let Some((key, value)) = resolved_element_attribute(
                         &node,
                         reader.resolver(),
                         b"val",
                         AttributeNamespace::Word,
                     )?
-                    && value == old
+                    && let Some(new) = replacements.get(&value)
                 {
                     let Some((relative_start, relative_end)) =
                         attribute_value_span(&xml[before..after], &key)
@@ -2470,7 +3027,400 @@ fn patch_word_value(xml: &mut Vec<u8>, element_local: &[u8], old: &str, new: &st
     Ok(())
 }
 
-fn relationship_ids_in_xml(xml: &[u8]) -> Result<Vec<String>> {
+// Companion roots are namespace-complete, so the existing body identity scanner can
+// inspect them without changing their own namespace bindings.
+fn wrap_fragment_companion(xml: &[u8]) -> Vec<u8> {
+    let mut wrapped = b"<f276:document xmlns:f276=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><f276:body>".to_vec();
+    wrapped.extend_from_slice(xml);
+    wrapped.extend_from_slice(b"</f276:body></f276:document>");
+    wrapped
+}
+
+fn unwrap_fragment_companion(xml: &[u8]) -> Vec<u8> {
+    let prefix_len = wrap_fragment_companion(&[]).len() - b"</f276:body></f276:document>".len();
+    xml[prefix_len..xml.len() - b"</f276:body></f276:document>".len()].to_vec()
+}
+
+fn fragment_dependency_companions(fragment: &Document) -> Result<Vec<Vec<u8>>> {
+    let mut pending = vec![fragment.document.to_xml()?];
+    let mut companions = Vec::new();
+    let mut seen_notes = HashSet::new();
+    let mut seen_comments = HashSet::new();
+    let mut index = 0;
+    while index < pending.len() {
+        let xml = pending[index].clone();
+        index += 1;
+        for (kind, id) in fragment_note_references(&xml)? {
+            if seen_notes.insert((kind, id)) {
+                let (_, note) = fragment.fragment_note_dependency(kind, id)?;
+                pending.push(note.clone());
+                companions.push(note);
+            }
+        }
+        let ids = body_identity_values(&wrap_fragment_companion(&xml))?
+            .comment_ids
+            .into_iter()
+            .filter(|id| seen_comments.insert(id.clone()))
+            .collect::<Vec<_>>();
+        if let Some(comments) = Document::fragment_comment_dependency_xml(
+            fragment.comments.as_ref(),
+            fragment.comments_extended.as_ref(),
+            &ids,
+        )? {
+            pending.push(comments.clone());
+            companions.push(comments);
+        }
+    }
+    Ok(companions)
+}
+
+fn patch_fragment_note_ids(
+    xml: &[u8],
+    maps: &HashMap<StoryKind, BTreeMap<String, String>>,
+) -> Result<Vec<u8>> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut edits = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let event = reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("invalid fragment note XML: {error}")))?;
+        let after = reader.buffer_position() as usize;
+        match event {
+            Event::Start(element) | Event::Empty(element) => {
+                let (namespace, local) = reader.resolver().resolve_element(element.name());
+                if namespace_is_word(&namespace) {
+                    let kind = match local.as_ref() {
+                        b"footnote" | b"footnoteReference" => Some(StoryKind::Footnote),
+                        b"endnote" | b"endnoteReference" => Some(StoryKind::Endnote),
+                        _ => None,
+                    };
+                    if let Some(map) = kind.and_then(|kind| maps.get(&kind)) {
+                        add_identity_attribute_edit(
+                            xml,
+                            before,
+                            after,
+                            &element,
+                            reader.resolver(),
+                            b"id",
+                            AttributeNamespace::Word,
+                            map,
+                            &mut edits,
+                        )?;
+                    }
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    let mut updated = xml.to_vec();
+    for edit in edits.into_iter().rev() {
+        updated.splice(edit.start..edit.end, edit.replacement);
+    }
+    Ok(updated)
+}
+
+fn fragment_marker_family(local: &[u8]) -> Option<(&'static str, u8)> {
+    match local {
+        b"permStart" => Some(("permission", 0)),
+        b"permEnd" => Some(("permission", 1)),
+        b"moveFromRangeStart" => Some(("move-from", 0)),
+        b"moveFromRangeEnd" => Some(("move-from", 1)),
+        b"moveToRangeStart" => Some(("move-to", 0)),
+        b"moveToRangeEnd" => Some(("move-to", 1)),
+        b"customXmlInsRangeStart" => Some(("custom-ins", 0)),
+        b"customXmlInsRangeEnd" => Some(("custom-ins", 1)),
+        b"customXmlDelRangeStart" => Some(("custom-del", 0)),
+        b"customXmlDelRangeEnd" => Some(("custom-del", 1)),
+        b"customXmlMoveFromRangeStart" => Some(("custom-move-from", 0)),
+        b"customXmlMoveFromRangeEnd" => Some(("custom-move-from", 1)),
+        b"customXmlMoveToRangeStart" => Some(("custom-move-to", 0)),
+        b"customXmlMoveToRangeEnd" => Some(("custom-move-to", 1)),
+        b"ins" | b"del" | b"moveFrom" | b"moveTo" | b"pPrChange" | b"rPrChange"
+        | b"tblPrChange" | b"trPrChange" | b"tcPrChange" | b"sectPrChange" | b"tblGridChange"
+        | b"numberingChange" => Some(("revision", 2)),
+        _ => None,
+    }
+}
+
+fn freshen_fragment_marker_ids(document: &Document, xml: &[u8]) -> Result<Vec<u8>> {
+    let mut occupied = HashSet::new();
+    // All Word IDs form a conservative occupied set. This also avoids aliases
+    // between the separately scoped annotation families.
+    for bytes in document.package.parts.values() {
+        let mut reader = NsReader::from_reader(bytes.as_slice());
+        let mut buffer = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buffer) {
+                Ok(Event::Start(element) | Event::Empty(element)) => {
+                    if let Ok(Some((_, value))) = resolved_element_attribute(
+                        &element,
+                        reader.resolver(),
+                        b"id",
+                        AttributeNamespace::Word,
+                    ) && let Ok(id) = value.parse::<i32>()
+                    {
+                        occupied.insert(id);
+                    }
+                }
+                Ok(Event::Eof) | Err(_) => break,
+                _ => {}
+            }
+            buffer.clear();
+        }
+    }
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut maps = BTreeMap::<String, BTreeMap<String, String>>::new();
+    let mut endpoints = BTreeMap::<(String, String), [usize; 2]>::new();
+    let mut pending = Vec::new();
+    let mut next = 0_i32;
+    loop {
+        let before = reader.buffer_position() as usize;
+        let event = reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("invalid fragment annotation XML: {error}")))?;
+        let after = reader.buffer_position() as usize;
+        match event {
+            Event::Start(element) | Event::Empty(element) => {
+                let (namespace, local) = reader.resolver().resolve_element(element.name());
+                if namespace_is_word(&namespace)
+                    && let Some((family, endpoint)) = fragment_marker_family(local.as_ref())
+                {
+                    let (_, old) = resolved_element_attribute(
+                        &element,
+                        reader.resolver(),
+                        b"id",
+                        AttributeNamespace::Word,
+                    )?
+                    .ok_or_else(|| {
+                        Error::Other(format!("document fragment {family} annotation has no ID"))
+                    })?;
+                    if endpoint < 2 {
+                        endpoints
+                            .entry((family.to_owned(), old.clone()))
+                            .or_default()[usize::from(endpoint)] += 1;
+                    }
+                    let map = maps.entry(family.to_owned()).or_default();
+                    if let std::collections::btree_map::Entry::Vacant(entry) = map.entry(old) {
+                        while occupied.contains(&next) {
+                            next = next.checked_add(1).ok_or_else(|| {
+                                Error::Other(
+                                    "document fragment annotation ID range is exhausted".to_owned(),
+                                )
+                            })?;
+                        }
+                        occupied.insert(next);
+                        entry.insert(next.to_string());
+                    }
+                    let mut edits = Vec::new();
+                    add_identity_attribute_edit(
+                        xml,
+                        before,
+                        after,
+                        &element,
+                        reader.resolver(),
+                        b"id",
+                        AttributeNamespace::Word,
+                        map,
+                        &mut edits,
+                    )?;
+                    pending.extend(edits);
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    if let Some(((family, id), _)) = endpoints.iter().find(|(_, counts)| **counts != [1, 1]) {
+        return Err(Error::Other(format!(
+            "document fragment {family} range {id} has incomplete or ambiguous ownership"
+        )));
+    }
+    let mut updated = xml.to_vec();
+    for edit in pending.into_iter().rev() {
+        updated.splice(edit.start..edit.end, edit.replacement);
+    }
+    Ok(updated)
+}
+
+fn fragment_store_item_ids(xml: &[u8]) -> Result<BTreeSet<String>> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut ids = BTreeSet::new();
+    loop {
+        match reader.read_event_into(&mut buffer).map_err(|error| {
+            Error::Other(format!("invalid document fragment binding XML: {error}"))
+        })? {
+            Event::Start(element) | Event::Empty(element) => {
+                let (namespace, local) = reader.resolver().resolve_element(element.name());
+                if namespace_is_word(&namespace)
+                    && local.as_ref() == b"dataBinding"
+                    && let Some((_, value)) = resolved_element_attribute(
+                        &element,
+                        reader.resolver(),
+                        b"storeItemID",
+                        AttributeNamespace::Word,
+                    )?
+                {
+                    ids.insert(crate::content_control::normalize_store_item_id(&value));
+                }
+            }
+            Event::Eof => return Ok(ids),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn fragment_note_references(xml: &[u8]) -> Result<Vec<(StoryKind, i32)>> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut references = Vec::new();
+    loop {
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("invalid document fragment note XML: {error}")))?
+        {
+            Event::Start(element) | Event::Empty(element) => {
+                let (namespace, local) = reader.resolver().resolve_element(element.name());
+                let kind = if namespace_is_word(&namespace) {
+                    match local.as_ref() {
+                        b"footnoteReference" => Some(StoryKind::Footnote),
+                        b"endnoteReference" => Some(StoryKind::Endnote),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                if let Some(kind) = kind {
+                    let (_, value) = resolved_element_attribute(
+                        &element,
+                        reader.resolver(),
+                        b"id",
+                        AttributeNamespace::Word,
+                    )?
+                    .ok_or_else(|| {
+                        Error::Other(format!("document fragment {kind:?} reference has no ID"))
+                    })?;
+                    let id = value.parse::<i32>().map_err(|_| {
+                        Error::Other(format!(
+                            "document fragment {kind:?} reference ID {value} is invalid"
+                        ))
+                    })?;
+                    if !references.contains(&(kind, id)) {
+                        references.push((kind, id));
+                    }
+                }
+            }
+            Event::Eof => return Ok(references),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn replace_fragment_store_id(
+    xml: &[u8],
+    old: &str,
+    new: &str,
+    element_name: &[u8],
+    attribute_name: &[u8],
+) -> Result<Vec<u8>> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut edits = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let event = reader.read_event_into(&mut buffer).map_err(|error| {
+            Error::Other(format!(
+                "invalid document fragment custom XML store: {error}"
+            ))
+        })?;
+        let after = reader.buffer_position() as usize;
+        match event {
+            Event::Start(element) | Event::Empty(element) => {
+                let (namespace, local) = reader.resolver().resolve_element(element.name());
+                let expected_namespace = if element_name == b"datastoreItem" {
+                    namespace_matches(
+                        &namespace,
+                        "http://schemas.openxmlformats.org/officeDocument/2006/customXml",
+                    )
+                } else {
+                    namespace_is_word(&namespace)
+                };
+                if !expected_namespace || local.as_ref() != element_name {
+                    continue;
+                }
+                for attribute in element.attributes() {
+                    let attribute = attribute.map_err(|error| {
+                        Error::Other(format!(
+                            "invalid document fragment custom XML store attribute: {error}"
+                        ))
+                    })?;
+                    let (attribute_namespace, local) =
+                        reader.resolver().resolve_attribute(attribute.key);
+                    let namespace_matches_expected = if element_name == b"datastoreItem" {
+                        namespace_matches(
+                            &attribute_namespace,
+                            "http://schemas.openxmlformats.org/officeDocument/2006/customXml",
+                        )
+                    } else {
+                        namespace_is_word(&attribute_namespace)
+                    };
+                    if !namespace_matches_expected || local.as_ref() != attribute_name {
+                        continue;
+                    }
+                    let value = quick_xml::escape::unescape(
+                        std::str::from_utf8(&attribute.value).map_err(|error| {
+                            Error::Other(format!(
+                                "invalid document fragment custom XML store value: {error}"
+                            ))
+                        })?,
+                    )
+                    .map_err(|error| {
+                        Error::Other(format!(
+                            "invalid document fragment custom XML store value: {error}"
+                        ))
+                    })?;
+                    if crate::content_control::normalize_store_item_id(&value)
+                        != crate::content_control::normalize_store_item_id(old)
+                    {
+                        continue;
+                    }
+                    let (start, end) =
+                        attribute_value_span(&xml[before..after], attribute.key.as_ref())
+                            .ok_or_else(|| {
+                                Error::Other(
+                                    "document fragment custom XML store attribute span is missing"
+                                        .to_owned(),
+                                )
+                            })?;
+                    edits.push((before + start, before + end));
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    if edits.is_empty() {
+        return Err(Error::Other(format!(
+            "document fragment custom XML store {old} cannot be rewritten without corrupting its XML"
+        )));
+    }
+    let mut result = xml.to_vec();
+    for (start, end) in edits.into_iter().rev() {
+        result.splice(start..end, new.as_bytes().iter().copied());
+    }
+    Ok(result)
+}
+
+pub(crate) fn relationship_ids_in_xml(xml: &[u8]) -> Result<Vec<String>> {
     let mut reader = NsReader::from_reader(xml);
     let mut buffer = Vec::new();
     let mut ids = Vec::new();
@@ -2515,7 +3465,10 @@ fn relationship_ids_in_xml(xml: &[u8]) -> Result<Vec<String>> {
     }
 }
 
-fn patch_relationship_ids(xml: &[u8], replacements: &BTreeMap<String, String>) -> Result<Vec<u8>> {
+pub(crate) fn patch_relationship_ids(
+    xml: &[u8],
+    replacements: &BTreeMap<String, String>,
+) -> Result<Vec<u8>> {
     let mut reader = NsReader::from_reader(xml);
     let mut buffer = Vec::new();
     let mut edits = Vec::new();
@@ -2580,7 +3533,7 @@ fn copy_fragment_part(
     source: &OpcPackage,
     destination: &mut Document,
     source_part: &str,
-    part_map: &HashMap<String, String>,
+    part_map: &BTreeMap<String, String>,
     copied: &mut HashSet<String>,
 ) -> Result<String> {
     let destination_part = part_map.get(source_part).cloned().ok_or_else(|| {
@@ -2599,6 +3552,9 @@ fn copy_fragment_part(
     destination
         .package
         .set_part(&destination_part, bytes.to_vec());
+    destination
+        .identifiers
+        .preserve_fragment_part(&destination_part);
     if let Some(content_type) = source.content_types.content_type_for(source_part) {
         destination
             .package
@@ -2613,9 +3569,12 @@ fn copy_fragment_part(
         relationships.sort_by(|left, right| left.id.cmp(&right.id));
         for relationship in relationships {
             if !crate::document::relationship_is_internal(&relationship) {
-                return Err(Error::Other(format!(
-                    "rich mail merge fragment part {source_part} has a non-internal relationship"
-                )));
+                destination
+                    .package
+                    .get_or_create_part_rels(&destination_part)
+                    .items
+                    .push(relationship);
+                continue;
             }
             let child_source = OpcPackage::resolve_rel_target(source_part, &relationship.target);
             let child_destination =
@@ -2646,6 +3605,17 @@ fn discover_fragment_part_closure(
     source_part: &str,
     discovered: &mut HashSet<String>,
 ) -> Result<()> {
+    if source
+        .content_types
+        .content_type_for(source_part)
+        .is_some_and(|content_type| {
+            content_type.starts_with("application/vnd.openxmlformats-package.digital-signature")
+        })
+    {
+        return Err(Error::Other(format!(
+            "document fragment integrity-bound signature part {source_part} cannot remain valid after remapping"
+        )));
+    }
     if !discovered.insert(source_part.to_owned()) {
         return Ok(());
     }
@@ -2657,9 +3627,7 @@ fn discover_fragment_part_closure(
     if let Some(relationships) = source.get_part_rels(source_part) {
         for relationship in &relationships.items {
             if !crate::document::relationship_is_internal(relationship) {
-                return Err(Error::Other(format!(
-                    "rich mail merge fragment part {source_part} has a non-internal relationship"
-                )));
+                continue;
             }
             let child_source = OpcPackage::resolve_rel_target(source_part, &relationship.target);
             discover_fragment_part_closure(source, &child_source, discovered)?;
@@ -7131,6 +8099,24 @@ impl BodyIdentityState {
             );
             state.used_names.extend(values.bookmark_names);
             state.used_names.extend(values.reference_names);
+            for bytes in document.package.parts.values() {
+                if let Ok(values) = body_identity_values(&wrap_fragment_companion(bytes)) {
+                    state.used_content_control_ids.extend(
+                        values
+                            .content_control_ids
+                            .iter()
+                            .filter_map(|value| value.parse::<u32>().ok()),
+                    );
+                    state.used_non_visual_drawing_ids.extend(
+                        values
+                            .non_visual_drawing_ids
+                            .iter()
+                            .filter_map(|value| value.parse::<u32>().ok()),
+                    );
+                    state.used_names.extend(values.bookmark_names);
+                    state.used_names.extend(values.reference_names);
+                }
+            }
         }
         Ok(state)
     }
@@ -7201,12 +8187,24 @@ fn remap_body_identities(
     identifiers: &mut DocumentIdentifiers,
     state: &mut BodyIdentityState,
 ) -> Result<BodyIdentityRemap> {
+    let (updated, remap) =
+        remap_fragment_xml_identities(&document.document.to_xml()?, identifiers, state, true)?;
+    document.document = CT_Document::from_xml(&updated)?;
+    Ok(remap)
+}
+
+fn remap_fragment_xml_identities(
+    source: &[u8],
+    identifiers: &mut DocumentIdentifiers,
+    state: &mut BodyIdentityState,
+    drop_paragraph_identities: bool,
+) -> Result<(Vec<u8>, BodyIdentityRemap)> {
     // The drawing remap is keyed by value, so a source that repeats a
     // `wp:docPr/@id` is first made unique and every copy gets its own id.
-    let xml = uniquify_drawing_ids_in_xml(&document.document.to_xml()?)?;
+    let xml = uniquify_drawing_ids_in_xml(source)?;
     let values = body_identity_values(&xml)?;
     let mut remap = BodyIdentityRemap {
-        drop_paragraph_identities: true,
+        drop_paragraph_identities,
         ..Default::default()
     };
     for value in values.bookmark_ids {
@@ -7240,8 +8238,7 @@ fn remap_body_identities(
         }
     }
     let updated = patch_body_identity_attributes(&xml, &remap)?;
-    document.document = CT_Document::from_xml(&updated)?;
-    Ok(remap)
+    Ok((updated, remap))
 }
 
 fn body_identity_values(xml: &[u8]) -> Result<BodyIdentityValues> {
@@ -12089,7 +13086,7 @@ mod tests {
             discover_fragment_part_closure(&source, "/word/media/root.bin", &mut closure).unwrap();
             let mut closure = closure.into_iter().collect::<Vec<_>>();
             closure.sort();
-            let mut part_map = HashMap::new();
+            let mut part_map = BTreeMap::new();
             for source_part in closure {
                 let destination_part = destination
                     .identifiers
