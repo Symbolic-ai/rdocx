@@ -560,6 +560,8 @@ defended.
 | F-274 | S89 | L | 5 | 1 | 2026-10-04 | Added checked note numbering and placement policies, custom markers and authored continuation records with pinned Word evidence and 49 matching hashes |
 | F-275 | S89 | L | 5 | 1 | 2026-10-04 | Added atomic bookmark, comment, permission and proofing ranges across eight story owners and nested controls with 49 matching hashes |
 
+| F-276 | S89 | L | 5 | 2 | 2026-10-05 | Added deterministic fragment closure across 64 owner pairs with exact dependency remaps, atomic failures and 49 matching hashes |
+
 ## Velocity
 
 Recalculated at each sprint close. The backlog assumes about 2 stories per week

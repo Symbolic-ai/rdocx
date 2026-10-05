@@ -17414,3 +17414,23 @@ closure. The 18-page Word SSIM trend is advisory and below its target.
 **Hash harness.** Unchanged on the worker, all 49 entries match. The integrated sprint gate remains due.
 
 **Notes for future sessions.** F-276 consumes these paired-range identities during fragment import. Keep `work/f-275-codex` through final sprint verification and review. Its clean worktree was removed after the integration commit.
+
+### F-276, Complete fragment conflict and dependency policy
+
+**Sprint.** S89
+**Completed.** 2026-10-05
+**Size.** L, estimated 5 days, actual 2 days
+
+**What was built.** Native block fragments now capture and import across body, headers, footers, notes, comments, table cells, text boxes and supported nested block-control boundaries. The transaction closes styles and numbering, custom XML bindings and item properties, notes, comment threads, paired markers, revisions and reachable chart, diagram, embedding and opaque package graphs. Conflict maps preserve exact references and deterministic identities before one staged candidate serializes and reopens.
+
+**Non-obvious choices.** Explicit fragment imports retain external edges without fetching. Legacy rich merge retains its external-edge prohibition. Opaque companions keep payload bytes and local relationship IDs, while internal targets change together. Unsafe embedded part-name references and integrity-bound signatures reject atomically. Equivalent related-part reuse requires both parts to be leaves. Binding GUID aliases share semantic identity, and allocation reserves incoming companion stores as well as destination stores.
+
+**Deviations from the design plan.** The existing native API exposes block boundaries, so the plan clarifies its nested control path and rejects inline selections. The HLD impact gained the native bindings section that still said main-body only. Three independent microscope passes found and resolved six defects involving overlapping numbering maps, leaf reuse, GUID aliases, inherited numbering namespaces, store reservations and legacy companion external edges. Pass 3 reported zero defects and zero smells.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`, DOCX-043, `docs/hld/03-architecture.md`, fragment ownership and closure, `docs/hld/04-opc-and-packaging.md`, graph and transaction integrity, `docs/hld/10-bindings-spec.md`, native API, `docs/hld/12-testing-strategy.md`, dependency gate, `docs/hld/13-risks-and-open-questions.md`, fragment integrity, and `docs/hld/14-development-backlog.md`, F-276 acceptance.
+
+**Tests.** The named full-story gate covers all 64 image-bearing owner pairs and two complete conflict imports. It fails against the claimed base at the original main-body restriction. Final scoped verification passed 488 unit, 360 integration, 769 regression and 2 doctests, plus 17 focused all-feature tests and 140 policy tests with two existing skips. Formatting, Clippy, prose and generated adapter checks passed. The verified workspace dry run used all 22 local patches with `--allow-dirty`, followed by archive regeneration proving every package below 10 MiB. Source and policy scripts on the integrated prefix are identical to the verified worker. Focused live-owner and roadmap reconciliation checks passed after integration. The final integrated full gate and sprint review remain due.
+
+**Hash harness.** Unchanged on the worker, all 49 entries match. Its source graph is unchanged on the integrated dependency prefix. Final integrated sprint verification remains due.
+
+**Notes for future sessions.** F-277 consumes the completed fragment transaction. Keep `work/f-276-codex` through sprint close. PR 269 is separately approved as F-X177 and runs before F-277 because archive and HLD files are exclusive. No new decoding or rendering support for opaque companions is claimed.
