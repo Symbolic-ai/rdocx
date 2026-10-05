@@ -1,6 +1,6 @@
 # F-277, Glossary and building-block creation
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S89
 **Size**: L
 **Depends on**: F-237, F-253, F-276
@@ -77,12 +77,12 @@ Expected unchanged. Existing producer glossary documents retain their current by
 
 ## Implementation checklist
 
-- [ ] Consume F-276's completed dependency import transaction.
-- [ ] Add structural entry edits in the existing glossary OXML file.
-- [ ] Add checked facade creation, classification, update, insertion and removal.
-- [ ] Wire first-use package relationship, part and content-type ownership.
-- [ ] Prove public-created round trips, relationship closure, raw preservation and atomic failures.
-- [ ] Run scoped verification and obtain a zero-finding microscope review.
+- [x] Consume F-276's completed dependency import transaction.
+- [x] Add structural entry edits in the existing glossary OXML file.
+- [x] Add checked facade creation, classification, update, insertion and removal.
+- [x] Wire first-use package relationship, part and content-type ownership.
+- [x] Prove public-created round trips, relationship closure, raw preservation and atomic failures.
+- [x] Run scoped verification and obtain a zero-finding microscope review.
 
 ## Open questions
 

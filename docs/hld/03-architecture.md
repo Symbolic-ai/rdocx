@@ -504,7 +504,10 @@ fields and the `w:glossaryDocument` root model. Typed form values and glossary
 properties are namespace aware, while retained XML remains the serialization
 source for every unsupported attribute and subtree. The `rdocx` facade owns
 relationship resolution, story-part identity, staged validation, and package
-commit for form-value and existing building-block replacement.
+commit for form values and the glossary lifecycle. Structural glossary edits
+retain untouched entry spans, container attributes and unsupported siblings.
+Glossary capture and insertion share the document-fragment dependency
+transaction, using the physical glossary part as relationship owner.
 
 Strict XML 1.0 lexical policy is shared by these glossary and facade scanners
 through `oxml_core::xml::validate_strict_xml_1_0`. The shared pass owns UTF-8,

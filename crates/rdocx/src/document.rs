@@ -1087,6 +1087,47 @@ impl Default for FragmentConflictPolicy {
 }
 
 impl DocumentFragment {
+    pub(crate) fn from_part_content(
+        document: &Document,
+        source_part: &str,
+        selected: Vec<u8>,
+    ) -> Result<Self> {
+        validate_fragment_block_content(&selected)?;
+        let mut candidate = document.clone_for_staging();
+        candidate.prepare_staged_package()?;
+        candidate.project_fragment_part_content(source_part, selected)?;
+        let mut output = std::io::Cursor::new(Vec::new());
+        candidate.package.write_to(&mut output)?;
+        Ok(Self {
+            package: output.into_inner(),
+            include_final_section_properties: false,
+        })
+    }
+
+    pub(crate) fn import_content_staged(
+        &self,
+        candidate: &mut Document,
+        destination_part: &str,
+        policy: FragmentConflictPolicy,
+    ) -> Result<Vec<u8>> {
+        let xml = crate::field::import_document_fragment_content(
+            candidate,
+            &self.package,
+            self.include_final_section_properties,
+            policy,
+            destination_part,
+        )?;
+        package_authoritative_body_fragment(
+            &xml,
+            self.include_final_section_properties,
+            &BTreeMap::new(),
+        )
+    }
+
+    pub(crate) fn contains_section_properties(&self) -> bool {
+        self.include_final_section_properties
+    }
+
     /// Capture one non-empty, half-open range of direct story items.
     ///
     /// `start` is included and `end` is excluded. Section properties can be
@@ -1139,27 +1180,7 @@ impl DocumentFragment {
         for item in &items[start_index..end_index] {
             let scope = story_namespace_scope_at(&source_xml, item.full.start)?;
             let xml = close_content_fragment_namespaces(&source_xml[item.full.clone()], &scope)?;
-            if item.kind == StoryItemKind::ContentControl {
-                validate_serialized_block_content_control(&xml)?;
-            } else {
-                let mut reader = NsReader::from_reader(xml.as_slice());
-                let mut buffer = Vec::new();
-                if let (namespace, Event::Start(element) | Event::Empty(element)) = reader
-                    .read_resolved_event_into(&mut buffer)
-                    .map_err(|error| {
-                        Error::Other(format!("invalid document fragment item: {error}"))
-                    })?
-                    && word_element(&namespace)
-                    && matches!(
-                        element.local_name().as_ref(),
-                        b"r" | b"hyperlink" | b"fldSimple" | b"drawing" | b"pict"
-                    )
-                {
-                    return Err(Error::Other(
-                        "document fragment boundaries admit block content only".to_owned(),
-                    ));
-                }
-            }
+            validate_fragment_block_item(&xml)?;
         }
         let content_end = story_owner_content_end(&source_xml, &owner)?;
         let selected_start = items[start_index].full.start;
@@ -1188,57 +1209,7 @@ impl DocumentFragment {
                     &scope,
                 )?);
             }
-            let source_part = source.part_name;
-            if source_part != candidate.doc_part_name {
-                let source_rels = candidate
-                    .package
-                    .get_part_rels(&source_part)
-                    .cloned()
-                    .unwrap_or_default();
-                let mut relationship_map = BTreeMap::new();
-                for relationship_id in crate::field::relationship_ids_in_xml(&selected)? {
-                    let relationship = source_rels.get_by_id(&relationship_id).ok_or_else(|| {
-                        Error::Other(format!(
-                            "fragment source relationship {relationship_id} is missing from {source_part}"
-                        ))
-                    })?;
-                    let destination_part = candidate.doc_part_name.clone();
-                    let new_id = if relationship_is_internal(relationship) {
-                        let target_part =
-                            OpcPackage::resolve_rel_target(&source_part, &relationship.target);
-                        candidate.add_internal_relationship_checked(
-                            &destination_part,
-                            &relationship.rel_type,
-                            &relative_target(&destination_part, &target_part),
-                        )?
-                    } else {
-                        candidate.add_external_relationship_checked(
-                            &destination_part,
-                            &relationship.rel_type,
-                            &relationship.target,
-                        )?
-                    };
-                    relationship_map.insert(relationship_id, new_id);
-                }
-                selected = crate::field::patch_relationship_ids(&selected, &relationship_map)?;
-            }
-            let main_xml = candidate
-                .package
-                .get_part(&candidate.doc_part_name)
-                .ok_or_else(|| Error::Other("document fragment main part is missing".to_owned()))?
-                .to_vec();
-            let main_owner = scan_story_owners(&main_xml, StoryKind::Body)?
-                .into_iter()
-                .find(|owner| owner.kind == StoryKind::Body)
-                .ok_or_else(|| Error::Other("document fragment main body is missing".to_owned()))?;
-            let main_items = direct_story_content_items(&main_xml, &main_owner)?;
-            let main_end = story_owner_content_end(&main_xml, &main_owner)?;
-            let main_start = main_items.first().map_or(main_end, |item| item.full.start);
-            let mut updated = main_xml;
-            updated.splice(main_start..main_end, selected);
-            candidate
-                .package
-                .set_part(&candidate.doc_part_name, updated);
+            candidate.project_fragment_part_content(&source.part_name, selected)?;
         }
         let mut output = std::io::Cursor::new(Vec::new());
         candidate.package.write_to(&mut output)?;
@@ -4169,6 +4140,7 @@ impl DocumentIdentifiers {
             rel_types::SETTINGS => "rdocxDeferredSettings",
             rel_types::FOOTNOTES => "rdocxDeferredFootnotes",
             rel_types::ENDNOTES => "rdocxDeferredEndnotes",
+            rel_types::GLOSSARY_DOCUMENT => "rdocxDeferredGlossary",
             rel_types::COMMENTS => "rdocxDeferredComments",
             crate::comments::COMMENTS_EXTENDED_REL_TYPE => "rdocxDeferredCommentsExtended",
             _ => {
@@ -6372,6 +6344,47 @@ fn direct_story_content_items(xml: &[u8], owner: &StoryOwnerSpan) -> Result<Vec<
         items.push(item);
     }
     Ok(items)
+}
+
+pub(crate) fn validate_fragment_block_content(content: &[u8]) -> Result<()> {
+    let mut xml = format!(
+        r#"<w:document xmlns:w="{}"><w:body>"#,
+        rdocx_oxml::namespace::W_NS
+    )
+    .into_bytes();
+    xml.extend_from_slice(content);
+    xml.extend_from_slice(b"</w:body></w:document>");
+    let owner = scan_story_owners(&xml, StoryKind::Body)?
+        .into_iter()
+        .find(|owner| owner.kind == StoryKind::Body)
+        .ok_or_else(|| Error::Other("fragment content has no body owner".to_owned()))?;
+    for item in direct_story_content_items(&xml, &owner)? {
+        let scope = story_namespace_scope_at(&xml, item.full.start)?;
+        let item_xml = close_content_fragment_namespaces(&xml[item.full], &scope)?;
+        validate_fragment_block_item(&item_xml)?;
+    }
+    Ok(())
+}
+
+fn validate_fragment_block_item(xml: &[u8]) -> Result<()> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    if let (namespace, Event::Start(element) | Event::Empty(element)) = reader
+        .read_resolved_event_into(&mut buffer)
+        .map_err(|error| Error::Other(format!("invalid document fragment item: {error}")))?
+        && word_element(&namespace)
+    {
+        match element.local_name().as_ref() {
+            b"sdt" => validate_serialized_block_content_control(xml)?,
+            b"r" | b"hyperlink" | b"fldSimple" | b"drawing" | b"pict" => {
+                return Err(Error::Other(
+                    "document fragment boundaries admit block content only".to_owned(),
+                ));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn story_owner_content_end(xml: &[u8], owner: &StoryOwnerSpan) -> Result<usize> {
@@ -14308,7 +14321,7 @@ impl Document {
         Ok(())
     }
 
-    fn reserve_document_part_bundle(
+    pub(crate) fn reserve_document_part_bundle(
         &mut self,
         existing: Option<&str>,
         preferred: &str,
@@ -14850,6 +14863,115 @@ impl Document {
             .into());
         }
         Ok((source, owner))
+    }
+
+    /// Bind an existing control to a snapshot-checked placeholder entry.
+    pub fn bind_building_block_placeholder(
+        &mut self,
+        control: &ContentLocation,
+        entry: &crate::BuildingBlockInfo,
+    ) -> Result<()> {
+        self.checked_building_block(entry)?;
+        if entry.block.gallery.as_deref() != Some("placeholder") {
+            return Err(Error::Other(
+                "placeholder binding requires the placeholder gallery".to_owned(),
+            ));
+        }
+        if control.item_kind != StoryItemKind::ContentControl
+            || control.index_path.len() != 1
+            || control.is_end
+        {
+            return Err(Error::Other(
+                "placeholder binding requires an existing content control location".to_owned(),
+            ));
+        }
+        let mut candidate = self.clone_for_staging();
+        candidate.prepare_staged_package()?;
+        let (source, owner) = candidate.fragment_story_source_and_owner(&control.story)?;
+        let part = source.part_name.clone();
+        let mut xml = source.xml.into_owned();
+        let item = scan_story_items(&xml, &owner)?
+            .get(control.index_path[0])
+            .cloned()
+            .ok_or_else(|| Error::Other("stale content control index".to_owned()))?;
+        if item.kind != StoryItemKind::ContentControl {
+            return Err(Error::Other(
+                "content control location changed kind".to_owned(),
+            ));
+        }
+        let scope = story_namespace_scope_at(&xml, item.full.start)?;
+        let raw = close_content_fragment_namespaces(&xml[item.full.clone()], &scope)?;
+        let updated = crate::building_block::bind_placeholder_xml(&raw, entry)?;
+        xml.splice(item.full, updated);
+        set_story_source_xml(&mut candidate, &part, xml)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
+    pub(crate) fn preserve_glossary_drawing_ids_staged(&mut self) -> Result<()> {
+        if let Some(glossary) = &self.glossary {
+            let ids = drawing_ids_in_xml(&glossary.to_xml()?)?;
+            self.identifiers.drawing_ids.extend(ids.iter().copied());
+            self.identifiers.preserved_drawing_ids.extend(ids);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn project_fragment_part_content(
+        &mut self,
+        source_part: &str,
+        mut selected: Vec<u8>,
+    ) -> Result<()> {
+        if source_part != self.doc_part_name {
+            let source_rels = self
+                .package
+                .get_part_rels(source_part)
+                .cloned()
+                .unwrap_or_default();
+            let mut relationship_map = BTreeMap::new();
+            for relationship_id in crate::field::relationship_ids_in_xml(&selected)? {
+                let relationship = source_rels.get_by_id(&relationship_id).ok_or_else(|| {
+                        Error::Other(format!(
+                            "fragment source relationship {relationship_id} is missing from {source_part}"
+                        ))
+                    })?;
+                let destination_part = self.doc_part_name.clone();
+                let new_id = if relationship_is_internal(relationship) {
+                    let target_part =
+                        OpcPackage::resolve_rel_target(source_part, &relationship.target);
+                    self.add_internal_relationship_checked(
+                        &destination_part,
+                        &relationship.rel_type,
+                        &relative_target(&destination_part, &target_part),
+                    )?
+                } else {
+                    self.add_external_relationship_checked(
+                        &destination_part,
+                        &relationship.rel_type,
+                        &relationship.target,
+                    )?
+                };
+                relationship_map.insert(relationship_id, new_id);
+            }
+            selected = crate::field::patch_relationship_ids(&selected, &relationship_map)?;
+        }
+        let main_xml = self
+            .package
+            .get_part(&self.doc_part_name)
+            .ok_or_else(|| Error::Other("document fragment main part is missing".to_owned()))?
+            .to_vec();
+        let main_owner = scan_story_owners(&main_xml, StoryKind::Body)?
+            .into_iter()
+            .find(|owner| owner.kind == StoryKind::Body)
+            .ok_or_else(|| Error::Other("document fragment main body is missing".to_owned()))?;
+        let main_items = direct_story_content_items(&main_xml, &main_owner)?;
+        let main_end = story_owner_content_end(&main_xml, &main_owner)?;
+        let main_start = main_items.first().map_or(main_end, |item| item.full.start);
+        let mut updated = main_xml;
+        updated.splice(main_start..main_end, selected);
+        self.package.set_part(&self.doc_part_name, updated);
+        Ok(())
     }
 
     fn fragment_story_source_and_owner<'a>(
@@ -16631,13 +16753,7 @@ impl Document {
                 "section-inclusive fragments require the main body destination".to_owned(),
             ));
         }
-        let imported_document_xml = crate::field::import_document_fragment_content(
-            &mut candidate,
-            &fragment.package,
-            fragment.include_final_section_properties,
-            policy,
-            &part_name,
-        )?;
+        let imported_xml = fragment.import_content_staged(&mut candidate, &part_name, policy)?;
         // Companion closure may append notes or comment threads to the same
         // physical part that owns the destination. Refresh that part before
         // inserting, so publishing the selected owner cannot discard them.
@@ -16654,12 +16770,6 @@ impl Document {
             owner = updated_owner;
             boundary = updated_boundary;
         }
-        let destination_scope = story_namespace_scope_at(&source_xml, owner.full.start)?;
-        let imported_xml = package_authoritative_body_fragment(
-            &imported_document_xml,
-            fragment.include_final_section_properties,
-            &destination_scope,
-        )?;
         insert_story_fragment(&mut source_xml, &owner, boundary, imported_xml)?;
         set_story_source_xml(&mut candidate, &part_name, source_xml)?;
         let reopened = candidate.reopen_prepared_staged()?;

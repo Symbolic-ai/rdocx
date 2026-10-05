@@ -7776,6 +7776,8 @@ Pedro Assumpcao and the rdocx maintainers.
                 275,
                 # F-276 closes the native block fragment dependency row.
                 276,
+                # F-277 closes the native modeled glossary lifecycle row.
+                277,
                 # F-267 completed the table style and conditional formatting
                 # authoring of DOCX-034 in S74 and handed the row's remaining
                 # conditional row geometry to F-268, so it no longer owns an

@@ -1230,8 +1230,17 @@ source-order ordinal within that part. `Document::building_blocks` and
 existing relationship-resolved glossary entries, identified by glossary part
 and source-order ordinal. Both mutation paths validate a staged package,
 reopen it, and commit only after the selected identity and typed value survive.
-They do not create entries, execute fields, or expand AutoText. Python, WASM,
-and CLI bindings remain unchanged.
+The additive pre-1.0 Rust surface also exposes `create_building_block`,
+`create_building_block_from_fragment`, `update_building_block`,
+`update_building_block_from_fragment`, `remove_building_block`,
+`building_block_fragment`, `insert_building_block` and
+`bind_building_block_placeholder`. Typed creation accepts dependency-free
+content. Fragment creation and insertion use `FragmentConflictPolicy` and
+the source package dependency closure. Mutation checks the complete
+`BuildingBlockInfo` snapshot, rejecting stale ordinals and changed values.
+Placeholder binding keeps the existing control discriminator and updates
+selection properties only on existing document-part control variants.
+Python, WASM, and CLI bindings remain unchanged.
 
 The native document renderer copies those defaults into the concrete optional
 `rdocx_layout::LayoutInput::math_properties` field. This field addition is a

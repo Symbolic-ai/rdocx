@@ -47055,3 +47055,515 @@ fn rich_merge_rejects_companion_external_edges_while_fragment_import_preserves_t
         );
     }
 }
+
+fn f277_block(name: &str, gallery: &str) -> rdocx::BuildingBlock {
+    let mut body = CT_Body::new();
+    body.sect_pr = None;
+    rdocx::BuildingBlock {
+        name: name.to_owned(),
+        kind: rdocx::BuildingBlockKind::BuildingBlock,
+        category: Some("reports".to_owned()),
+        description: Some("authored".to_owned()),
+        guid: None,
+        gallery: Some(gallery.to_owned()),
+        behaviors: vec!["content".to_owned()],
+        body,
+    }
+}
+
+#[test]
+fn public_created_building_blocks_insert_and_reopen() {
+    let mut source = Document::new();
+    source.add_paragraph("glossary text");
+    source.add_picture(
+        b"f277-image",
+        "glossary.png",
+        Length::pt(12.0),
+        Length::pt(12.0),
+    );
+    let body = f254_story(&source, StoryKind::Body);
+    let fragment = DocumentFragment::from_range(
+        &source,
+        &f254_item(&source, &body, 0),
+        &ContentLocation::end(body),
+        false,
+    )
+    .unwrap();
+    let mut document = document_with_content_controls(&wrap_word_body(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="existing"/><w:richText/><x:unknown xmlns:x="urn:producer" value='keep'/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>control</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    ));
+    let mut auto = f277_block("automatic", "autoTxt");
+    auto.kind = rdocx::BuildingBlockKind::AutoText;
+    let automatic = document
+        .create_building_block_from_fragment(auto, &fragment, FragmentConflictPolicy::rename_all())
+        .unwrap();
+    let block = document
+        .create_building_block_from_fragment(
+            f277_block("building", "docParts"),
+            &fragment,
+            FragmentConflictPolicy::rename_all(),
+        )
+        .unwrap();
+    let placeholder = document
+        .create_building_block_from_fragment(
+            f277_block("placeholder", "placeholder"),
+            &fragment,
+            FragmentConflictPolicy::rename_all(),
+        )
+        .unwrap();
+    let body = f254_story(&document, StoryKind::Body);
+    let control = document
+        .story_items(&body)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind() == StoryItemKind::ContentControl)
+        .unwrap()
+        .location()
+        .clone();
+    document
+        .bind_building_block_placeholder(&control, &placeholder)
+        .unwrap();
+    for entry in [&automatic, &block, &placeholder] {
+        let body = f254_story(&document, StoryKind::Body);
+        document
+            .insert_building_block(
+                &ContentLocation::end(body),
+                entry,
+                FragmentConflictPolicy::rename_all(),
+            )
+            .unwrap();
+    }
+    let bytes = document.to_bytes().unwrap();
+    let package = f249_package(&bytes);
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let entries = reopened.building_blocks().unwrap();
+    assert_eq!(entries.len(), 3);
+    assert_eq!(entries[0].block.kind, rdocx::BuildingBlockKind::AutoText);
+    assert!(
+        entries
+            .iter()
+            .all(|entry| entry.block.category.as_deref() == Some("reports")
+                && entry.block.behaviors == ["content"])
+    );
+    let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(xml.contains("richText"));
+    assert!(!xml.contains("docPartObj"));
+    assert!(xml.contains("placeholder"));
+    assert!(xml.contains("value='keep'"));
+    assert_eq!(xml.matches("glossary text").count(), 3);
+    for entry in &entries {
+        let rels = package.get_part_rels(&entry.glossary_part).unwrap();
+        for rel in &rels.items {
+            assert!(
+                package
+                    .get_part(&oxml_opc::OpcPackage::resolve_rel_target(
+                        &entry.glossary_part,
+                        &rel.target
+                    ))
+                    .is_some()
+            );
+        }
+    }
+}
+
+#[test]
+fn glossary_lifecycle_preserves_untouched_docparts() {
+    let mut document = Document::new();
+    let mut block = f277_block("first", "docParts");
+    block.body.content.push(BodyContent::Paragraph(CT_P::new()));
+    let first = document.create_building_block(block).unwrap();
+    let mut package = f249_package(&document.to_bytes().unwrap());
+    let raw = String::from(
+        r#"<p:docPart><p:docPartPr><p:name p:val='producer'/><x:keep v='exact'/></p:docPartPr><p:docPartBody x:attr='wrapper' xmlns:f2770='urn:collision'><p:p><p:r><p:t>producer text</p:t></p:r></p:p></p:docPartBody></p:docPart>"#,
+    );
+    let xml = std::str::from_utf8(package.get_part(&first.glossary_part).unwrap())
+        .unwrap()
+        .replace("w:", "p:")
+        .replace("xmlns:w=", "xmlns:p=")
+        .replace(
+            "<p:docParts>",
+            &format!("<p:docParts xmlns:x=\"urn:producer\"><x:before/>{raw}"),
+        )
+        .replace("</p:docParts>", "<x:after/></p:docParts>");
+    package.set_part(&first.glossary_part, xml.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+    let producer = document.building_blocks().unwrap()[0].clone();
+    let mut third = f277_block("third", "docParts");
+    third.body.content.push(BodyContent::Paragraph(CT_P::new()));
+    let third = document.create_building_block(third).unwrap();
+    let mut changed = third.block.clone();
+    changed.category = Some("changed".to_owned());
+    let third = document.update_building_block(&third, changed).unwrap();
+    let body = f254_story(&document, StoryKind::Body);
+    document
+        .insert_building_block(
+            &ContentLocation::end(body),
+            &producer,
+            FragmentConflictPolicy::rename_all(),
+        )
+        .unwrap();
+    document.remove_building_block(&third).unwrap();
+    let package = f249_package(&document.to_bytes().unwrap());
+    let xml = std::str::from_utf8(package.get_part(&producer.glossary_part).unwrap()).unwrap();
+    assert!(xml.contains(&raw), "{xml}");
+    assert!(xml.contains("<x:before/>") && xml.contains("<x:after/>"));
+    let body = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(body.contains("producer text"));
+}
+
+#[test]
+fn last_entry_removal_keeps_a_reopenable_empty_glossary() {
+    for empty in [false, true] {
+        let mut document = Document::new();
+        let entry = document
+            .create_building_block(f277_block("only", "docParts"))
+            .unwrap();
+        document.remove_building_block(&entry).unwrap();
+        let mut package = f249_package(&document.to_bytes().unwrap());
+        assert_eq!(
+            package.content_types.override_for(&entry.glossary_part),
+            Some(oxml_opc::content_types::WORD_GLOSSARY)
+        );
+        if empty {
+            package.set_part(&entry.glossary_part, format!(r#"<producer:glossaryDocument xmlns:producer="{W_NS}"><producer:docParts/></producer:glossaryDocument>"#).into_bytes());
+        }
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut reopened = Document::from_bytes(bytes.get_ref()).unwrap();
+        assert!(reopened.building_blocks().unwrap().is_empty());
+        let added = reopened
+            .create_building_block(f277_block("again", "docParts"))
+            .unwrap();
+        assert_eq!(added.glossary_part, entry.glossary_part);
+        assert_eq!(reopened.building_blocks().unwrap().len(), 1);
+    }
+}
+
+#[test]
+fn invalid_glossary_graph_rolls_back_atomically() {
+    let mut document = Document::new();
+    let first = document
+        .create_building_block(f277_block("first", "docParts"))
+        .unwrap();
+    let second = document
+        .create_building_block(f277_block("second", "docParts"))
+        .unwrap();
+    let before = document.to_bytes().unwrap();
+    assert!(
+        document
+            .create_building_block(f277_block("first", "docParts"))
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let mut changed = second.block.clone();
+    changed.description = Some("changed".to_owned());
+    let current = document.update_building_block(&second, changed).unwrap();
+    let before = document.to_bytes().unwrap();
+    assert!(document.remove_building_block(&second).is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+    document.remove_building_block(&first).unwrap();
+    let before = document.to_bytes().unwrap();
+    assert!(document.remove_building_block(&current).is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let mut invalid = f277_block("invalid", "docParts");
+    invalid.name.clear();
+    assert!(document.create_building_block(invalid).is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+    for content in [
+        r#"<w:p><w:pPr><w:pStyle w:val="missing"/></w:pPr></w:p>"#,
+        r#"<w:p><w:pPr><w:numPr><w:numId w:val="42"/></w:numPr></w:pPr></w:p>"#,
+        r#"<w:sdt><w:sdtPr><w:dataBinding w:storeItemID="missing"/></w:sdtPr><w:sdtContent/></w:sdt>"#,
+        r#"<w:p><w:r><w:footnoteReference w:id="42"/></w:r></w:p>"#,
+        r#"<w:p><w:hyperlink xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="missing"/></w:p>"#,
+    ] {
+        let mut block = f277_block("invalid dependency", "docParts");
+        block.body = rdocx_oxml::document::CT_Document::from_xml(
+            format!(r#"<w:document xmlns:w="{W_NS}"><w:body>{content}</w:body></w:document>"#)
+                .as_bytes(),
+        )
+        .unwrap()
+        .body;
+        assert!(document.create_building_block(block).is_err(), "{content}");
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+    let mut package = f249_package(&before);
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add_with_id(
+            "duplicate-glossary",
+            oxml_opc::relationship::rel_types::GLOSSARY_DOCUMENT,
+            "glossary/document.xml",
+        );
+    assert!(Document::from_bytes(&f236_package_bytes(package)).is_err());
+    let mut source = Document::new();
+    source.add_paragraph("section-bearing fragment");
+    let story = f254_story(&source, StoryKind::Body);
+    let fragment = DocumentFragment::from_range(
+        &source,
+        &f254_item(&source, &story, 0),
+        &ContentLocation::end(story),
+        true,
+    )
+    .unwrap();
+    assert!(
+        document
+            .create_building_block_from_fragment(
+                f277_block("bad fragment", "docParts"),
+                &fragment,
+                FragmentConflictPolicy::rename_all(),
+            )
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn glossary_placeholder_binding_preserves_related_control_variants_and_unknown_values() {
+    for kind in ["docPartObj", "docPartList"] {
+        let mut document = f276_all_story_fixture();
+        let mut package = f249_package(&document.to_bytes().unwrap());
+        let raw = format!(
+            r#"<w:sdt><w:sdtPr><w:tag w:val="bound"/><w:placeholder><w:docPart w:val="old" xmlns:x="urn:producer" x:keep='leaf'><x:inside/></w:docPart><x:other xmlns:x="urn:producer"/></w:placeholder><w:{kind}><w:docPartGallery w:val="autoTxt"/><w:docPartCategory w:val="old"/><w:docPartUnique/><x:opaque xmlns:x="urn:producer"/></w:{kind}></w:sdtPr><w:sdtContent><w:p><w:r><w:t>related</w:t></w:r></w:p></w:sdtContent></w:sdt>"#
+        );
+        package.set_part(
+            "/word/header-f276.xml",
+            format!(r#"<w:hdr xmlns:w="{W_NS}">{raw}</w:hdr>"#).into_bytes(),
+        );
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+        let entry = document
+            .create_building_block(f277_block("prompt", "placeholder"))
+            .unwrap();
+        let header = f254_story(&document, StoryKind::Header);
+        let location = document
+            .story_items(&header)
+            .unwrap()
+            .into_iter()
+            .find(|item| item.kind() == StoryItemKind::ContentControl)
+            .unwrap()
+            .location()
+            .clone();
+        document
+            .bind_building_block_placeholder(&location, &entry)
+            .unwrap();
+        let package = f249_package(&document.to_bytes().unwrap());
+        let xml = std::str::from_utf8(package.get_part("/word/header-f276.xml").unwrap()).unwrap();
+        assert!(xml.contains(&format!("w:{kind}")), "{xml}");
+        assert!(
+            xml.contains("docPartUnique")
+                && xml.contains("<x:inside/>")
+                && xml.contains("<x:opaque")
+                && xml.contains("<x:other"),
+            "{xml}"
+        );
+        assert!(
+            xml.contains("x:keep=") && xml.contains("w:val=\"prompt\""),
+            "{xml}"
+        );
+        assert!(!xml.contains("w:val=\"old\""), "{xml}");
+    }
+}
+
+#[test]
+fn glossary_fragment_updates_retain_wrapper_and_dependency_content() {
+    let mut source = Document::new();
+    source.add_paragraph("new body");
+    source.add_picture(
+        b"f277-update",
+        "new.png",
+        Length::pt(12.0),
+        Length::pt(12.0),
+    );
+    let body = f254_story(&source, StoryKind::Body);
+    let fragment = DocumentFragment::from_range(
+        &source,
+        &f254_item(&source, &body, 0),
+        &ContentLocation::end(body),
+        false,
+    )
+    .unwrap();
+    let mut document = Document::new();
+    let entry = document
+        .create_building_block(f277_block("update", "docParts"))
+        .unwrap();
+    let mut package = f249_package(&document.to_bytes().unwrap());
+    let xml = std::str::from_utf8(package.get_part(&entry.glossary_part).unwrap())
+        .unwrap()
+        .replace(
+            "<w:docPartBody>",
+            "<w:docPartBody xmlns:x=\"urn:producer\" x:wrapper='keep'>",
+        );
+    package.set_part(&entry.glossary_part, xml.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+    let entry = document.building_blocks().unwrap().remove(0);
+    let updated = document
+        .update_building_block_from_fragment(
+            &entry,
+            f277_block("update", "docParts"),
+            &fragment,
+            FragmentConflictPolicy::rename_all(),
+        )
+        .unwrap();
+    let before = document.to_bytes().unwrap();
+    assert!(document.remove_building_block(&entry).is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let body = f254_story(&document, StoryKind::Body);
+    document
+        .insert_building_block(
+            &ContentLocation::end(body),
+            &updated,
+            FragmentConflictPolicy::rename_all(),
+        )
+        .unwrap();
+    let package = f249_package(&document.to_bytes().unwrap());
+    let glossary = std::str::from_utf8(package.get_part(&entry.glossary_part).unwrap()).unwrap();
+    assert!(glossary.contains("x:wrapper='keep'"), "{glossary}");
+    assert!(glossary.contains("new body"));
+}
+
+#[test]
+fn glossary_fragment_update_keeps_ancestor_prefixes_and_exact_body_wrapper() {
+    let mut source = Document::new();
+    source.add_paragraph("replacement");
+    let story = f254_story(&source, StoryKind::Body);
+    let fragment = DocumentFragment::from_range(
+        &source,
+        &f254_item(&source, &story, 0),
+        &ContentLocation::end(story),
+        false,
+    )
+    .unwrap();
+    let mut document = f249_minimal_building_block_document();
+    let entry = document.building_blocks().unwrap().remove(0);
+    let mut package = f249_package(&document.to_bytes().unwrap());
+    let raw = format!(
+        r#"<p:glossaryDocument xmlns:p="{W_NS}" xmlns:x="urn:root"><p:docParts xmlns:y="urn:container"><p:docPart x:entry='keep'><p:docPartPr><p:name p:val="entry"/></p:docPartPr><p:docPartBody x:wrapper='root' y:wrapper='container'><p:p><p:r><p:t>old</p:t></p:r></p:p></p:docPartBody><x:keep/></p:docPart></p:docParts></p:glossaryDocument>"#
+    );
+    package.set_part(&entry.glossary_part, raw.into_bytes());
+    let mut document = Document::from_bytes(&f236_package_bytes(package)).unwrap();
+    let entry = document.building_blocks().unwrap().remove(0);
+    document
+        .update_building_block_from_fragment(
+            &entry,
+            f277_block("entry", "docParts"),
+            &fragment,
+            FragmentConflictPolicy::rename_all(),
+        )
+        .unwrap();
+    let package = f249_package(&document.to_bytes().unwrap());
+    let xml = std::str::from_utf8(package.get_part(&entry.glossary_part).unwrap()).unwrap();
+    assert!(
+        xml.contains("<p:docPartBody x:wrapper='root' y:wrapper='container'>"),
+        "{xml}"
+    );
+    assert!(
+        xml.contains("x:entry='keep'") && xml.contains("<x:keep/>") && xml.contains("replacement"),
+        "{xml}"
+    );
+}
+
+#[test]
+fn glossary_placeholder_missing_selectors_follow_schema_order() {
+    for kind in ["docPartObj", "docPartList"] {
+        for selectors in [
+            "<w:docPartUnique/>",
+            "<w:docPartCategory w:val='old'/><w:docPartUnique/>",
+        ] {
+            let mut document = Document::new();
+            document.add_paragraph("seed");
+            let mut package = f249_package(&document.to_bytes().unwrap());
+            let xml = format!(
+                r#"<w:document xmlns:w="{W_NS}"><w:body><w:sdt><w:sdtPr><w:{kind} xmlns:x="urn:producer" x:keep='attr'><x:before/>{selectors}<x:after/></w:{kind}></w:sdtPr><w:sdtContent><w:p/></w:sdtContent></w:sdt></w:body></w:document>"#
+            );
+            package.set_part("/word/document.xml", xml.into_bytes());
+            let mut document = Document::from_bytes(&f236_package_bytes(package)).unwrap();
+            let entry = document
+                .create_building_block(f277_block("placeholder", "placeholder"))
+                .unwrap();
+            let story = f254_story(&document, StoryKind::Body);
+            let location = f254_item(&document, &story, 0);
+            document
+                .bind_building_block_placeholder(&location, &entry)
+                .unwrap();
+            let package = f249_package(&document.to_bytes().unwrap());
+            let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+            let gallery = xml.find("docPartGallery").unwrap();
+            let category = xml.find("docPartCategory").unwrap();
+            let unique = xml.find("docPartUnique").unwrap();
+            assert!(gallery < category && category < unique, "{xml}");
+            assert!(
+                xml.contains("x:keep='attr'")
+                    && xml.contains("<x:before/>")
+                    && xml.contains("<x:after/>"),
+                "{xml}"
+            );
+        }
+    }
+}
+
+#[test]
+fn glossary_block_grammar_rejects_inline_xml_and_preserves_opaque_blocks() {
+    for content in [
+        r#"<w:r><w:t>inline</w:t></w:r>"#,
+        r#"<w:sdt><w:sdtPr/><w:sdtContent><w:r><w:t>inline</w:t></w:r></w:sdtContent></w:sdt>"#,
+    ] {
+        let mut document = Document::new();
+        let before = document.to_bytes().unwrap();
+        let mut block = f277_block("inline", "docParts");
+        block
+            .body
+            .content
+            .push(BodyContent::RawXml(content.as_bytes().to_vec()));
+        assert!(document.create_building_block(block).is_err(), "{content}");
+        assert_eq!(document.to_bytes().unwrap(), before);
+        let mut producer = f249_minimal_building_block_document();
+        let entry = producer.building_blocks().unwrap().remove(0);
+        let mut package = f249_package(&producer.to_bytes().unwrap());
+        package.set_part(&entry.glossary_part,format!(r#"<w:glossaryDocument xmlns:w="{W_NS}"><w:docParts><w:docPart><w:docPartPr><w:name w:val="entry"/></w:docPartPr><w:docPartBody>{content}</w:docPartBody></w:docPart></w:docParts></w:glossaryDocument>"#).into_bytes());
+        let mut producer = Document::from_bytes(&f236_package_bytes(package)).unwrap();
+        let entry = producer.building_blocks().unwrap().remove(0);
+        let before = producer.to_bytes().unwrap();
+        assert!(
+            producer.building_block_fragment(&entry).is_err(),
+            "{content}"
+        );
+        let story = f254_story(&producer, StoryKind::Body);
+        assert!(
+            producer
+                .insert_building_block(
+                    &ContentLocation::end(story),
+                    &entry,
+                    FragmentConflictPolicy::rename_all()
+                )
+                .is_err()
+        );
+        assert_eq!(producer.to_bytes().unwrap(), before);
+    }
+    let mut document = Document::new();
+    let mut block = f277_block("opaque", "docParts");
+    let content = br#"<x:block xmlns:x="urn:producer"><x:keep/></x:block>"#;
+    block
+        .body
+        .content
+        .push(BodyContent::RawXml(content.to_vec()));
+    let entry = document.create_building_block(block).unwrap();
+    let story = f254_story(&document, StoryKind::Body);
+    document
+        .insert_building_block(
+            &ContentLocation::end(story),
+            &entry,
+            FragmentConflictPolicy::rename_all(),
+        )
+        .unwrap();
+    let package = f249_package(&document.to_bytes().unwrap());
+    assert!(
+        std::str::from_utf8(package.get_part("/word/document.xml").unwrap())
+            .unwrap()
+            .contains("<x:keep/>")
+    );
+}

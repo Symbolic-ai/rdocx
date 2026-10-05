@@ -248,7 +248,7 @@ bytes remain in the ZIP package.
 | DOCX-041 | stories | note separators, markers, numbering, and restart policy | Y | Y | Y | Y | Y | related | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx-oxml/src/settings.rs`,implementation:`crates/rdocx/src/document.rs`,implementation:`crates/rdocx-layout/src/notes.rs`,implementation:`crates/rdocx-layout/src/paginator.rs`,test:`crates/rdocx/tests/integration_test.rs`,boundary:the pinned Word for Mac build ignores beneathText even with a section override while native layout applies it | - |
 | DOCX-042 | stories | bookmarks, paired ranges, and annotations | Y | Y | Y | Y | Y | all | P | P | Y | Y | B | B | B | partial | implementation:`crates/rdocx/src/comments.rs`,implementation:`crates/rdocx/src/document.rs`,test:`crates/rdocx/tests/integration_test.rs`,boundary:modern comment metadata and revision move ranges remain with F-292 and F-293 | F-293 |
 | DOCX-043 | stories | complete fragment dependency and conflict policy | Y | Y | Y | NA | Y | all | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs`,implementation:`crates/rdocx/src/field.rs`,test:`crates/rdocx/tests/regression_test.rs`,boundary:block fragment boundaries only and opaque companions preserved without new decoding or rendering | - |
-| DOCX-044 | stories | glossary and building-block creation and insertion | N | Y | P | N | P | related | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/building_block.rs:14` | F-277 |
+| DOCX-044 | stories | glossary and building-block creation and insertion | Y | Y | Y | Y | Y | all | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/building_block.rs`,test:`crates/rdocx/tests/regression_test.rs`,boundary:native modeled glossary lifecycle and existing control placeholder binding with block content insertion and opaque companions preserved through fragment closure | - |
 | DOCX-045 | fields | simple and complex field builder | P | Y | P | P | P | body | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/run.rs:187` | F-278 |
 | DOCX-046 | fields | page and section field materialization across stories | N | P | N | N | PV | all | N | N | N | P | B | B | B | unsupported | boundary:F-279 | F-279 |
 | DOCX-047 | fields | captions, sequences, and complete cross-references | N | P | N | N | PV | all | P | P | N | P | B | B | B | unsupported | boundary:F-280 | F-280 |
@@ -314,9 +314,9 @@ entry points remain outside this scope.
 
 Modern OOXML legacy form fields and glossary entries are part of the post-v1
 native Word surface. Native Rust callers can inventory supported form fields
-across internal Word stories, update their typed values, and replace existing
-AutoText and building-block entries. Binary `.doc` input, field execution,
-implicit entry expansion, new glossary authoring, and additional binding
+across internal Word stories, update their typed values, and author, classify, update, insert and remove
+AutoText, building-block and placeholder entries. Binary `.doc` input, field execution,
+implicit entry expansion and additional binding
 surfaces remain outside this scope.
 
 ### Superseded

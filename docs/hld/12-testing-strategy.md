@@ -128,6 +128,12 @@ classification, and selected building-block replacement. Prefix aliases,
 fixed-prefix changed output, schema-order insertion, structural reopen,
 byte-exact unsupported subtree retention, unsafe relationship graphs, stale
 identities, wrong value kinds, bounds, and atomic failure are focused checks.
+The public-created glossary gate authors AutoText, building-block and
+placeholder entries with image dependencies, binds an existing control,
+inserts their content and reopens the package. Lifecycle checks cover raw
+body wrapper attributes, adversarial producer prefix scopes, related-story
+control variants, retained self-closing empty containers, duplicate names,
+stale snapshots and atomic rejection of unsafe or incomplete graphs.
 The Python, WASM, and CLI surfaces and the 49-entry hash set remain unchanged.
 
 The glossary, embedded-content, and package-story malformed XML matrices run

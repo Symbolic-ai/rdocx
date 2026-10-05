@@ -2920,6 +2920,11 @@ building blocks, placeholders, and their related content through public APIs.
 **Depends on**: F-237, F-253, F-276.
 **Test gate**: round-trip. Public-created entries retain category, behavior,
 content, relationships, and unsupported siblings after insertion and reopen.
+Typed creation requires dependency-free content. Fragment-backed creation and
+insertion share the complete dependency transaction. Last removal retains
+one valid empty glossary part. Binding a placeholder updates an existing
+control without changing its discriminator. Stale snapshots and duplicate
+authored names fail atomically.
 
 ### F-278, General simple and complex field builder (L)
 Provide typed and raw-instruction-safe builders for simple and complex fields,

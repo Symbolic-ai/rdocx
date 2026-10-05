@@ -418,8 +418,12 @@ document. The relationship must be internal, its normalized target must not
 escape the package root, the part must exist, and its override must use the
 Word glossary content type. Duplicate, external, traversal-shaped, missing,
 wrong-type, and malformed-root graphs fail before document mutation.
-Building-block replacement enters the canonical staged preparation and
-provenance-reconciling reopen path before publication.
+Glossary creation reserves one internal relationship, part and override as
+one bundle. Last-entry removal retains that valid empty part. Creation,
+replacement, removal and placeholder binding enter canonical staged
+preparation and provenance-reconciling reopen before publication. Fragment
+content resolves its dependency closure from the physical glossary owner.
+Typed creation rejects dependency references requiring a source package.
 
 Both facades resolve core properties through the package-level
 `CORE_PROPERTIES` relationship and retain its normalized target. Immutable
