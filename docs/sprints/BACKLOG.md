@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
 | M23, From-scratch business documents           | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness        | 54 | 17 | 1 | 36 |
-| X, Cross-cutting (opportunistic)              | 186 | 182 | 0 | 0 |
-| **Total** | **511** | **449** | **1** | **57** |
+| X, Cross-cutting (opportunistic)              | 187 | 182 | 0 | 1 |
+| **Total** | **512** | **449** | **1** | **58** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -730,4 +730,5 @@ regenerated, never hand-edited.
 | F-X174 | Prepare unified rdocx 0.15.0 family | S86 | M | done |
 | F-X175 | Refresh CLI archive evidence after release hardening | S87 | S | done |
 | F-X176 | Repair unified release inventory and respin PowerPoint | S88 | M | done |
+| F-X177 | Accept unified fontdb source features | S89 | S | pending |
 <!-- AUTOGEN:backlog-MX END -->

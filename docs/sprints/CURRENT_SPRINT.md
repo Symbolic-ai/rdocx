@@ -6,6 +6,7 @@
 markers, deterministic fragment dependency remapping, and public glossary
 creation. These four stories establish the shared story and package semantics
 needed by later fields, templates, forms, and collaboration work.
+Include PR 269's fontdb feature-unification repair for downstream SVG users.
 
 ## Spec references
 
@@ -28,6 +29,7 @@ needed by later fields, templates, forms, and collaboration work.
 | F-275 | Cross-story bookmarks, ranges, and annotations | L | done | - |
 | F-276 | Complete fragment conflict and dependency policy | L | in-progress | codex |
 | F-277 | Glossary and building-block creation | L | pending | - |
+| F-X177 | Accept unified fontdb source features | S | pending | - |
 
 ## Sequencing note
 
@@ -36,6 +38,9 @@ independently after their completed prerequisites. F-276 follows both because
 fragment import must remap their note and paired-range dependencies. F-277
 then uses the F-276 transaction for building-block insertion. The hash harness
 baseline has one owner at a time.
+F-X177 has no feature dependency. Its documentation and archive evidence
+share files with the authoring workers, so it uses a separate implementation
+wave after F-276 and before F-277.
 
 ## Definition of done for this sprint
 
@@ -47,5 +52,7 @@ baseline has one owner at a time.
   leaves no dangling IDs, and preserves untouched XML.
 - Public glossary and building-block creation and insertion survive save and
   reopen with relationships and unsupported siblings intact.
+- The font source match compiles with downstream `fontdb/memmap` feature
+  unification, including the no-default-feature path.
 - The integrated verification gate and sprint review pass on the final tree,
   with every intentional hash harness delta stated and reviewed.

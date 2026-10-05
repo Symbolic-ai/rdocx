@@ -1967,6 +1967,7 @@ needed by later fields, templates, forms, and collaboration work.
 | F-275 | Cross-story bookmarks, ranges, and annotations | L |
 | F-276 | Complete fragment conflict and dependency policy | L |
 | F-277 | Glossary and building-block creation | L |
+| F-X177 | Accept unified fontdb source features | S |
 
 F-274 closes the note policy left by rich footnotes and endnotes. F-275 makes
 paired markers valid across stories. F-276 then remaps a full fragment's
@@ -1974,6 +1975,10 @@ conflicting dependencies without dangling IDs, and F-277 uses that transaction
 for building-block insertion. The sprint gate includes save-reopen checks for
 relationships and untouched XML. This wave moved from S87 through S88 to leave
 room for the release repairs.
+The user added PR 269 during S89. F-X177 preserves downstream fontdb feature
+unification and uses a separate wave between F-276 and F-277 because archive
+evidence and HLD files are shared. The four authoring contracts retain their
+dependency order.
 
 #### Sprint S90, Fields, pagination, and navigation
 

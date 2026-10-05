@@ -6505,6 +6505,21 @@ both family version and notes contracts, manual build-only artifact rehearsal,
 hosted release regressions, full local gate and unchanged 49-entry hash harness
 all pass before `/close-sprint S88` and fresh release approvals.
 
+### F-X177, Accept unified fontdb source features (S)
+
+Adopt [PR 269](https://github.com/tensorbee/rdocx/pull/269) from
+`changjoon-park`, reviewed at `7949573b92fd988a682a11b8e674af85e5df622e`.
+Cargo may enable `fontdb/memmap` through another dependency such as `usvg`.
+The font source match must compile with that unified feature and read the
+additional source through `Database::with_face_data`. Retain the existing
+binary and ordinary file paths and deterministic bundled-only construction.
+No public API, dependency version or default feature changes.
+**Depends on**: none.
+**Test gate**: compilation regression. `cargo check -p oxml-layout --features
+fontdb/memmap` fails on the claimed base and passes after the fix. Default,
+no-default and no-default plus memmap checks and font tests pass, with all
+49 hash entries unchanged. Record the contributor disposition for sprint close.
+
 ### F-X168, Current issue and contribution closure evidence (M)
 
 Reconcile the eight open issues and 31 open PRs from the 2 October GitHub snapshot
