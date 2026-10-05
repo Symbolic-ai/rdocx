@@ -103,6 +103,7 @@ defended.
 | S86 | M24, X | 7 | 7 | 0 | 27 | 2 | Completed rich headers and footers, footnotes and endnotes, namespace preservation, and both family release preparations. The full gate passed with 49 matching hashes, 22 package archives below 10 MiB and clean sprint review pass 2. Hosted build-only run 37165122971 produced all 14 expected artifacts after one targeted Linux arm64 retry. Issue 266 stays open until the separately approved rpptx-v0.13.0 and v0.15.0 releases are published, verified and reported to the requester. No contributed PR was assigned and no stories carried |
 | S87 | X | 1 | 1 | 0 | 1 | 1 | Refreshed both CLI archive measurements after S86 Windows stack hardening and moved the planned M24 wave to S88 by approval. The full gate passed with 49 matching hashes, 139 policy tests, 22 package archives below 10 MiB and clean sprint review pass 1. Hosted CI run 37178559664 passed, including Docs and Release regressions. Build-only run 37178579418 produced all 14 expected artifacts after one targeted Linux x86-64 retry. Issue 266 stays open until both separately approved releases are published, verified and reported to the requester. No stories carried |
 | S88 | X | 1 | 1 | 0 | 3 | 1 | Repaired the unified release inventory and prepared PowerPoint 0.13.1 beside Word 0.15.0 after the immutable failed PowerPoint tag. The full gate passed with 49 matching hashes, 140 policy tests with two expected skips, exact 22-crate dry run and clean sprint review pass 1. Hosted CI run 37192110554 passed all jobs, including Docs, Release regressions and fidelity. Build-only run 37192115737 passed all 14 wheel and source distribution jobs, and both exact seven-file artifact contracts passed. Issue 266 remains open until both separately approved releases are published and verified. No stories carried |
+| S89 | M24, X | 5 | 5 | 0 | 21 | 2 | Completed note policy, cross-story ranges, deterministic fragment remapping and public glossary lifecycle, plus Changjoon's PR 269 fontdb feature-unification fix. Full verification passed with 49 unchanged hashes, 140 policy tests with two expected skips, 22 verified packages below 10 MiB and clean sprint review pass 1. M24 continues through S94. No stories carried |
 
 ## Completed features
 
@@ -665,6 +666,7 @@ five working days.
 | S86 | 7 | 2 | 17.50 |
 | S87 | 1 | 1 | 5.00 |
 | S88 | 1 | 1 | 5.00 |
+| S89 | 5 | 2 | 12.50 |
 
 ## Escalation record
 
@@ -754,6 +756,7 @@ was done about it. Empty is the expected state.
 | 2026-10-03 | Sprint estimate variance exceeded 30 percent | S84 | Record 2 elapsed workdays against 38 estimated for ten completed stories. This deliberately combined the S84 through S89 repair scope to pay the full-test cost once. Isolated workers, reviewed contribution increments and one integrated acceptance gate reduced elapsed time without changing the 38-day planning estimate. The resulting 25.00 stories per week is not a sustainable forecast. Keep the dependency-defined S85 feature boundary |
 | 2026-10-04 | Sprint estimate variance exceeded 30 percent | S86 | Record 2 elapsed workdays against 27 estimated for seven completed stories. Isolated workers reused established authoring and release infrastructure while the integrated gate, clean review and hosted build evidence remained explicit. The resulting 17.50 stories per week is a short sprint result, so retain the dependency-defined S87 boundary |
 | 2026-10-04 | Sprint estimate variance exceeded 30 percent | S88 | Record 1 elapsed workday against 3 estimated for the focused release repair. The failed tag had isolated the package inventory cause, and established release checks were reused. The resulting 5.00 stories per week is a short repair result, so retain the dependency-defined S89 boundary |
+| 2026-10-05 | Sprint estimate variance exceeded 30 percent | S89 | Record 2 elapsed workdays against 21 estimated. Dependency waves reused the completed related-story and package foundations, and PR 269 supplied a focused reproducer and fix. The resulting 12.50 stories per week is not a sustainable forecast, so retain the dependency-defined S90 boundary |
 
 ## S79 contribution reconciliation
 
@@ -782,3 +785,7 @@ Issues [158](https://github.com/tensorbee/rdocx/issues/158#issuecomment-59572556
 The verified [S83 main merge](https://github.com/tensorbee/rdocx/commit/ea3fdbe1dd534a088c2be36f146fa945ee81cd9e) carries F-X159 and F-X160. PRs [240](https://github.com/tensorbee/rdocx/pull/240#issuecomment-5959494283), [248](https://github.com/tensorbee/rdocx/pull/248#issuecomment-5959495610), [249](https://github.com/tensorbee/rdocx/pull/249#issuecomment-5959496595) and [250](https://github.com/tensorbee/rdocx/pull/250#issuecomment-5959497876) received individual contributor-credit comments and were closed as superseded by the integrated work. PR 249's broader `insert_document` remapping question remains outside the same-part drawing-ID fix.
 
 Issues [243](https://github.com/tensorbee/rdocx/issues/243#issuecomment-5959533687), [246](https://github.com/tensorbee/rdocx/issues/246#issuecomment-5959534625) and [247](https://github.com/tensorbee/rdocx/issues/247#issuecomment-5959535490) received reporter-credit comments citing the integrated regression and direct Python or CLI evidence and were closed. Both Issue 243 reporter packages passed. Issue 160 remains open for F-X161's compact edited-part and namespace criteria in S84, and Issue 245 remains open for that same serialization work.
+
+## S89 contribution reconciliation
+
+PR [269](https://github.com/tensorbee/rdocx/pull/269), contributed by Changjoon (`changjoon-park`), is superseded by the F-X177 integration at `8cced41d`. The original memmap compile reproducer fails before the fix and passes after it. Default, no-default, memmap and no-default plus memmap configurations passed on the integrated tree. Close the PR after pushing the S89 main merge, with an individual thank-you comment linking the integration and the sprint merge. No separate issue was assigned to S89. Issue 264's declarative authoring discussion remains open and outside this sprint's acceptance scope.
