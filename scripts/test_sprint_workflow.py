@@ -7771,6 +7771,9 @@ Pedro Assumpcao and the rdocx maintainers.
                 # S74 and handed the row's remaining note policy to F-274, so
                 # it no longer owns an incomplete row.
                 269,
+                # F-275 delivered range authoring in S89. Remaining
+                # annotation capability ownership stays with F-293.
+                275,
                 # F-267 completed the table style and conditional formatting
                 # authoring of DOCX-034 in S74 and handed the row's remaining
                 # conditional row geometry to F-268, so it no longer owns an
