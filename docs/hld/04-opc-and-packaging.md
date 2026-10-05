@@ -1532,17 +1532,31 @@ document identities before insertion. Any value-kind, marker, relationship,
 identity, callback, allocation, serialization, or reopen failure discards the
 entire prospective result.
 
-Cross-document body fragments carry their source package so retained XML stays
-authoritative while the selected closure is rebuilt in the destination. The
-closure starts from selected main-story and comment-story relationship
-references, follows internal targets recursively, and copies only reachable
-parts with their exact content types. Style and numbering graphs are pruned to
-the selected references and their transitive links before deterministic reuse
-or renaming. Every destination relationship id, part name, comment id,
-bookmark id, drawing id, style id, and numbering id is reserved before any
-selected XML is rewritten. An external edge, missing target, malformed
-relationship part, invalid ownership range, or exhausted allocator rejects the
-candidate without publishing package or typed state.
+Cross-document block fragments carry their source package so retained XML stays
+authoritative across every supported owner. Local namespace declarations and
+unrelated destination XML survive insertion. The closure starts at selected
+story references and required note and comment companions, follows internal
+OPC targets through cycles, and copies reachable payloads with exact content
+types and part-local relationship IDs. External edges retain their target,
+mode and type and are never fetched.
+
+Style aliases and links, numbering overrides and custom XML binding stores
+are resolved with their companions. Store collisions rewrite the selected
+bindings and copied item-property IDs together. Note references are rewritten
+from complete maps, including forward, backward and cyclic references. Note,
+comment-thread, bookmark, paired-marker and revision identities are fresh.
+Equivalent reuse is limited to proven style and numbering comparisons and
+relationship-free leaf payloads. Identity-bearing item properties that need a
+store-ID rewrite are never reused.
+
+Selected XML is changed only inside one staged transaction. The package is
+serialized and reopened before the live destination changes. Missing targets,
+malformed graphs, incomplete ownership, exhausted allocators, unsafe embedded
+part-name rewrites and integrity-bound signatures that cannot remain valid
+reject atomically. Existing destination signature coverage is invalidated by
+the normal mutation policy. Opaque graphs are preserved without new decoding
+or rendering support. Rich mail merge retains its separate prohibition on
+external fragment edges.
 
 Dynamic table-of-contents rebuild uses the same staged package rule. It scans
 the relationship-resolved main document by expanded WordprocessingML names,

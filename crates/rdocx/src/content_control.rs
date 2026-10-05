@@ -586,16 +586,41 @@ fn resolve_binding_edit(
     ))
 }
 
-fn resolve_custom_xml_part(
+pub(crate) fn resolve_custom_xml_part(
     package: &OpcPackage,
     document_part: &str,
     store_item_id: &str,
 ) -> Result<String> {
+    let matches = matching_custom_xml_parts(package, document_part, store_item_id)?;
+    match matches.as_slice() {
+        [part_name] => Ok(part_name.clone()),
+        [] => Err(Error::Other(format!(
+            "custom XML store item {store_item_id} was not found"
+        ))),
+        _ => Err(Error::Other(format!(
+            "custom XML store item {store_item_id} is ambiguous"
+        ))),
+    }
+}
+
+pub(crate) fn custom_xml_store_item_count(
+    package: &OpcPackage,
+    document_part: &str,
+    store_item_id: &str,
+) -> Result<usize> {
+    Ok(matching_custom_xml_parts(package, document_part, store_item_id)?.len())
+}
+
+fn matching_custom_xml_parts(
+    package: &OpcPackage,
+    document_part: &str,
+    store_item_id: &str,
+) -> Result<Vec<String>> {
     let expected = normalize_store_item_id(store_item_id);
     let mut matches = Vec::new();
-    let relationships = package
-        .get_part_rels(document_part)
-        .ok_or_else(|| Error::Other("document has no custom XML relationships".to_owned()))?;
+    let Some(relationships) = package.get_part_rels(document_part) else {
+        return Ok(matches);
+    };
     for relationship in relationships
         .items
         .iter()
@@ -619,18 +644,10 @@ fn resolve_custom_xml_part(
             matches.push(item_part);
         }
     }
-    match matches.as_slice() {
-        [part_name] => Ok(part_name.clone()),
-        [] => Err(Error::Other(format!(
-            "custom XML store item {store_item_id} was not found"
-        ))),
-        _ => Err(Error::Other(format!(
-            "custom XML store item {store_item_id} is ambiguous"
-        ))),
-    }
+    Ok(matches)
 }
 
-fn normalize_store_item_id(value: &str) -> String {
+pub(crate) fn normalize_store_item_id(value: &str) -> String {
     value
         .trim()
         .trim_start_matches('{')
@@ -638,7 +655,7 @@ fn normalize_store_item_id(value: &str) -> String {
         .to_ascii_lowercase()
 }
 
-fn parse_store_item_id(xml: &[u8]) -> Result<Option<String>> {
+pub(crate) fn parse_store_item_id(xml: &[u8]) -> Result<Option<String>> {
     let mut reader = NsReader::from_reader(xml);
     let mut buffer = Vec::new();
     loop {

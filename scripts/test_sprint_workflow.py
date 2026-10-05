@@ -7774,6 +7774,8 @@ Pedro Assumpcao and the rdocx maintainers.
                 # F-275 delivered range authoring in S89. Remaining
                 # annotation capability ownership stays with F-293.
                 275,
+                # F-276 closes the native block fragment dependency row.
+                276,
                 # F-267 completed the table style and conditional formatting
                 # authoring of DOCX-034 in S74 and handed the row's remaining
                 # conditional row geometry to F-268, so it no longer owns an

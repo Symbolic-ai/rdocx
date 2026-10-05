@@ -1012,15 +1012,23 @@ destination locations from one owned story inventory. A rejected clone names
 `source` when it is not a Paragraph or Table handle and names `destination` as
 a direct body index when it is not an integer.
 
-Native Rust also exposes owned `DocumentFragment` and non-exhaustive
+Native Rust exposes owned `DocumentFragment` and non-exhaustive
 `FragmentConflictPolicy` values. `DocumentFragment::from_range` captures a
-nonempty half-open main-body selection and can include final body section
-properties only when explicitly requested at the body end.
-`Document::import_fragment` inserts at a checked main-body location and applies
-caller-selected equivalent reuse independently to styles, numbering, and
-related parts. The import remains package-authoritative and transactional.
-These are additive pre-1.0 APIs in the published `rdocx` crate. Python, WASM,
-and CLI gain no fragment-import surface here.
+nonempty half-open block selection in any supported story owner. Existing
+two-segment block-control paragraph paths use the enclosing control content.
+Inline items are rejected because the fragment API has no inline boundary.
+Final body section properties require an explicit selection ending at the
+main-body boundary and a main-body destination.
+
+`Document::import_fragment` inserts at a checked compatible block boundary and
+uses that owner's physical part for relationship references. Caller policy
+chooses equivalent reuse independently for styles, numbering and related leaf
+parts. The import closes note, comment, binding-store and reachable OPC
+companions and remaps conflicting identities in one package-authoritative
+transaction. The candidate serializes and reopens before publication, and a
+failed import leaves the destination unchanged. These are additive pre-1.0
+APIs in the published `rdocx` crate. Python, WASM and CLI gain no fragment-import
+surface here.
 
 Native Rust also exposes fallible story-scoped relationship operations on the
 same pre-1.0 `Document` facade. `add_picture_to_story` and

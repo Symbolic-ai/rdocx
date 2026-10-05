@@ -243,14 +243,19 @@ Relationship-bearing content remains restricted to its unchanged story owner,
 and preserved identity ownership that cannot be proved rejects. Serialization
 and reopen complete before the candidate replaces live state.
 
-Cross-document main-body import removes that unchanged-owner restriction only
-through an owned `DocumentFragment`. The importer discovers selected body and
-comment dependencies before mutation, closes internal relationships
-recursively, reserves every destination identity, and rewrites exact retained
-XML only from complete maps. Caller policy may reuse equivalent styles,
-numbering, and related leaf parts. Unsupported external, dangling, malformed,
-split-range, and exhausted graphs fail without changing the live document.
-All-story import and the broader dependency classes remain owned by F-276.
+Cross-document block import removes the unchanged-owner restriction through
+an owned `DocumentFragment`. Every supported story owner and nested block
+control uses its actual physical part for relationships. Selected content and
+required note, comment and custom XML companions determine the dependency
+closure. Cyclic internal graphs copy exact opaque payloads with fresh names
+and rewritten edge targets. External edges are retained without fetching.
+Fresh identity maps cover references across selected owners and companions.
+Caller policy may reuse equivalent styles, numbering and relationship-free
+leaf parts. Dangling, malformed, split-range, unsafe opaque-reference,
+integrity-bound and exhausted graphs fail without changing the live document.
+Changed destination signature coverage follows the existing invalidation
+policy. Inline fragment boundaries and new decoding of opaque extensions are
+outside this native block import surface.
 
 Picture, hyperlink, and relationship lookup operations resolve the exact OPC
 owner from `StoryId`. Cells and text boxes inherit their containing part, and

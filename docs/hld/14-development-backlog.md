@@ -2902,9 +2902,14 @@ policy and revision move ranges have separate owners.
 preserved or rejected atomically, and valid ranges retain exact endpoints.
 
 ### F-276, Complete fragment conflict and dependency policy (L)
-Complete cross-document fragment import for style aliases, numbering overrides,
-custom XML bindings, notes, comments, revisions, charts, diagrams, embeddings,
-and package extensions.
+Cross-document block fragment import supports every story owner and nested
+block-control paragraph boundary. It closes style aliases and links, numbering
+overrides, custom XML bindings and item properties, notes, comment threads,
+paired markers, revisions, charts, diagrams, embeddings and reachable opaque
+package extensions. External edges are retained without fetching. Compatible
+imports publish one reopened candidate, with deterministic identity maps and
+atomic integrity failures. Preserved opaque companions gain no new decoding
+or rendering support.
 **Depends on**: F-256, F-270 through F-275.
 **Test gate**: regression. Importing a full-story fragment into a conflicting
 destination remaps every dependency deterministically and leaves no dangling ID.

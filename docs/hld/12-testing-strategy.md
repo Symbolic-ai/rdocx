@@ -619,16 +619,30 @@ no-date deterministic default, invalid-date rollback, and retained unrelated
 sidecar XML. Installed Python tests, strict mypy, and stubtest cover the same
 optional date keywords and frozen snapshots.
 
-The cross-document fragment gate selects a main-body range containing custom
-styles, direct and style-carried numbering, a bookmark and REF field, a
-picture, an editable chart and workbook, an exact foreign subtree, and a
-resolved comment thread with a relationship-bearing payload. Two imports must
-reopen with all references resolved, exact selected raw XML retained twice,
-unused source dependencies absent, and collision-free package identities.
-Equivalent-reuse and rename policies must produce deterministic style,
-numbering, media, chart, and workbook results. Atomic negatives cover external
-relationships, split ownership, dangling targets, malformed relationship XML,
-and relationship-id exhaustion, with destination bytes unchanged.
+The cross-document fragment gate
+`full_story_fragment_import_remaps_every_conflicting_dependency` checks all
+64 pairings of body, header, footer, footnote, endnote, comment, cell and
+text-box owners with relationship-bearing images. Nested block-control
+paragraph boundaries select and insert inside their enclosing control.
+Inline grammar and split ownership reject atomically.
+
+Two imports into a conflicting destination prove deterministic style-link
+cycles, aliases, numbering overrides, note IDs, custom XML stores and item
+properties, comment threads, paired markers, revisions, chart/workbook,
+diagram and embedding companions. Note-only formatting and comment bindings
+join closure discovery. Exact forward, backward and cyclic note references,
+companion bookmark targets, permission and revision IDs survive reopen. An
+import targeting a note or comment part retains new companions in that same
+physical part. Existing imported formatting uses the normal modeled layout
+and render paths. Opaque companion preservation adds no visual support.
+
+Round-trip checks retain selected foreign XML exactly and keep unrelated
+destination content. Opaque graph tests cover direct and nested external
+edges, internal cycles, payload equality and part-local edge resolution.
+Signature tests prove destination coverage invalidation and atomic rejection
+of a reachable integrity-bound signature. Missing or tampered targets,
+malformed relationships, unsafe embedded names, split ranges, invalid section
+placement and exhausted allocators leave destination bytes unchanged.
 
 The RTF reader differential records Microsoft Word 16.104 build
 16.104.25121423 as the oracle. Its checked input is source-encoded RTF that

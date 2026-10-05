@@ -1440,17 +1440,31 @@ owner. Clones allocate fresh document identities and drop the `w14:paraId` and
 fragments require the unchanged owner scope. Every operation serializes and
 reopens a staged candidate before publishing it.
 
-`DocumentFragment` owns a package-authoritative half-open main-body selection
-and its supported dependency source. Import closes only dependencies reachable
-from the selected body XML and selected comment threads. It computes style and
-numbering references to a fixpoint, preallocates relationship and part names,
-and rewrites bookmark, comment, drawing, field, style, numbering, and
-relationship identities only after every map exists. Exact retained body and
-comment XML remain authoritative. Reuse of equivalent style, numbering, and
-related-part graphs is caller-selected through `FragmentConflictPolicy`.
-Import applies all changes to one staged document and publishes only after the
-package serializes and reopens. External, dangling, malformed, incomplete, or
-exhausted dependency graphs leave the destination unchanged.
+`DocumentFragment` owns a package-authoritative half-open block selection from
+any supported story owner. Existing two-segment paragraph paths inside block
+controls resolve their enclosing control content. Source and destination keep
+their physical part's relationship scope. Inline items and split owners are
+invalid fragment boundaries.
+
+Import closes only dependencies reachable from selected XML and its required
+note and comment companions. Style and numbering references reach a fixpoint
+across those companions, including cyclic style links and numbering overrides.
+Custom XML stores carry item properties and receive fresh store IDs on
+collision. Notes, comment threads, bookmarks, paired endpoints and revisions
+receive deterministic new identities. REF targets share the bookmark-name map.
+Charts, diagrams, embeddings and opaque extensions use the existing OPC graph.
+Internal cycles retain exact payload bytes and part-local relationship IDs,
+with allocated part names and rewritten internal targets. External edges keep
+their target, type and mode without fetching resources. Reuse applies only to
+structurally equivalent styles, numbering and relationship-free leaf parts.
+
+One staged document serializes and reopens before publication. Insertion into
+a note or comment part retains companions imported into that same part.
+Dangling, malformed, split, exhausted and unsafe opaque-reference graphs fail
+without changing the live document. An integrity-bound package signature part
+that cannot survive remapping is rejected. Existing destination signature
+invalidation policy applies to changed coverage. Preserved opaque companions
+gain no new rendering or decoding support.
 
 Ordered Word section ownership also belongs to the `rdocx` facade. Concrete
 `SectionRef` and `Section` handles borrow the existing paragraph-level or

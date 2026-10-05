@@ -1,6 +1,6 @@
 # F-276, Complete fragment conflict and dependency policy
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S89
 **Size**: L
 **Depends on**: F-256, F-270, F-271, F-272, F-273, F-274, F-275
@@ -20,6 +20,7 @@ dependency dangling or collide with destination identities.
 - `docs/hld/02-scope-and-non-goals.md`, "Modern DOCX capability matrix", row DOCX-043.
 - `docs/hld/03-architecture.md`, "Facade conventions", `DocumentFragment` closure and staged import.
 - `docs/hld/04-opc-and-packaging.md`, "Package integrity", reachable dependency remapping.
+- `docs/hld/10-bindings-spec.md`, native `DocumentFragment` and conflict policy boundaries.
 - `docs/hld/13-risks-and-open-questions.md`, package and fragment import integrity risks.
 - `docs/hld/12-testing-strategy.md`, "The Word corpus", cross-document fragment gate.
 - `docs/hld/14-development-backlog.md`, "F-276, Complete fragment conflict and dependency policy".
@@ -29,8 +30,11 @@ dependency dangling or collide with destination identities.
 Extend the existing `DocumentFragment` source selection and
 `Document::import_fragment` destination to every compatible supported story
 owner, including body, headers, footers, notes, comments and nested containers.
-Compatibility is decided by the selected item's block or inline grammar, the
-target owner's admitted child kinds and the target part's relationship scope.
+Compatibility is decided by block items at supported `ContentLocation`
+boundaries, the target owner's admitted child kinds and the target part's
+relationship scope. Existing two-segment block-control paragraph paths select
+their enclosing control content. Inline selections remain invalid because no
+inline fragment boundary is exposed.
 Test every supported source and destination owner class and reject an
 incompatible pairing atomically. Begin the dependency closure at references in
 selected owner XML and required identity companions, not unrelated source
@@ -83,6 +87,7 @@ path F-277 will reuse.
 - `docs/hld/02-scope-and-non-goals.md`
 - `docs/hld/03-architecture.md`
 - `docs/hld/04-opc-and-packaging.md`
+- `docs/hld/10-bindings-spec.md`
 - `docs/hld/12-testing-strategy.md`
 - `docs/hld/13-risks-and-open-questions.md`
 - `docs/hld/14-development-backlog.md`
@@ -98,14 +103,16 @@ Expected unchanged. Existing fixture imports keep their current serialized outpu
 
 ## Implementation checklist
 
-- [ ] Consume completed F-274 and F-275 note and range contracts.
-- [ ] Generalize selection and destination owner validation in existing facade files.
-- [ ] Close the full reachable dependency graph and preallocate all collision maps.
-- [ ] Rewrite references together, stage, serialize, reopen and publish once.
-- [ ] Prove deterministic, lossless, conflict and atomic-failure fixtures.
-- [ ] Run scoped verification and obtain a zero-finding microscope review.
+- [x] Consume completed F-274 and F-275 note and range contracts.
+- [x] Generalize selection and destination owner validation in existing facade files.
+- [x] Close the full reachable dependency graph and preallocate all collision maps.
+- [x] Rewrite references together, stage, serialize, reopen and publish once.
+- [x] Prove deterministic, lossless, conflict and atomic-failure fixtures.
+- [x] Run scoped verification and obtain a zero-finding microscope review.
 
 ## Open questions
 
 - Answered: any grammar-compatible supported source and destination story pair is valid. Ownership and relationship scope are checked for every pair.
 - Answered and revised: copy every well-formed reachable graph, including opaque extensions and external relationship edges, so far as it can be remapped without corrupting any part. Reject only graphs that cannot satisfy that integrity boundary.
+
+- Clarified during implementation: the native fragment API exposes block boundaries, including existing nested block-control paragraph paths. The HLD impact includes the native binding contract that previously said main-body only.
