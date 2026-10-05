@@ -6515,7 +6515,7 @@ all pass before `/close-sprint S88` and fresh release approvals.
 Adopt [PR 269](https://github.com/tensorbee/rdocx/pull/269) from
 `changjoon-park`, reviewed at `7949573b92fd988a682a11b8e674af85e5df622e`.
 Cargo may enable `fontdb/memmap` through another dependency such as `usvg`.
-The font source match must compile with that unified feature and read the
+The font source match compiles with that unified feature and reads the
 additional source through `Database::with_face_data`. Retain the existing
 binary and ordinary file paths and deterministic bundled-only construction.
 No public API, dependency version or default feature changes.

@@ -1,6 +1,6 @@
 # F-X177, Accept unified fontdb source features
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S89
 **Size**: S
 **Depends on**: none
@@ -63,11 +63,11 @@ fontdb sources introduced by unified dependency features.
 
 ## Implementation checklist
 
-- [ ] Reproduce the PR's compile failure against the claimed base.
-- [ ] Adopt the reviewed fallback and retain contributor provenance.
-- [ ] Verify default, no-default and unified memmap configurations.
-- [ ] Refresh scoped archive evidence and listed HLD sections.
-- [ ] Pass scoped verification and a zero-finding microscope.
+- [x] Reproduce the PR's compile failure against the claimed base.
+- [x] Adopt the reviewed fallback and retain contributor provenance.
+- [x] Verify default, no-default and unified memmap configurations.
+- [x] Refresh scoped archive evidence and listed HLD sections.
+- [x] Pass scoped verification and a zero-finding microscope.
 
 ## Open questions
 
