@@ -17434,3 +17434,43 @@ closure. The 18-page Word SSIM trend is advisory and below its target.
 **Hash harness.** Unchanged on the worker, all 49 entries match. Its source graph is unchanged on the integrated dependency prefix. Final integrated sprint verification remains due.
 
 **Notes for future sessions.** F-277 consumes the completed fragment transaction. Keep `work/f-276-codex` through sprint close. PR 269 is separately approved as F-X177 and runs before F-277 because archive and HLD files are exclusive. No new decoding or rendering support for opaque companions is claimed.
+
+### F-X177, Accept unified fontdb source features
+
+**Sprint.** S89
+**Completed.** 2026-10-05
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The font loader accepts source variants enabled by downstream Cargo feature unification through fontdb's face-data callback. The four-line fix from PR 269 at `7949573b92fd988a682a11b8e674af85e5df622e` is retained with credit to `changjoon-park`. Binary and ordinary file caches retain their existing paths.
+
+**Non-obvious choices.** The fallback copies borrowed bytes into owned storage and keeps the original face index. Its unreachable-pattern allowance permits the same source to compile when memmap is absent. Defaults, dependency versions, public APIs and bundled font assets are unchanged.
+
+**Deviations from the design plan.** None. Only the changed crate's archive evidence was refreshed.
+
+**Spec sections touched.** `docs/hld/14-development-backlog.md`, F-X177 compilation contract, and `docs/hld/15-build-and-toolchain.md`, font feature unification.
+
+**Tests.** The original base reproduced E0004 for `Source::SharedFile`. All four default and memmap combinations pass checks and font tests, including the no-default path. Scoped Clippy, formatting, 140 policy tests with two existing skips, prose and generated skills pass. Microscope pass 1 reports zero defects and zero smells. The integrated full gate at `88149051` passed workspace formatting, Clippy and all-feature tests, the four font feature configurations, 140 policy tests with two existing skips, both WASM targets, docs, README examples, the verified 22-package dry run, archive sizes and cargo-deny. Compilation used isolated artifacts and Rust 1.97.1 was pinned for temporary examples after interrupted cache stalls and a mixed-toolchain failure.
+
+**Hash harness.** Unchanged on the integrated sprint tree, all 49 entries match.
+
+**Notes for future sessions.** Keep `work/f-x177-codex` through sprint close. PR 269 remains open until `/close-sprint` pushes the reviewed main merge, then reconcile it as superseded with contributor credit and a link to that merge.
+
+### F-277, Glossary and building-block creation
+
+**Sprint.** S89
+**Completed.** 2026-10-05
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** Native callers can create, classify, update, capture, insert and remove AutoText, building-block and placeholder entries. Fragment-backed entries bring reachable dependencies through the shared F-276 staged transaction. Placeholder binding keeps the existing control type. First creation adds a safe glossary bundle, and last removal retains a valid empty glossary.
+
+**Non-obvious choices.** Typed creation accepts dependency-free content. Package-backed content uses owned document fragments. Inventory snapshots reject stale values or ordinals. Structural OXML edits retain producer entries and unknown siblings, while drawing IDs held by glossary content remain reserved through document staging. This is an additive pre-1.0 Rust API. Python, WASM and CLI surfaces remain unchanged.
+
+**Deviations from the design plan.** None. Microscope pass 1 found inherited namespace validation, selector child order, a block-grammar bypass and stale capability metadata. All four were corrected. The three behavior regressions failed before their fixes, and pass 2 found zero defects and zero smells.
+
+**Spec sections touched.** The approved impact list comprises `docs/hld/02-scope-and-non-goals.md`, `03-architecture.md`, `04-opc-and-packaging.md`, `10-bindings-spec.md`, `12-testing-strategy.md` and `14-development-backlog.md` for glossary lifecycle, ownership, bindings and acceptance evidence.
+
+**Tests.** The named `public_created_building_blocks_insert_and_reopen` gate passed and failed with five missing-API errors against reverted source. Final scoped suites passed 488 Word unit, 360 integration, 778 regression, 604 OXML and three doctests. Eight focused glossary regressions passed. The integrated full gate at `88149051` passed workspace formatting, Clippy and all-feature tests, the four font feature configurations, 140 policy tests with two existing skips, both WASM targets, docs, README examples, the verified 22-package dry run, archive sizes and cargo-deny. Compilation used isolated artifacts and Rust 1.97.1 was pinned for temporary examples after interrupted cache stalls and a mixed-toolchain failure.
+
+**Hash harness.** Unchanged on the integrated sprint tree, all 49 entries match.
+
+**Notes for future sessions.** Keep `work/f-277-codex` through sprint close. Content-control creation remains with F-285. Implicit AutoText expansion and new binding entry points remain outside this story.

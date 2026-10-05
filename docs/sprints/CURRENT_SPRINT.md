@@ -28,8 +28,8 @@ Include PR 269's fontdb feature-unification repair for downstream SVG users.
 | F-274 | Note separators, markers, and restart policy | L | done | - |
 | F-275 | Cross-story bookmarks, ranges, and annotations | L | done | - |
 | F-276 | Complete fragment conflict and dependency policy | L | done | - |
-| F-277 | Glossary and building-block creation | L | in-progress | codex |
-| F-X177 | Accept unified fontdb source features | S | in-progress | codex |
+| F-277 | Glossary and building-block creation | L | done | - |
+| F-X177 | Accept unified fontdb source features | S | done | - |
 
 ## Sequencing note
 

@@ -39,9 +39,9 @@ regenerated, never hand-edited.
 | M21, Presentation depth                        | 15 | 15 | 0 | 0  |
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
 | M23, From-scratch business documents           | 24 | 24 | 0 | 0 |
-| M24, Modern DOCX authoring completeness        | 54 | 18 | 1 | 35 |
-| X, Cross-cutting (opportunistic)              | 187 | 182 | 1 | 0 |
-| **Total** | **512** | **450** | **2** | **56** |
+| M24, Modern DOCX authoring completeness        | 54 | 19 | 0 | 35 |
+| X, Cross-cutting (opportunistic)              | 187 | 183 | 0 | 0 |
+| **Total** | **512** | **452** | **0** | **56** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -501,7 +501,7 @@ regenerated, never hand-edited.
 | F-274 | Note separators, markers, and restart policy | S89 | L | done |
 | F-275 | Cross-story bookmarks, ranges, and annotations | S89 | L | done |
 | F-276 | Complete fragment conflict and dependency policy | S89 | L | done |
-| F-277 | Glossary and building-block creation | S89 | L | in-progress |
+| F-277 | Glossary and building-block creation | S89 | L | done |
 | F-278 | General simple and complex field builder | S90 | L | pending |
 | F-279 | Pagination field materialization across stories | S90 | L | pending |
 | F-280 | Captions, sequences, and complete cross-references | S90 | M | pending |
@@ -730,5 +730,5 @@ regenerated, never hand-edited.
 | F-X174 | Prepare unified rdocx 0.15.0 family | S86 | M | done |
 | F-X175 | Refresh CLI archive evidence after release hardening | S87 | S | done |
 | F-X176 | Repair unified release inventory and respin PowerPoint | S88 | M | done |
-| F-X177 | Accept unified fontdb source features | S89 | S | in-progress |
+| F-X177 | Accept unified fontdb source features | S89 | S | done |
 <!-- AUTOGEN:backlog-MX END -->
