@@ -266,6 +266,40 @@ assuming one standalone formatter result suffices in every collection.
 These captures add bounded contracts and do not complete the full catalogue,
 locale, adversarial, reopen or native implementation parity requirements.
 
+Further authenticated date and contributor-count controls are separate
+bounded records. Ten date vectors cover 310 fields, 150 sources per phase
+and 53 actual PDF pages. Nine additional contributor-count vectors cover
+459 fields, 225 sources per phase and 72 PDF pages. Their combined indices
+are F282-ten-dates-authenticated-audit-index, SHA256
+5e19f3e65271b6907988ed20c99912024d4ccbd049d96b1cc943d95291c8b613,
+and F282-nine-counts-authenticated-audit-index, SHA256
+245d22e5ba55d0e005cf6979a8cb4571915150e31f0f716aaab3b5d6f1e1f0ac,
+under the existing Word capture directory. All 171 index and manifest hash
+bindings were independently rechecked.
+
+Date controls distinguish absent from explicitly empty values, partial dates,
+access dates, numeric and textual months and emitted invalid date literals.
+Contributor-count controls preserve complete ordered author vectors and
+style-specific truncation and collection substitutions. Keep source omissions
+and explicit empty members distinct. Preserve full versus selected bibliography
+contracts rather than inferring collection-independent thresholds from these
+vectors. Actual saved style selection generated some caches before explicit
+F9, and later F9 changes real cached page-break markers in certain styles.
+Retain those raw differences and measure this lifecycle separately from
+ordinary library cache preservation. These batches have no additional no-F9
+reopen or Rust formatter parity evidence yet.
+
+The repeated-source-member controls separately measure duplicate scalar order
+and interleaved outer Author containers. Preserve their namespace-qualified
+ordered source XML, including repeated RefOrder members before Word's observed
+normalization. IEEE omits the duplicate publication year in its captured Book
+vector, while both ISO styles emit the first supplied year. A property absent
+from displayed output does not establish a deduplication policy. Retain exact
+selected and full results, source order, ambiguous identical-text matches and
+style-specific collection substitutions. Remaining styles and source kinds
+need their own evidence before these bounded rules become implementation
+contracts. Full catalogue scope and the differential gate remain unchanged.
+
 ## Rejected alternatives
 
 - Conventional part filenames miss noncanonical producers.
