@@ -379,6 +379,30 @@ preserved original source ownership and bounded package relationship growth.
 All failures preserve complete receiver bytes. Saved ID stability does not
 establish Word's internal reuse mechanism or authorize general cleanup.
 
+Repeated annotation materialization has its own measured contract. The genuine
+second body update retains three comment owners and all seven field contracts
+without added parts or relationships. Changing only original comment 1's literal
+refreshes copied comment 2 from that current source while retaining context
+comment 3. The copied paragraph and durable identities regenerate coherently
+during update and save. Preserve the closed, unique commentsExtended and
+commentsIds ownership graph rather than requiring those copied identities to
+remain fixed. These controls are retained in the existing note-annotation
+probe directory as annotation-repeat-stage-audit and
+annotation-source-mutated-stage-audit. The marker-only target remains absent
+from earlier native normalization, so its missing-target errors do not establish
+an unsupported copy operation.
+
+Reuse or replace a cached annotation definition only when the checked physical
+REF-f cache exclusively owns its paired markers and typed reference, distinct
+from the original target and context owners. Refresh its payload from the frozen
+original source inventory and stage its paragraph and durable graph closure
+atomically. Shared, ambiguous or broken graphs retain diagnostics and complete
+receiver bytes. Do not delete unrelated comments or borrow note-copy rules.
+Tests must cover repeated update and source-only refresh through save and reopen,
+bounded owners and relationship counts, preserved original and context payloads,
+unique graph identities and failure atomicity. Captured ID stability does not
+identify Word's internal allocation mechanism.
+
 Reject mutually exclusive numbering modes and malformed switch operands.
 
 Resolve bookmark position using physical story identity, accepted paragraph
