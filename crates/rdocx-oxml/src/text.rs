@@ -407,6 +407,7 @@ pub struct Field {
     pub instruction: FieldInstruction,
     pub cached_result: String,
     pub dirty: Option<bool>,
+    locked: Option<bool>,
     /// Typed legacy form metadata retained below the begin `w:fldChar`.
     pub legacy_form: Option<LegacyFormFieldData>,
     legacy_form_parse_error: bool,
@@ -472,15 +473,133 @@ impl Field {
         Self {
             source: FieldSource::New {
                 original_instruction: instruction.clone(),
+                form: FieldForm::Simple,
+                cached_runs: None,
+                original_cached_result: cached_result.to_owned(),
+                cached_segments: Vec::new(),
             },
             instruction,
             cached_result: cached_result.to_owned(),
             dirty: None,
+            locked: None,
             legacy_form: None,
             legacy_form_parse_error: false,
             nested_order: Vec::new(),
             span: None,
         }
+    }
+
+    /// Construct a checked field from a producer-style instruction.
+    pub fn from_raw(instruction: &str, form: FieldForm, cached_runs: Vec<CT_R>) -> Result<Self> {
+        validate_raw_field_instruction(instruction)?;
+        let parsed = parse_field_instruction(instruction);
+        let mut field = Self::from_instruction(parsed, form, cached_runs)?;
+        field.instruction.raw = instruction.trim().to_owned();
+        if let FieldSource::New {
+            original_instruction,
+            ..
+        } = &mut field.source
+        {
+            *original_instruction = field.instruction.clone();
+        }
+        Ok(field)
+    }
+
+    /// Construct a checked field with typed operands and ordered cached runs.
+    pub fn from_instruction(
+        instruction: FieldInstruction,
+        form: FieldForm,
+        cached_runs: Vec<CT_R>,
+    ) -> Result<Self> {
+        let instruction = FieldInstruction::new(
+            &instruction.name,
+            instruction.arguments,
+            instruction.switches,
+        )?;
+        if form == FieldForm::Simple && instruction_contains_nested(&instruction) {
+            return Err(OxmlError::InvalidValue(
+                "simple field instructions cannot contain nested fields".into(),
+            ));
+        }
+        validate_cached_field_runs(&cached_runs)?;
+        let cached_segments = cached_runs
+            .iter()
+            .enumerate()
+            .map(|(run_index, run)| CachedDisplaySegment {
+                run_index,
+                text: cached_run_display(run),
+                properties: run.properties.clone(),
+            })
+            .collect::<Vec<_>>();
+        let cached_result = cached_segments
+            .iter()
+            .map(|segment| segment.text.as_str())
+            .collect::<String>();
+        let mut field = Self::new(&instruction.raw, &cached_result);
+        field.instruction = instruction.clone();
+        field.source = FieldSource::New {
+            original_instruction: instruction,
+            form,
+            cached_runs: Some(cached_runs),
+            original_cached_result: cached_result,
+            cached_segments,
+        };
+        Ok(field)
+    }
+
+    /// Return the representation this field writes.
+    pub fn form(&self) -> FieldForm {
+        if instruction_contains_nested(&self.effective_instruction()) {
+            return FieldForm::Complex;
+        }
+        match &self.source {
+            FieldSource::New { form, .. } | FieldSource::Parsed { form, .. } => *form,
+        }
+    }
+
+    /// The field-local lock state, including an absent toggle.
+    pub fn locked(&self) -> Option<bool> {
+        self.locked
+    }
+
+    /// Set or remove the field-local lock without changing its instruction or cache.
+    pub fn set_locked(&mut self, value: Option<bool>) {
+        self.locked = value;
+    }
+
+    /// Validate the current mutable field before attaching it to a document.
+    #[doc(hidden)]
+    pub fn validate_for_attachment(&self) -> Result<()> {
+        let instruction = self.effective_instruction();
+        validate_raw_field_instruction(&instruction.raw)?;
+        FieldInstruction::new(
+            &instruction.name,
+            instruction.arguments,
+            instruction.switches,
+        )?;
+        if let FieldSource::New {
+            cached_runs: Some(runs),
+            ..
+        } = &self.source
+        {
+            validate_cached_field_runs(runs)?;
+        }
+        let original_cached_result = match &self.source {
+            FieldSource::New {
+                original_cached_result,
+                cached_runs: Some(_),
+                ..
+            }
+            | FieldSource::Parsed {
+                original_cached_result,
+                ..
+            } => Some(original_cached_result),
+            _ => None,
+        };
+        if original_cached_result != Some(&self.cached_result) {
+            oxml_core::xml::reject_non_xml_characters("field result", &self.cached_result)?;
+        }
+        Ok(())
     }
 
     fn parsed(
@@ -492,6 +611,9 @@ impl Field {
         raw_xml: Vec<u8>,
         word_prefixes: Vec<String>,
     ) -> Self {
+        let locked = field_source_lock(&raw_xml, form, &word_prefixes)
+            .ok()
+            .flatten();
         let source_id = NEXT_FIELD_SOURCE_ID.fetch_add(1, Ordering::Relaxed);
         let original_instruction = instruction.clone();
         let original_cached_result = cached_result.clone();
@@ -508,6 +630,7 @@ impl Field {
             instruction,
             cached_result,
             dirty,
+            locked,
             legacy_form: legacy_form.clone(),
             legacy_form_parse_error,
             nested_order: Vec::new(),
@@ -521,6 +644,7 @@ impl Field {
                 original_cached_result,
                 cached_segments,
                 original_dirty: dirty,
+                original_locked: locked,
                 original_legacy_form: legacy_form,
                 word_prefixes,
             },
@@ -635,6 +759,7 @@ impl Field {
         match &self.source {
             FieldSource::New {
                 original_instruction,
+                ..
             }
             | FieldSource::Parsed {
                 original_instruction,
@@ -689,12 +814,15 @@ impl Field {
                 original_instruction,
                 original_cached_result,
                 original_dirty,
+                original_locked,
                 original_legacy_form,
                 ..
             } => {
                 self.instruction == *original_instruction
+                    && instruction_source_identity_eq(&self.instruction, original_instruction)
                     && self.cached_result == *original_cached_result
                     && self.dirty == *original_dirty
+                    && self.locked == *original_locked
                     && self.legacy_form == *original_legacy_form
             }
         }
@@ -710,17 +838,24 @@ impl Field {
         )
     }
 
-    /// Whether this field was parsed from a complex `w:fldChar` sequence.
+    /// Whether this field writes a complex `w:fldChar` sequence.
     #[doc(hidden)]
     pub fn is_complex(&self) -> bool {
-        self.is_parsed_complex()
+        self.form() == FieldForm::Complex
     }
 
     /// Return the text this field contributes to [`CT_R::text`].
     #[doc(hidden)]
     pub fn projected_text(&self) -> Option<&str> {
-        self.is_parsed_complex()
-            .then_some(self.cached_result.as_str())
+        (self.is_parsed_complex()
+            || matches!(
+                self.source,
+                FieldSource::New {
+                    form: FieldForm::Complex,
+                    ..
+                }
+            ))
+        .then_some(self.cached_result.as_str())
     }
 
     /// Whether the retained field source carries semantic attributes outside
@@ -743,13 +878,19 @@ impl Field {
     /// Return the stored display split by its original result-run formatting.
     #[doc(hidden)]
     pub fn cached_display_segments(&self) -> Vec<(&str, Option<&CT_RPr>)> {
-        if let FieldSource::Parsed {
-            original_cached_result,
-            cached_segments,
-            ..
-        } = &self.source
-            && !cached_segments.is_empty()
-        {
+        let (original_cached_result, cached_segments) = match &self.source {
+            FieldSource::Parsed {
+                original_cached_result,
+                cached_segments,
+                ..
+            }
+            | FieldSource::New {
+                original_cached_result,
+                cached_segments,
+                ..
+            } => (original_cached_result, cached_segments),
+        };
+        if !cached_segments.is_empty() {
             if self.cached_result == *original_cached_result {
                 return cached_segments
                     .iter()
@@ -843,6 +984,7 @@ impl PartialEq for Field {
         self.instruction == other.instruction
             && self.cached_result == other.cached_result
             && self.dirty == other.dirty
+            && self.locked == other.locked
             && self.legacy_form == other.legacy_form
             && self.legacy_form_parse_error == other.legacy_form_parse_error
     }
@@ -855,6 +997,204 @@ pub struct FieldInstruction {
     pub name: String,
     pub arguments: Vec<FieldArgument>,
     pub switches: Vec<FieldSwitch>,
+}
+
+impl FieldInstruction {
+    /// Build one canonical instruction from operands that cannot inject tokens.
+    pub fn new(
+        name: &str,
+        arguments: Vec<FieldArgument>,
+        switches: Vec<FieldSwitch>,
+    ) -> Result<Self> {
+        if !valid_field_token(name) || name.starts_with('\\') {
+            return Err(OxmlError::InvalidValue("invalid field name".into()));
+        }
+        for argument in arguments.iter().chain(
+            switches
+                .iter()
+                .filter_map(|switch| switch.argument.as_ref()),
+        ) {
+            match argument {
+                FieldArgument::Text(value) => {
+                    oxml_core::xml::reject_non_xml_characters("field argument", value)?
+                }
+                FieldArgument::Nested(field) => field.validate_for_attachment()?,
+            }
+        }
+        let name = name.to_uppercase();
+        let mut switches = switches;
+        for switch in &mut switches {
+            if !(valid_field_token(&switch.name) || switch.name == "!")
+                || switch.name.contains('\\')
+            {
+                return Err(OxmlError::InvalidValue("invalid field switch name".into()));
+            }
+            switch.name = switch.name.to_ascii_lowercase();
+            if switch.argument.is_some() && switch_is_known_flag(&name, &switch.name) {
+                return Err(OxmlError::InvalidValue(format!(
+                    "field switch {} does not take an argument",
+                    switch.name
+                )));
+            }
+        }
+        let mut instruction = Self {
+            raw: String::new(),
+            name,
+            arguments,
+            switches,
+        };
+        instruction.raw = canonical_instruction_text(&instruction);
+        Ok(instruction)
+    }
+}
+
+fn valid_field_token(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '=' | '*' | '#' | '@'))
+}
+
+fn validate_raw_field_instruction(value: &str) -> Result<()> {
+    oxml_core::xml::reject_non_xml_characters("field instruction", value)?;
+    let mut quoted = false;
+    let mut characters = value.chars().peekable();
+    while let Some(character) = characters.next() {
+        if quoted
+            && character == '\\'
+            && characters
+                .peek()
+                .is_some_and(|next| matches!(next, '"' | '\\'))
+        {
+            characters.next();
+        } else if character == '"' {
+            quoted = !quoted;
+        }
+    }
+    if quoted {
+        return Err(OxmlError::InvalidValue(
+            "unbalanced field instruction quotes".into(),
+        ));
+    }
+    let tokens = lex_field_text(value);
+    let Some(InstructionToken {
+        argument: FieldArgument::Text(name),
+        quoted: false,
+    }) = tokens.first()
+    else {
+        return Err(OxmlError::InvalidValue(
+            "field instruction must start with a field name".into(),
+        ));
+    };
+    if !valid_field_token(name) {
+        return Err(OxmlError::InvalidValue("invalid field name".into()));
+    }
+    for token in &tokens[1..] {
+        if let FieldArgument::Text(value) = &token.argument
+            && !token.quoted
+            && value.starts_with('\\')
+            && !(valid_field_token(&value[1..]) || value == "\\!")
+        {
+            return Err(OxmlError::InvalidValue("invalid field switch token".into()));
+        }
+    }
+    Ok(())
+}
+
+fn cached_run_display(run: &CT_R) -> String {
+    run.content
+        .iter()
+        .map(|content| match content {
+            RunContent::Field(field) => field.cached_result.clone(),
+            RunContent::Break(BreakType::Page) => "\u{000c}".into(),
+            RunContent::Break(BreakType::Column) => "\u{000b}".into(),
+            _ => CT_R::content_text(content).to_owned(),
+        })
+        .collect()
+}
+
+const FIELD_CACHE_VALIDATION_SCOPE: &[u8] = concat!(
+    "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" ",
+    "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" ",
+    "xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\" ",
+    "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" ",
+    "xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\" ",
+    "xmlns:v=\"urn:schemas-microsoft-com:vml\" ",
+    "xmlns:o=\"urn:schemas-microsoft-com:office:office\" ",
+    "xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" ",
+    "xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" ",
+    "xmlns:wps=\"http://schemas.microsoft.com/office/word/2010/wordprocessingShape\" ",
+    "xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\">",
+)
+.as_bytes();
+
+fn validate_cached_field_runs(runs: &[CT_R]) -> Result<()> {
+    for run in runs {
+        for content in &run.content {
+            match content {
+                RunContent::Text(text) | RunContent::DeletedText(text) => {
+                    oxml_core::xml::reject_non_xml_characters("field result", &text.text)?
+                }
+                RunContent::Field(field) => field.validate_for_attachment()?,
+                _ => {}
+            }
+        }
+        for (index, raw) in run.extra_xml.iter().enumerate() {
+            if run
+                .extra_xml_positions
+                .get(index)
+                .is_some_and(|position| CT_R::raw_child_is_root_attributes(*position))
+            {
+                continue;
+            }
+            validate_raw_cached_field_content(run, raw)?;
+        }
+        let mut writer = Writer::new(Vec::new());
+        writer
+            .get_mut()
+            .extend_from_slice(FIELD_CACHE_VALIDATION_SCOPE);
+        run.to_xml(&mut writer)?;
+        writer.get_mut().extend_from_slice(b"</w:p>");
+        oxml_core::xml::validate_strict_xml_1_0(&writer.into_inner())
+            .map_err(|error| OxmlError::InvalidValue(format!("invalid cached XML: {error:?}")))?;
+    }
+    Ok(())
+}
+
+fn validate_raw_cached_field_content(run: &CT_R, raw: &[u8]) -> Result<()> {
+    let mut writer = Writer::new(FIELD_CACHE_VALIDATION_SCOPE.to_vec());
+    let mut parent = BytesStart::new("w:r");
+    for (position, attributes) in run.extra_xml_positions.iter().zip(&run.extra_xml) {
+        if CT_R::raw_child_is_root_attributes(*position) {
+            push_root_attribute_record(&mut parent, attributes, None)?;
+        }
+    }
+    writer.write_event(Event::Start(parent))?;
+    writer.get_mut().extend_from_slice(raw);
+    writer.get_mut().extend_from_slice(b"</w:r></w:p>");
+    let scoped = writer.into_inner();
+    oxml_core::xml::validate_strict_xml_1_0(&scoped)
+        .map_err(|error| OxmlError::InvalidValue(format!("invalid cached XML: {error:?}")))?;
+    let mut reader = NsReader::from_reader(scoped.as_slice());
+    loop {
+        let (namespace, event) = reader.read_resolved_event()?;
+        match event {
+            Event::Start(element) | Event::Empty(element)
+                if namespace
+                    == ResolveResult::Bound(Namespace(crate::namespace::W_NS.as_bytes()))
+                    && matches!(
+                        element.local_name().as_ref(),
+                        b"fldChar" | b"fldSimple" | b"instrText" | b"delInstrText"
+                    ) =>
+            {
+                return Err(OxmlError::InvalidValue(
+                    "raw Word field delimiters are not cached display content".into(),
+                ));
+            }
+            Event::Eof => return Ok(()),
+            _ => {}
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -873,6 +1213,10 @@ pub struct FieldSwitch {
 enum FieldSource {
     New {
         original_instruction: FieldInstruction,
+        form: FieldForm,
+        cached_runs: Option<Vec<CT_R>>,
+        original_cached_result: String,
+        cached_segments: Vec<CachedDisplaySegment>,
     },
     Parsed {
         source_id: u64,
@@ -883,6 +1227,7 @@ enum FieldSource {
         original_cached_result: String,
         cached_segments: Vec<CachedDisplaySegment>,
         original_dirty: Option<bool>,
+        original_locked: Option<bool>,
         original_legacy_form: Option<LegacyFormFieldData>,
         word_prefixes: Vec<String>,
     },
@@ -895,9 +1240,12 @@ struct CachedDisplaySegment {
     properties: Option<CT_RPr>,
 }
 
-#[derive(Debug, Clone, Copy)]
-enum FieldForm {
+/// The representation used to serialize a Word field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldForm {
+    /// One `w:fldSimple` element.
     Simple,
+    /// Ordered begin, instruction, separate, result and end runs.
     Complex,
 }
 
@@ -7561,6 +7909,7 @@ fn write_field_with_result_properties<W: std::io::Write>(
         original_instruction,
         original_cached_result,
         original_dirty,
+        original_locked,
         original_legacy_form,
         word_prefixes,
         ..
@@ -7590,6 +7939,11 @@ fn write_field_with_result_properties<W: std::io::Write>(
                 }
             }
         };
+        let updated = if field.locked != *original_locked {
+            rewrite_field_lock(&updated, *form, word_prefixes, field.locked)?
+        } else {
+            updated
+        };
         return write_raw_with_word_override(writer, &updated, foreign_word_namespace);
     }
 
@@ -7598,7 +7952,7 @@ fn write_field_with_result_properties<W: std::io::Write>(
 
     let form = match &field.source {
         FieldSource::Parsed { form, .. } => *form,
-        FieldSource::New { .. } => FieldForm::Simple,
+        FieldSource::New { form, .. } => *form,
     };
     let form = if instruction_contains_nested(&field.instruction) {
         FieldForm::Complex
@@ -9069,6 +9423,7 @@ fn instruction_for_write(field: &Field) -> FieldInstruction {
     let original = match &field.source {
         FieldSource::New {
             original_instruction,
+            ..
         }
         | FieldSource::Parsed {
             original_instruction,
@@ -9146,19 +9501,26 @@ fn instruction_source_identity_eq(left: &FieldInstruction, right: &FieldInstruct
             (None, None) | (Some(FieldArgument::Text(_)), Some(FieldArgument::Text(_))) => true,
             _ => false,
         });
-    argument_identities_match && switch_identities_match
+    left.arguments.len() == right.arguments.len()
+        && left.switches.len() == right.switches.len()
+        && argument_identities_match
+        && switch_identities_match
 }
 
 fn field_source_identity_eq(left: &Field, right: &Field) -> bool {
     match (&left.source, &right.source) {
         (
             FieldSource::Parsed {
-                source_id: left, ..
+                source_id: left_id, ..
             },
             FieldSource::Parsed {
-                source_id: right, ..
+                source_id: right_id,
+                ..
             },
-        ) => left == right,
+        ) => {
+            left_id == right_id
+                && instruction_source_identity_eq(&left.instruction, &right.instruction)
+        }
         _ => false,
     }
 }
@@ -9167,7 +9529,7 @@ fn canonical_instruction_text(instruction: &FieldInstruction) -> String {
     let mut text = instruction.name.clone();
     for argument in &instruction.arguments {
         if let FieldArgument::Text(value) = argument {
-            push_canonical_field_token(&mut text, value);
+            push_canonical_field_token(&mut text, value, false);
         }
     }
     for switch in &instruction.switches {
@@ -9175,7 +9537,11 @@ fn canonical_instruction_text(instruction: &FieldInstruction) -> String {
         text.push('\\');
         text.push_str(&switch.name);
         if let Some(FieldArgument::Text(value)) = &switch.argument {
-            push_canonical_field_token(&mut text, value);
+            push_canonical_field_token(
+                &mut text,
+                value,
+                !switch_takes_argument(&instruction.name, &switch.name),
+            );
         }
     }
     text
@@ -9204,6 +9570,7 @@ fn write_simple_field<W: std::io::Write>(
     }
     element.push_attribute(("w:instr", field.instruction.raw.as_str()));
     push_dirty_attribute(&mut element, field.dirty);
+    push_lock_attribute(&mut element, field.locked);
     writer.write_event(Event::Start(element))?;
     write_field_result_run(writer, field, foreign_word_namespace, result_properties)?;
     writer.write_event(Event::End(BytesEnd::new("w:fldSimple")))?;
@@ -9216,11 +9583,17 @@ fn write_complex_field<W: std::io::Write>(
     foreign_word_namespace: Option<&str>,
     result_properties: Option<&CT_RPr>,
 ) -> Result<()> {
-    write_field_char_run(writer, "begin", field.dirty, foreign_word_namespace)?;
+    write_field_char_run(
+        writer,
+        "begin",
+        field.dirty,
+        field.locked,
+        foreign_word_namespace,
+    )?;
     let mut text = format!(" {}", field.instruction.name);
     for argument in &field.instruction.arguments {
         match argument {
-            FieldArgument::Text(value) => push_canonical_field_token(&mut text, value),
+            FieldArgument::Text(value) => push_canonical_field_token(&mut text, value, false),
             FieldArgument::Nested(field) => {
                 text.push(' ');
                 write_instruction_run(writer, &text, foreign_word_namespace)?;
@@ -9235,7 +9608,11 @@ fn write_complex_field<W: std::io::Write>(
         text.push_str(&switch.name);
         if let Some(argument) = &switch.argument {
             match argument {
-                FieldArgument::Text(value) => push_canonical_field_token(&mut text, value),
+                FieldArgument::Text(value) => push_canonical_field_token(
+                    &mut text,
+                    value,
+                    !switch_takes_argument(&field.instruction.name, &switch.name),
+                ),
                 FieldArgument::Nested(field) => {
                     text.push(' ');
                     write_instruction_run(writer, &text, foreign_word_namespace)?;
@@ -9249,9 +9626,9 @@ fn write_complex_field<W: std::io::Write>(
     if !text.trim().is_empty() {
         write_instruction_run(writer, &text, foreign_word_namespace)?;
     }
-    write_field_char_run(writer, "separate", None, foreign_word_namespace)?;
+    write_field_char_run(writer, "separate", None, None, foreign_word_namespace)?;
     write_field_result_run(writer, field, foreign_word_namespace, result_properties)?;
-    write_field_char_run(writer, "end", None, foreign_word_namespace)?;
+    write_field_char_run(writer, "end", None, None, foreign_word_namespace)?;
     Ok(())
 }
 
@@ -9265,9 +9642,10 @@ fn write_nested_instruction_field<W: std::io::Write>(
     write_complex_field(writer, &field, foreign_word_namespace, None)
 }
 
-fn push_canonical_field_token(output: &mut String, value: &str) {
+fn push_canonical_field_token(output: &mut String, value: &str, force_quotes: bool) {
     output.push(' ');
-    if value.is_empty()
+    if force_quotes
+        || value.is_empty()
         || value.starts_with('\\')
         || value.chars().any(char::is_whitespace)
         || value.contains('"')
@@ -9304,12 +9682,14 @@ fn write_field_char_run<W: std::io::Write>(
     writer: &mut Writer<W>,
     kind: &str,
     dirty: Option<bool>,
+    locked: Option<bool>,
     foreign_word_namespace: Option<&str>,
 ) -> Result<()> {
     write_word_run_start(writer, foreign_word_namespace)?;
     let mut element = BytesStart::new("w:fldChar");
     element.push_attribute(("w:fldCharType", kind));
     push_dirty_attribute(&mut element, dirty);
+    push_lock_attribute(&mut element, locked);
     writer.write_event(Event::Empty(element))?;
     writer.write_event(Event::End(BytesEnd::new("w:r")))?;
     Ok(())
@@ -9321,7 +9701,26 @@ fn write_field_result_run<W: std::io::Write>(
     foreign_word_namespace: Option<&str>,
     properties: Option<&CT_RPr>,
 ) -> Result<()> {
+    if let FieldSource::New {
+        cached_runs: Some(runs),
+        original_cached_result,
+        ..
+    } = &field.source
+        && field.cached_result == *original_cached_result
+    {
+        for run in runs {
+            run.to_xml_with_word_override(writer, foreign_word_namespace)?;
+        }
+        return Ok(());
+    }
     write_word_run_start(writer, foreign_word_namespace)?;
+    let properties = properties.or_else(|| match &field.source {
+        FieldSource::New {
+            cached_runs: Some(runs),
+            ..
+        } => runs.first().and_then(|run| run.properties.as_ref()),
+        _ => None,
+    });
     if let Some(properties) = properties {
         properties.to_xml_with_word_override(writer, foreign_word_namespace)?;
     }
@@ -9347,6 +9746,127 @@ fn write_word_run_start<W: std::io::Write>(
     }
     writer.write_event(Event::Start(run))?;
     Ok(())
+}
+
+fn push_lock_attribute(element: &mut BytesStart<'_>, locked: Option<bool>) {
+    if let Some(locked) = locked {
+        element.push_attribute(("w:fldLock", if locked { "1" } else { "0" }));
+    }
+}
+
+struct FieldLockOwner<'a> {
+    start: usize,
+    end: usize,
+    element: BytesStart<'a>,
+    prefixes: Vec<String>,
+    empty: bool,
+}
+
+fn field_lock_owner<'a>(
+    raw: &'a [u8],
+    form: FieldForm,
+    word_prefixes: &[String],
+) -> Result<Option<FieldLockOwner<'a>>> {
+    let mut reader = Reader::from_reader(raw);
+    let mut contexts = Vec::<(Vec<String>, bool)>::new();
+    loop {
+        let start = reader.buffer_position() as usize;
+        let event = reader.read_event()?;
+        match event {
+            Event::Start(ref element) | Event::Empty(ref element) => {
+                let prefixes = word_prefixes_at(
+                    element,
+                    contexts
+                        .last()
+                        .map(|context| context.0.as_slice())
+                        .unwrap_or(word_prefixes),
+                )?;
+                let owner = match form {
+                    FieldForm::Simple => {
+                        contexts.is_empty()
+                            && is_word_element(element.name().as_ref(), b"fldSimple", &prefixes)
+                    }
+                    FieldForm::Complex => {
+                        contexts.len() == 1
+                            && contexts[0].1
+                            && is_word_element(element.name().as_ref(), b"fldChar", &prefixes)
+                            && optional_word_attribute(element, b"fldCharType", &prefixes)
+                                .as_deref()
+                                == Some("begin")
+                    }
+                };
+                if owner {
+                    return Ok(Some(FieldLockOwner {
+                        start,
+                        end: reader.buffer_position() as usize,
+                        element: element.clone(),
+                        prefixes,
+                        empty: matches!(event, Event::Empty(_)),
+                    }));
+                }
+                if matches!(event, Event::Start(_)) {
+                    let word_run = contexts.is_empty()
+                        && is_word_element(element.name().as_ref(), b"r", &prefixes);
+                    contexts.push((prefixes, word_run));
+                }
+            }
+            Event::End(_) => {
+                contexts.pop();
+            }
+            Event::Eof => return Ok(None),
+            _ => {}
+        }
+    }
+}
+
+fn field_source_lock(
+    raw: &[u8],
+    form: FieldForm,
+    word_prefixes: &[String],
+) -> Result<Option<bool>> {
+    Ok(
+        field_lock_owner(raw, form, word_prefixes)?.and_then(|owner| {
+            optional_word_attribute(&owner.element, b"fldLock", &owner.prefixes)
+                .and_then(|value| parse_field_bool(&value))
+        }),
+    )
+}
+
+fn rewrite_field_lock(
+    raw: &[u8],
+    form: FieldForm,
+    word_prefixes: &[String],
+    locked: Option<bool>,
+) -> Result<Vec<u8>> {
+    let owner = field_lock_owner(raw, form, word_prefixes)?
+        .ok_or_else(|| OxmlError::MissingElement("field lock owner".into()))?;
+    let owner_name = std::str::from_utf8(owner.element.name().as_ref())?.to_owned();
+    let mut replacement = BytesStart::new(owner_name.as_str());
+    for attribute in owner.element.attributes() {
+        let attribute = attribute?;
+        if !is_field_word_attribute(attribute.key.as_ref(), b"fldLock", &owner.prefixes) {
+            replacement.push_attribute(attribute);
+        }
+    }
+    if let Some(value) = locked {
+        let prefix = owner_name
+            .split_once(':')
+            .map(|(prefix, _)| prefix)
+            .unwrap_or("w");
+        if !owner_name.contains(':') {
+            replacement.push_attribute(("xmlns:w", crate::namespace::W_NS));
+        }
+        let name = format!("{prefix}:fldLock");
+        replacement.push_attribute((name.as_str(), if value { "1" } else { "0" }));
+    }
+    let mut writer = Writer::new(raw[..owner.start].to_vec());
+    writer.write_event(if owner.empty {
+        Event::Empty(replacement)
+    } else {
+        Event::Start(replacement)
+    })?;
+    writer.get_mut().extend_from_slice(&raw[owner.end..]);
+    Ok(writer.into_inner())
 }
 
 fn push_dirty_attribute(element: &mut BytesStart<'_>, dirty: Option<bool>) {
@@ -10691,7 +11211,11 @@ fn parse_field_instruction_parts_with_order(
             index += 1;
             continue;
         };
-        let takes_argument = switch_takes_argument(&name, switch_name);
+        let takes_argument = switch_takes_argument(&name, switch_name)
+            || !switch_is_known_flag(&name, switch_name)
+                && remaining.get(index + 1).is_some_and(|token| {
+                    token.quoted || matches!(token.argument, FieldArgument::Nested(_))
+                });
         let argument = if takes_argument && remaining.get(index + 1).is_some_and(|next| {
             next.quoted
                 || !matches!(&next.argument, FieldArgument::Text(text) if text.starts_with('\\'))
@@ -10720,6 +11244,24 @@ fn parse_field_instruction_parts_with_order(
         },
         nested_order,
     )
+}
+
+fn switch_is_known_flag(field_name: &str, switch_name: &str) -> bool {
+    let flags: &[&str] = match field_name {
+        "REF" => &["h", "n", "t", "w", "p"],
+        "PAGEREF" => &["h", "p"],
+        "SEQ" => &["n", "c", "h"],
+        "STYLEREF" => &["l", "n", "t", "w", "p"],
+        "TOC" => &["h", "z", "u", "w", "x"],
+        "TC" => &["n"],
+        "TOA" => &["b", "p"],
+        "XE" | "TA" => &["b", "i"],
+        "INCLUDETEXT" => &["!"],
+        "FILENAME" => &["p"],
+        "MERGEFIELD" => &["m", "v"],
+        _ => &[],
+    };
+    flags.contains(&switch_name.to_ascii_lowercase().as_str())
 }
 
 fn switch_takes_argument(field_name: &str, switch_name: &str) -> bool {
@@ -14688,5 +15230,377 @@ mod tests {
         ]
         .map(|needle| output.find(needle).unwrap());
         assert!(ordered.windows(2).all(|pair| pair[0] < pair[1]), "{output}");
+    }
+    #[test]
+    fn authored_simple_and_complex_fields_reopen_with_identical_semantics() {
+        for form in [FieldForm::Simple, FieldForm::Complex] {
+            let instruction = FieldInstruction::new(
+                "REF",
+                vec![FieldArgument::Text("target name".into())],
+                vec![],
+            )
+            .unwrap();
+            let field =
+                Field::from_instruction(instruction, form, vec![CT_R::new("cached")]).unwrap();
+            let mut paragraph = CT_P::new();
+            paragraph.runs.push(field_run(field, None));
+            let output = serialized_paragraph(&paragraph);
+            let reopened = CT_P::from_xml_fragment(
+                output
+                    .replacen(
+                        "<w:p>",
+                        &format!("<w:p xmlns:w=\"{}\">", crate::namespace::W_NS),
+                        1,
+                    )
+                    .as_bytes(),
+            )
+            .unwrap();
+            let field = parsed_field(&reopened, 0);
+            assert_eq!(field.form(), form);
+            assert_eq!(
+                field.instruction.arguments,
+                vec![FieldArgument::Text("target name".into())]
+            );
+            assert_eq!(field.cached_result, "cached");
+        }
+    }
+
+    #[test]
+    fn authored_nested_instruction_fields_preserve_operand_order() {
+        let inner = Field::from_raw(
+            "MERGEFIELD name",
+            FieldForm::Complex,
+            vec![CT_R::new("Ada")],
+        )
+        .unwrap();
+        let instruction = FieldInstruction::new(
+            "IF",
+            vec![
+                FieldArgument::Nested(Box::new(inner)),
+                FieldArgument::Text("=".into()),
+                FieldArgument::Text("Ada".into()),
+                FieldArgument::Text("yes".into()),
+                FieldArgument::Text("no".into()),
+            ],
+            vec![],
+        )
+        .unwrap();
+        assert!(Field::from_instruction(instruction.clone(), FieldForm::Simple, vec![]).is_err());
+        let field =
+            Field::from_instruction(instruction, FieldForm::Complex, vec![CT_R::new("yes")])
+                .unwrap();
+        let mut paragraph = CT_P::new();
+        paragraph.runs.push(field_run(field, None));
+        let output = serialized_paragraph(&paragraph);
+        assert_eq!(output.matches("fldCharType=\"begin\"").count(), 2);
+        let reopened = CT_P::from_xml_fragment(
+            output
+                .replacen(
+                    "<w:p>",
+                    &format!("<w:p xmlns:w=\"{}\">", crate::namespace::W_NS),
+                    1,
+                )
+                .as_bytes(),
+        )
+        .unwrap();
+        let field = parsed_field(&reopened, 0);
+        assert_eq!(
+            field.nested_fields_in_source_order()[0].instruction.name,
+            "MERGEFIELD"
+        );
+        assert_eq!(field.cached_result, "yes");
+    }
+
+    #[test]
+    fn field_lock_and_dirty_preserve_absent_false_and_true() {
+        for form in [FieldForm::Simple, FieldForm::Complex] {
+            for value in [None, Some(false), Some(true)] {
+                let mut field = Field::from_raw("UNKNOWN", form, vec![CT_R::new("cache")]).unwrap();
+                field.set_locked(value);
+                field.dirty = value;
+                let mut paragraph = CT_P::new();
+                paragraph.runs.push(field_run(field, None));
+                let output = serialized_paragraph(&paragraph);
+                let reopened = CT_P::from_xml_fragment(
+                    output
+                        .replacen(
+                            "<w:p>",
+                            &format!("<w:p xmlns:w=\"{}\">", crate::namespace::W_NS),
+                            1,
+                        )
+                        .as_bytes(),
+                )
+                .unwrap();
+                let field = parsed_field(&reopened, 0);
+                assert_eq!(field.locked(), value);
+                assert_eq!(field.dirty, value);
+            }
+        }
+    }
+
+    #[test]
+    fn typed_field_arguments_cannot_inject_instruction_tokens() {
+        for value in [
+            "",
+            "\\h",
+            "two words",
+            "quoted\"name",
+            "path\\name",
+            "x\" \\h \"y",
+        ] {
+            let instruction =
+                FieldInstruction::new("REF", vec![FieldArgument::Text(value.into())], vec![])
+                    .unwrap();
+            let field = Field::from_instruction(instruction, FieldForm::Simple, vec![]).unwrap();
+            let mut paragraph = CT_P::new();
+            paragraph.runs.push(field_run(field, None));
+            let reopened = CT_P::from_xml_fragment(
+                serialized_paragraph(&paragraph)
+                    .replacen(
+                        "<w:p>",
+                        &format!("<w:p xmlns:w=\"{}\">", crate::namespace::W_NS),
+                        1,
+                    )
+                    .as_bytes(),
+            )
+            .unwrap();
+            let field = parsed_field(&reopened, 0);
+            assert_eq!(
+                field.instruction.arguments,
+                vec![FieldArgument::Text(value.into())]
+            );
+            assert!(field.instruction.switches.is_empty());
+        }
+        for raw in ["", " PAGE \"unterminated", "\\h", "PA\0GE"] {
+            assert!(
+                Field::from_raw(raw, FieldForm::Simple, vec![]).is_err(),
+                "{raw:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn field_cache_runs_keep_controls_and_properties_in_order() {
+        let mut first = CT_R::new("first");
+        first.properties = Some(CT_RPr {
+            bold: Some(true),
+            ..Default::default()
+        });
+        first.content.push(RunContent::Tab);
+        first.content.push(RunContent::Break(BreakType::Line));
+        let second = CT_R::new("second");
+        for form in [FieldForm::Simple, FieldForm::Complex] {
+            let field =
+                Field::from_raw("UNKNOWN", form, vec![first.clone(), second.clone()]).unwrap();
+            assert_eq!(field.cached_result, "first\t\nsecond");
+            let mut paragraph = CT_P::new();
+            paragraph.runs.push(field_run(field, None));
+            let output = serialized_paragraph(&paragraph);
+            assert!(output.contains("<w:b"), "{output}");
+            assert!(output.find("first").unwrap() < output.find("<w:tab").unwrap());
+            assert!(output.find("<w:br").unwrap() < output.find("second").unwrap());
+            let reopened = CT_P::from_xml_fragment(
+                output
+                    .replacen(
+                        "<w:p>",
+                        &format!("<w:p xmlns:w=\"{}\">", crate::namespace::W_NS),
+                        1,
+                    )
+                    .as_bytes(),
+            )
+            .unwrap();
+            assert_eq!(parsed_field(&reopened, 0).cached_result, "first\t\nsecond");
+        }
+    }
+
+    #[test]
+    fn field_property_edits_preserve_unmodelled_xml_verbatim() {
+        for xml in [
+            r#"<a:fldSimple xmlns:a="http://schemas.openxmlformats.org/wordprocessingml/2006/main" a:instr="UNKNOWN" a:fldLock="1" xmlns:x="urn:producer"><x:keep note='yes'> exact </x:keep><a:r><a:t>cache</a:t></a:r></a:fldSimple>"#,
+            r#"<a:r xmlns:a="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="urn:producer"><a:fldChar a:fldCharType="begin" a:fldLock="1"><x:keep note='yes'> exact </x:keep></a:fldChar></a:r><a:r xmlns:a="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><a:instrText> UNKNOWN </a:instrText></a:r><a:r xmlns:a="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><a:fldChar a:fldCharType="separate"/><a:t>cache</a:t><a:fldChar a:fldCharType="end"/></a:r>"#,
+        ] {
+            let mut paragraph = parse_paragraph(xml);
+            let RunContent::Field(field) = &mut paragraph.runs[0].content[0] else {
+                panic!("field not typed");
+            };
+            assert_eq!(field.locked(), Some(true));
+            field.set_locked(Some(false));
+            let output = serialized_paragraph(&paragraph);
+            assert!(
+                output.contains("<x:keep note='yes'> exact </x:keep>"),
+                "{output}"
+            );
+            let reopened = CT_P::from_xml_fragment(
+                output
+                    .replacen(
+                        "<w:p>",
+                        &format!("<w:p xmlns:w=\"{}\">", crate::namespace::W_NS),
+                        1,
+                    )
+                    .as_bytes(),
+            )
+            .unwrap();
+            assert_eq!(parsed_field(&reopened, 0).locked(), Some(false));
+        }
+    }
+    #[test]
+    fn unknown_typed_switch_operands_reopen_without_changing_known_flags() {
+        for form in [FieldForm::Simple, FieldForm::Complex] {
+            let instruction = FieldInstruction::new(
+                "PRODUCER",
+                vec![],
+                vec![FieldSwitch {
+                    name: "q".into(),
+                    argument: Some(FieldArgument::Text("operand".into())),
+                }],
+            )
+            .unwrap();
+            let field =
+                Field::from_instruction(instruction, form, vec![CT_R::new("cache")]).unwrap();
+            let mut paragraph = CT_P::new();
+            paragraph.runs.push(field_run(field, None));
+            let reopened = parse_paragraph(
+                &serialized_paragraph(&paragraph)
+                    .replace("<w:p>", "")
+                    .replace("</w:p>", ""),
+            );
+            assert_eq!(
+                parsed_field(&reopened, 0).instruction.switches[0].argument,
+                Some(FieldArgument::Text("operand".into()))
+            );
+            assert!(parsed_field(&reopened, 0).instruction.arguments.is_empty());
+        }
+        let nested = Field::from_raw(
+            "MERGEFIELD name",
+            FieldForm::Complex,
+            vec![CT_R::new("Ada")],
+        )
+        .unwrap();
+        let instruction = FieldInstruction::new(
+            "PRODUCER",
+            vec![],
+            vec![FieldSwitch {
+                name: "q".into(),
+                argument: Some(FieldArgument::Nested(Box::new(nested))),
+            }],
+        )
+        .unwrap();
+        let field =
+            Field::from_instruction(instruction, FieldForm::Complex, vec![CT_R::new("cache")])
+                .unwrap();
+        let mut paragraph = CT_P::new();
+        paragraph.runs.push(field_run(field, None));
+        let output = serialized_paragraph(&paragraph);
+        let reopened = parse_paragraph(&output.replace("<w:p>", "").replace("</w:p>", ""));
+        let field = parsed_field(&reopened, 0);
+        assert!(field.instruction.arguments.is_empty());
+        assert!(
+            matches!(&field.instruction.switches[0].argument, Some(FieldArgument::Nested(nested)) if nested.cached_result == "Ada")
+        );
+        let raw = r#"<w:fldSimple w:instr='REF \h "target name"'><w:r><w:t>cache</w:t></w:r></w:fldSimple>"#;
+        let original = parse_paragraph(raw);
+        let instruction = &parsed_field(&original, 0).instruction;
+        assert_eq!(
+            instruction.arguments,
+            vec![FieldArgument::Text("target name".into())]
+        );
+        assert_eq!(instruction.switches[0].argument, None);
+        assert!(serialized_paragraph(&original).contains(raw));
+        assert!(
+            FieldInstruction::new(
+                "REF",
+                vec![],
+                vec![FieldSwitch {
+                    name: "h".into(),
+                    argument: Some(FieldArgument::Text("target name".into()))
+                }]
+            )
+            .is_err()
+        );
+        let producer_raw = r#"<w:fldSimple w:instr='PRODUCER \q "value"'><w:r><w:t>cache</w:t></w:r></w:fldSimple>"#;
+        assert!(serialized_paragraph(&parse_paragraph(producer_raw)).contains(producer_raw));
+    }
+
+    #[test]
+    fn equal_text_nested_replacement_writes_its_new_cache_properties() {
+        for depth in [1, 2] {
+            for switch_operand in [false, true] {
+                let instruction_prefix = if switch_operand {
+                    "PRODUCER \\q "
+                } else {
+                    "PRODUCER "
+                };
+                let source = format!(
+                    r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>{instruction_prefix}</w:instrText></w:r><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>MERGEFIELD name</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>Ada</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>cache</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#
+                );
+                let source = if depth == 2 {
+                    format!(
+                        r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>OUTER </w:instrText></w:r>{source}<w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>outer cache</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#
+                    )
+                } else {
+                    source
+                };
+                let mut paragraph = parse_paragraph(&source);
+                let RunContent::Field(field) = &mut paragraph.runs[0].content[0] else {
+                    panic!("outer field");
+                };
+                let field = if depth == 2 {
+                    let FieldArgument::Nested(middle) = &mut field.instruction.arguments[0] else {
+                        panic!("middle field");
+                    };
+                    middle.as_mut()
+                } else {
+                    field
+                };
+                let mut cached = CT_R::new("Ada");
+                cached.properties = Some(CT_RPr {
+                    bold: Some(true),
+                    ..Default::default()
+                });
+                let nested =
+                    Field::from_raw("MERGEFIELD name", FieldForm::Complex, vec![cached]).unwrap();
+                if switch_operand {
+                    field.instruction.switches[0].argument =
+                        Some(FieldArgument::Nested(Box::new(nested)));
+                } else {
+                    field.instruction.arguments[0] = FieldArgument::Nested(Box::new(nested));
+                }
+                let output = serialized_paragraph(&paragraph);
+                assert!(output.contains("<w:b"), "{output}");
+                let reopened = parse_paragraph(&output.replace("<w:p>", "").replace("</w:p>", ""));
+                let mut nested = parsed_field(&reopened, 0).nested_fields_in_source_order()[0];
+                if depth == 2 {
+                    nested = nested.nested_fields_in_source_order()[0];
+                }
+                assert_eq!(nested.cached_result, "Ada");
+                assert_eq!(
+                    nested.cached_display_segments()[0].1.unwrap().bold,
+                    Some(true)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cached_opaque_namespaces_preserve_foreign_lookalikes_and_inherited_word_names() {
+        for raw in [
+            br#"<p:fldChar xmlns:p="urn:producer" note='exact'/>"#.as_slice(),
+            b"<w:lastRenderedPageBreak/>",
+        ] {
+            let mut cached = CT_R::new("cache");
+            cached.extra_xml.push(raw.to_vec());
+            let field = Field::from_raw("UNKNOWN", FieldForm::Simple, vec![cached]).unwrap();
+            let mut paragraph = CT_P::new();
+            paragraph.runs.push(field_run(field, None));
+            let output = serialized_paragraph(&paragraph);
+            assert!(output.contains(std::str::from_utf8(raw).unwrap()));
+            let reopened = parse_paragraph(&output.replace("<w:p>", "").replace("</w:p>", ""));
+            assert!(serialized_paragraph(&reopened).contains(std::str::from_utf8(raw).unwrap()));
+        }
+        for raw in [br#"<a:fldChar xmlns:a="http://schemas.openxmlformats.org/wordprocessingml/2006/main" a:fldCharType="begin"/>"#.as_slice(), b"<w:fldChar w:fldCharType=\"begin\"/>", b"<w:unknown>"] {
+            let mut cached = CT_R::new("cache");
+            cached.extra_xml.push(raw.to_vec());
+            assert!(Field::from_raw("UNKNOWN", FieldForm::Simple, vec![cached]).is_err());
+        }
     }
 }

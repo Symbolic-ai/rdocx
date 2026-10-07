@@ -1,6 +1,6 @@
 # F-278, General simple and complex field builder
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S90
 **Size**: L
 **Depends on**: F-260
@@ -81,7 +81,11 @@ impl FieldRef<'_> {
 Checked constructors validate before attachment. Reject XML-invalid characters,
 an absent or invalid field name, malformed instruction tokens and unbalanced
 quoted instructions. Unknown valid names and switches remain authorable and
-retain caches.
+retain caches. Quoted and nested operands after otherwise unknown switches are
+recognized as switch operands. Typed unknown text operands use forced quotes.
+Known flag switches preserve the existing positional-operand boundary and
+reject an explicit typed operand. This is a pre-1.0 projection clarification,
+with original producer XML retained unchanged.
 
 Typed construction produces one canonical instruction from validated arguments
 and switches. Existing quoting and escaping prevents text operands injecting
@@ -128,6 +132,10 @@ compatibility implications that completion documents.
 | regression | `field_cache_runs_keep_controls_and_properties_in_order` | Text, tabs, breaks, nested result fields and properties retain order. |
 | round-trip | `field_property_edits_preserve_unmodelled_xml_verbatim` | Aliased prefixes and opaque children retain exact bytes outside edited attributes. |
 | regression | `legacy_add_field_retains_its_existing_simple_contract` | Existing plain cached-string API remains compatible. |
+| round-trip | `unknown_typed_switch_operands_reopen_without_changing_known_flags` | Unknown text and nested switch operands retain positions while known flags stay flags. |
+| regression | `equal_text_nested_replacement_writes_its_new_cache_properties` | Argument and switch operand replacement at child and grandchild depths invalidates retained source even with equal display text. |
+| regression | `cached_opaque_namespaces_preserve_foreign_lookalikes_and_inherited_word_names` | Foreign lookalikes and inherited namespaces survive, while actual Word delimiters reject. |
+| round-trip | `checked_cached_page_and_column_breaks_attach_and_reopen` | Typed page and column controls survive attachment and nested-operand validation. |
 
 **Test gate**: round-trip. Every supported field shape reopens with identical
 instruction semantics and ordered cached content.
@@ -162,20 +170,23 @@ Unexplained deltas block completion.
 - `crates/rdocx/src/run.rs`
 - `crates/rdocx/src/lib.rs`, only for necessary facade re-exports
 - `crates/rdocx/tests/regression_test.rs`
+- `README.md`, required measured archive inventory refresh
+- `crates/rdocx-oxml/README.md`, required measured archive inventory refresh
+- `scripts/readme_doctests.py`, matching measured archive constants and dates
 
 The shared regression entrypoint is exclusive. F-X178 and Issue 264 are outside
 this work.
 
 ## Implementation checklist
 
-- [ ] Add checked typed and raw construction to the existing recursive model.
-- [ ] Reuse `CT_R` for ordered cached content.
-- [ ] Expose explicit simple and complex form.
-- [ ] Implement lock access and three-state serialization.
-- [ ] Preserve untouched and property-edited producer XML.
-- [ ] Add checked run attachment and immutable lock access.
-- [ ] Add declared tests to existing owners.
-- [ ] Pass scoped verify, packaging riders and zero-finding microscope.
+- [x] Add checked typed and raw construction to the existing recursive model.
+- [x] Reuse `CT_R` for ordered cached content.
+- [x] Expose explicit simple and complex form.
+- [x] Implement lock access and three-state serialization.
+- [x] Preserve untouched and property-edited producer XML.
+- [x] Add checked run attachment and immutable lock access.
+- [x] Add declared tests to existing owners.
+- [x] Pass scoped verify, packaging riders and zero-finding microscope.
 
 ## Open questions
 

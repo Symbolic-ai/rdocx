@@ -47567,3 +47567,122 @@ fn glossary_block_grammar_rejects_inline_xml_and_preserves_opaque_blocks() {
             .contains("<x:keep/>")
     );
 }
+
+#[test]
+fn invalid_field_construction_leaves_run_unchanged() {
+    use rdocx_oxml::text::{CT_R, Field, FieldForm};
+    let mut document = Document::new();
+    {
+        let mut paragraph = document.add_paragraph("before");
+        let mut run = paragraph.add_run("after");
+        let mut field =
+            Field::from_raw("REF target", FieldForm::Simple, vec![CT_R::new("cache")]).unwrap();
+        field.cached_result = "invalid\0text".into();
+        assert!(run.add_field_value(field).is_err());
+    }
+    let xml = document_xml(&mut document);
+    assert!(!xml.contains("fldSimple"));
+    assert!(xml.contains("before") && xml.contains("after"));
+    let mut malformed = CT_R::new("cache");
+    malformed
+        .extra_xml
+        .push(b"<w:fldChar w:fldCharType=\"begin\"/>".to_vec());
+    assert!(Field::from_raw("REF target", FieldForm::Simple, vec![malformed]).is_err());
+}
+
+#[test]
+fn legacy_add_field_retains_its_existing_simple_contract() {
+    let mut document = Document::new();
+    document
+        .add_paragraph("")
+        .add_run("prefix ")
+        .add_field("PAGE", "")
+        .unwrap();
+    let xml = document_xml(&mut document);
+    assert!(xml.contains("w:fldSimple"));
+    assert!(!xml.contains("w:fldChar"));
+    assert!(xml.contains("<w:t>1</w:t>"));
+}
+
+#[test]
+fn checked_field_attachment_reopens_ordered_complex_cache_and_lock() {
+    use rdocx_oxml::text::{CT_R, Field, FieldForm};
+    let mut document = Document::new();
+    let mut field = Field::from_raw(
+        "UNKNOWN \\* Upper",
+        FieldForm::Complex,
+        vec![CT_R::new("one"), CT_R::new("two")],
+    )
+    .unwrap();
+    field.set_locked(Some(true));
+    document
+        .add_paragraph("")
+        .add_run("")
+        .add_field_value(field)
+        .unwrap();
+    let bytes = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let paragraphs = reopened.paragraphs();
+    let run = paragraphs[0]
+        .runs()
+        .find(|run| {
+            run.items()
+                .any(|item| matches!(item, rdocx::RunItemRef::Field(_)))
+        })
+        .unwrap();
+    let rdocx::RunItemRef::Field(field) = run.items().next().unwrap() else {
+        panic!("expected field");
+    };
+    assert_eq!(field.kind(), rdocx::FieldKind::Complex);
+    assert_eq!(field.cached_result(), "onetwo");
+    assert_eq!(field.locked(), Some(true));
+    assert_eq!(field.cached_display_segments().len(), 2);
+}
+
+#[test]
+fn checked_cached_page_and_column_breaks_attach_and_reopen() {
+    use rdocx_oxml::text::{
+        BreakType, CT_R, Field, FieldArgument, FieldForm, FieldInstruction, RunContent,
+    };
+    for kind in [BreakType::Page, BreakType::Column] {
+        let mut cached = CT_R::new("before");
+        cached.content.push(RunContent::Break(kind));
+        cached
+            .content
+            .push(RunContent::Text(rdocx_oxml::text::CT_Text::new("after")));
+        for form in [FieldForm::Simple, FieldForm::Complex] {
+            let field = Field::from_raw("UNKNOWN", form, vec![cached.clone()]).unwrap();
+            let instruction = FieldInstruction::new(
+                "PRODUCER",
+                vec![FieldArgument::Nested(Box::new(field.clone()))],
+                vec![],
+            )
+            .unwrap();
+            assert!(Field::from_instruction(instruction, FieldForm::Complex, vec![]).is_ok());
+            let mut document = Document::new();
+            document
+                .add_paragraph("")
+                .add_run("")
+                .add_field_value(field)
+                .unwrap();
+            let bytes = document.to_bytes().unwrap();
+            let mut reopened = Document::from_bytes(&bytes).unwrap();
+            let xml = document_xml(&mut reopened);
+            let kind_name = if kind == BreakType::Page {
+                "page"
+            } else {
+                "column"
+            };
+            assert!(xml.contains(&format!("w:type=\"{kind_name}\"")), "{xml}");
+            let mut invalid = Field::from_raw("UNKNOWN", form, vec![cached.clone()]).unwrap();
+            invalid.cached_result = "replacement\u{000b}".into();
+            assert!(
+                document
+                    .add_paragraph("")
+                    .add_run("")
+                    .add_field_value(invalid)
+                    .is_err()
+            );
+        }
+    }
+}

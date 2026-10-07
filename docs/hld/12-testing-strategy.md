@@ -1345,6 +1345,19 @@ rendered-group perturbation proves the geometry and raster path is
 mutation-sensitive. The source DOCX digest and tool identities live in the
 text manifest, while both PDF outputs remain untracked.
 
+The general native field construction gate reopens explicit simple and complex
+fields with identical instruction semantics and ordered cached content. Tests
+construct inputs in code and cover recursive argument and switch operands,
+three-state lock and dirty toggles, operand quoting, formatting and typed line,
+page and column breaks. Unknown typed switch operands reopen in the same
+position, while known flags retain following positional operands. Equal-text
+nested replacements must emit their new properties rather than reuse the old
+source. Namespace-aware cache validation preserves foreign lookalikes and
+inherited-prefix opaque children but rejects actual raw Word delimiters and
+malformed XML. Attachment failures keep destination runs unchanged, and the
+legacy plain-string field API retains its existing serialization. Existing
+`text.rs` unit tests and `regression_test.rs` provide this round-trip gate.
+
 ## The hash harness
 
 The single highest-value mechanism in the plan is

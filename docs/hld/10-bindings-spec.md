@@ -1864,6 +1864,23 @@ serializes as a simple field after the run's earlier content, and
 `update_layout_backed_fields` fills a `PAGE`, `NUMPAGES`, or `PAGEREF` cache.
 WASM and CLI gain no implicit surface.
 
+Native Rust also exposes `Run::add_field_value(Field)`. It accepts a checked
+`Field::from_raw` or `Field::from_instruction` with explicit `FieldForm::Simple`
+or `FieldForm::Complex` and ordered `Vec<CT_R>` cached content. The shared
+`FieldInstruction::new` constructor validates names and switches, quotes text
+operands and accepts recursive typed operands. A simple instruction cannot hold
+nested fields. Known flag switches reject explicit operands. Otherwise unknown
+quoted or nested switch operands retain their operand position across reopen.
+This is a pre-1.0 semantic projection extension for ambiguous unknown switches,
+while original producer bytes remain unchanged. `Field::form`, `locked` and
+`set_locked` expose representation and three-state field locks, and immutable
+`FieldRef::locked` reads the lock. Existing conservative unmodeled semantic
+attribute reporting still identifies producer lock attributes. These additions
+are native Rust only. Existing `Run::add_field` retains its simple-field API,
+including its default PAGE and NUMPAGES cache behavior. Ordered cache controls
+and properties survive attachment and reopen. Invalid attachment leaves the
+run unchanged.
+
 `add_symbol` keeps that meaning. `add_symbol_char(font, char_code)` is the
 separate method that produces `w:sym`, and `add_special_character` produces
 `w:cr`, `w:noBreakHyphen`, `w:softHyphen`, and `w:ptab`. `RunItemRef` gains

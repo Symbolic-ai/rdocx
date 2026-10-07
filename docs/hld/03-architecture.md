@@ -646,10 +646,21 @@ those runs and its fields are unchanged. Otherwise each field writes its own
 part of the span, so one field of a shared run can be updated alone. Direct-run and marker mutation rebuild the same read projection in
 memory. Simple and complex fields share one recursive
 `Field` grammar with a normalized name, text or
-nested arguments, switches, cached result, and optional dirty state. Its private
+nested arguments, switches, cached result, and optional dirty and lock states. Its private
 source records the original field form, run partition, and producer XML.
 Complex fields expose ordered cached-display segments with each segment's
-direct run properties. Tracked insertion projection retains inline paragraph
+direct run properties. Native callers construct either representation through
+checked raw instructions or typed arguments and switches, using `CT_R` values
+for ordered cached content. Typed operands cannot inject instruction tokens.
+Unknown switch operands are quoted on write and recognized as quoted or nested
+operands on read. Known flag switches keep their positional-operand grammar.
+This enriches the pre-1.0 projection of ambiguous unknown producer switches
+without changing preserved producer bytes. Cached page and column breaks remain
+typed XML controls rather than literal XML-invalid display characters. A nested
+field replacement invalidates the unchanged-source shortcut even when its
+display text stays equal. Lock edits rewrite only the physical simple owner or
+complex begin marker, retaining opaque subtrees and namespace bindings.
+ Tracked insertion projection retains inline paragraph
 structure and nested revision boundaries, with a fixed depth ceiling checked
 before recursive projection.
 The mutable native run facade owns one logical ordered sequence of text, tabs,
