@@ -49,6 +49,22 @@ REF reuses ResolvedNumbering::relative_to, level, full-context and literal-free 
 
 Heading eligibility uses effective outline levels, accepted revision projection and actual source paths. Direct body-text outline suppression overrides inherited heading style. numId=0 suppresses the marker without erasing an eligible heading. Deleted and moved-from paragraphs do not advance accepted counters. Respect accepted paragraph-mark joins. Hidden/suppressed numbering and heading suppression remain separate cases.
 
+Share effective numbering and outline facts while preserving each consumer's
+selection rules. The additive outline suppresses effective body-text outline
+level 9. The captured TOC with both o and u excludes that source, while an
+explicit custom-style selection and o without u include it. Page omission
+for a selected level is separate from source exclusion. A numId=0 heading
+has no outline marker, but numbered REF modes return the captured zero.
+Do not replace these distinct outcomes with one missing-marker fallback.
+
+Shared furniture STYLEREF selects by physical placement. In the captured
+first page without a qualifying heading, both first and last modes search
+forward to the first qualifying source. Later pages use their own first and
+last sources. Saved shared-part caches reflect the last explicit update
+placement and do not stand for every page's rendered value. The equal H2
+n, r and w results in this capture do not prove wider switch equivalence.
+Retain discriminating mode tests over the shared authoritative facts.
+
 Table-cell and nested-control headings consume the same authoritative numbering that visible layout uses. Propagate heading metadata into table pagination where needed. Renderer outlines use the resolved visible marker, suffix policy and accepted heading title. Preserve tab versus space suffix semantics in field results, while outline display uses a documented readable separator. No new number parser or conversion is added.
 
 Generated TOC, TOF, TOA and bibliography ranges are excluded from new source discovery. Copied fields inside result caches must not advance caption sequences or manufacture source headings. The entire cache/navigation transaction stages, validates, reparses and commits once. Stale paths, ambiguous targets or invalid dependencies cannot partly publish. Ordinary save remains leave alone.
@@ -76,6 +92,7 @@ across visible markers, navigation structures, references, and saved caches.
 | round-trip | numbered_navigation_caches_reopen_without_change | Field ownership, bookmarks, switches and caches survive repeated save/reopen |
 | integration | navigation_updates_are_atomic | Stale paths, ambiguous targets and invalid dependencies preserve full bytes |
 | differential | navigation_switches_match_fresh_word_record | Narrow STYLEREF page-selection and numbering/suppression cases match independently captured Word updates |
+| differential | navigation_selectors_keep_distinct_suppression_rules | TOC o/u, o-only and custom-style selection distinguish outline suppression, numId=0 and page omission while numbered REF retains the measured zero result |
 
 Extend existing tests, with no new binary fixture or integration binary. Use public dependency APIs to build the primary regression document. Assert marker values through source paths, not duplicated text matching. Pin fresh rider evidence to Microsoft Word for Mac 16.113.2 build 16.113.26092012, en-US and source fingerprint. Capture actual update, save and reopen before/after mutation, field values, style and numbering records, targets and entry order. Existing F-248 observations are supporting evidence only. Missing fresh switch evidence remains a failed rider.
 
