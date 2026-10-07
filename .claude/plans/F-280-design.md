@@ -575,6 +575,30 @@ and [Microsoft REF reference](https://support.microsoft.com/en-us/word/field-cod
 They replace the earlier independent-story counter and number-string reading.
 They do not reduce the approved caption or cross-reference scope.
 
+## Selected header and footer text-box painting
+
+The full authenticated REF-f owner fixture requires selected header/footer
+text-box literal results to paint, along with ordinary furniture and body boxes.
+The existing furniture layout retains anchored content, but
+`crates/rdocx-layout/src/paginator.rs` render_hf_blocks currently emits only
+paragraph lines and change bars. Complete that existing path using its concrete
+anchor placement and shape-text routines. Pass content-relative paragraph y,
+which is start_y minus margin_top plus story flow offset. The existing vertical
+resolver already adds the page margin for paragraph-relative anchors. Do not
+apply that margin twice or borrow body wrapping state for furniture.
+
+Cover first, default and even furniture variants, page/margin/paragraph-relative
+positions, indentation and overlapping neighboring paragraphs. Behind-document
+anchors belong to the existing page layer before text, retaining page-border
+and watermark background order. Front anchors follow their story text without
+changing unrelated body foreground or front-border policy. Preserve source
+provenance, shape geometry and producer XML on pure layout and save/reopen.
+No new renderer, helper API, type or file is proposed. Deterministic rendering
+and the existing hash harness gate this intentional appearance correction.
+If a corpus fixture contains previously omitted furniture boxes, identify its
+exact expected newly painted content and review that delta in its own labelled
+commit before changing a baseline. No unexplained delta is allowed.
+
 ## HLD impact
 
 - `docs/hld/02-scope-and-non-goals.md`
@@ -632,6 +656,7 @@ pass before completion and may not be replaced by guessed expectations.
 - `crates/rdocx/src/document.rs`, if checked story insertion needs an existing-owner helper
 - `crates/rdocx/src/comments.rs`, if paired-target publication needs an existing-owner helper
 - `crates/rdocx-layout/src/style_resolver.rs`, shared concrete numbered REF formatting for facade and layout consumers
+- `crates/rdocx-layout/src/paginator.rs`, selected header/footer anchored text-box painting and existing page-layer ordering
 - `crates/rdocx-layout/src/engine.rs`, shared sequence event evaluation and per-page reference display
 - `crates/rdocx-layout/src/lib.rs`, concrete sequence snapshot and event records
 - `crates/rdocx-layout/src/input.rs`, immutable derived snapshot propagation
