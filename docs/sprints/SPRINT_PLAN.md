@@ -1994,12 +1994,20 @@ citations, and numbering-aware navigation.
 | F-281 | Indexes and tables of figures and authorities | L |
 | F-282 | Citations and bibliography authoring | L |
 | F-283 | Complete numbering-aware navigation fields | L |
+| F-X178 | Clearable direct run formatting setters | S |
+| F-X179 | Correct multi-paragraph comment threads from PR 271 | S |
 
 F-278 is the field substrate. F-279 uses the S89 note policy, and F-280 uses
 S89 range markers. F-281 follows the field, pagination, and caption work.
 F-282 can proceed after F-278. F-283 closes the composed numbering and
 navigation result. The sprint gate checks one source-built document's field
 caches, page targets, and numbering against the pinned Word oracle.
+The user added F-X178 during S90 after the Issue 264 follow-up. It has no
+feature dependency and shares `run.rs` with F-278, so its wave follows that
+design.
+
+F-X179 integrates PR 271 only after every Issue 270 criterion passes. It has
+no dependency and preserves Issue 264 and F-X178 for separate work.
 
 #### Sprint S91, Templates, controls, and forms
 

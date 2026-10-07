@@ -252,7 +252,7 @@ enum CommentCommand {
         /// Optional comment author initials
         #[arg(long)]
         initials: Option<String>,
-        /// Comment text
+        /// Comment text, one paragraph per line
         #[arg(long)]
         text: String,
         /// RFC 3339 comment timestamp, omitted from the comment when absent
@@ -275,7 +275,7 @@ enum CommentCommand {
         /// Reply author
         #[arg(long)]
         author: String,
-        /// Reply text
+        /// Reply text, one paragraph per line
         #[arg(long)]
         text: String,
         /// RFC 3339 reply timestamp, omitted from the reply when absent

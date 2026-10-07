@@ -966,13 +966,13 @@ impl Document {
         let by_para_id = comments
             .comments
             .iter()
-            .filter_map(|comment| first_para_id(comment).map(|para_id| (para_id, comment.id)))
+            .flat_map(|comment| para_ids(comment).map(|para_id| (para_id, comment.id)))
             .collect::<HashMap<_, _>>();
         comments
             .comments
             .iter()
             .map(|comment| {
-                let extension = first_para_id(comment).and_then(|para_id| {
+                let extension = last_para_id(comment).and_then(|para_id| {
                     self.comments_extended
                         .as_ref()?
                         .comments
@@ -996,7 +996,8 @@ impl Document {
     /// Run indexes count the runs that `Paragraph::runs` lists, and the
     /// range markers are placed as [`Self::add_bookmark`] places its markers.
     /// The reference run follows the end marker. A range that cannot be
-    /// anchored exactly is an error and leaves the document unchanged.
+    /// anchored exactly is an error and leaves the document unchanged. Each
+    /// line of `text` becomes one paragraph of the comment.
     pub fn add_comment(
         &mut self,
         range: RunRange,
@@ -1010,7 +1011,8 @@ impl Document {
     /// Add a dated comment over a half-open range of body paragraph runs.
     ///
     /// `date`, when present, must be an RFC 3339 timestamp. No date is the
-    /// deterministic default used by [`Document::add_comment`].
+    /// deterministic default used by [`Document::add_comment`]. Each line of
+    /// `text` becomes one paragraph of the comment.
     pub fn add_comment_with_date(
         &mut self,
         range: RunRange,
@@ -1033,6 +1035,7 @@ impl Document {
     /// control with the two-segment path that
     /// [`Document::paragraph_story_location`] returns. Run indexes count the
     /// runs that `Paragraph::runs` lists, as in [`Document::add_comment`].
+    /// Each line of `text` becomes one paragraph of the comment.
     pub fn add_story_comment_with_date(
         &mut self,
         range: StoryRunRange,
@@ -1198,7 +1201,7 @@ impl Document {
     /// be anchored exactly is an error and leaves the document unchanged. A
     /// match is not exact when its range would also show text that the
     /// literal text leaves out, such as the result of a field between two of
-    /// its runs.
+    /// its runs. Each line of `text` becomes one paragraph of the comment.
     pub fn add_comment_on_text(
         &mut self,
         anchor: &str,
@@ -1297,8 +1300,8 @@ impl Document {
         Ok(id)
     }
 
-    /// Append comment `id`, holding one text paragraph, and its thread entry
-    /// to the comment models, which must already exist.
+    /// Append comment `id`, holding one paragraph per line of `text`, and its
+    /// thread entry to the comment models, which must already exist.
     fn push_comment_definition(
         &mut self,
         id: i32,
@@ -1307,9 +1310,9 @@ impl Document {
         text: &str,
         date: Option<&str>,
     ) -> Result<()> {
-        let para_id = allocate_para_id(self.comments.as_ref(), self.comments_extended.as_ref())?;
-        let mut paragraph = CT_P::new();
-        paragraph.add_run(text);
+        let mut occupied =
+            occupied_para_ids(self.comments.as_ref(), self.comments_extended.as_ref());
+        let (paragraphs, paragraph_ids, para_id) = comment_text_paragraphs(text, &mut occupied)?;
         self.comments
             .as_mut()
             .expect("comment model was initialized")
@@ -1319,8 +1322,8 @@ impl Document {
                 author: Some(author.to_owned()),
                 date: date.map(str::to_owned),
                 initials: initials.map(str::to_owned),
-                paragraphs: vec![paragraph],
-                paragraph_ids: vec![Some(para_id.clone())],
+                paragraphs,
+                paragraph_ids,
                 extra_attributes: Vec::new(),
                 extra_xml: Vec::new(),
             });
@@ -1337,14 +1340,16 @@ impl Document {
         Ok(())
     }
 
-    /// Add a reply linked to the selected comment paragraph.
+    /// Add a reply linked to the selected comment's last paragraph. Each line
+    /// of `text` becomes one paragraph of the reply.
     pub fn reply_to(&mut self, parent_id: i32, author: &str, text: &str) -> Result<i32> {
         self.reply_to_with_date(parent_id, author, text, None)
     }
 
-    /// Add a dated reply linked to the selected comment paragraph.
+    /// Add a dated reply linked to the selected comment's last paragraph.
     ///
-    /// `date`, when present, must be an RFC 3339 timestamp.
+    /// `date`, when present, must be an RFC 3339 timestamp. Each line of
+    /// `text` becomes one paragraph of the reply.
     pub fn reply_to_with_date(
         &mut self,
         parent_id: i32,
@@ -1377,7 +1382,7 @@ impl Document {
                     .position(|item| item.id == parent_id)
             })
             .ok_or_else(|| Error::Other(format!("comment id {parent_id} does not exist")))?;
-        let existing_parent_para_id = first_para_id(
+        let existing_parent_para_id = last_para_id(
             &self
                 .comments
                 .as_ref()
@@ -1385,15 +1390,13 @@ impl Document {
                 .comments[parent_index],
         )
         .map(str::to_owned);
+        let mut occupied =
+            occupied_para_ids(self.comments.as_ref(), self.comments_extended.as_ref());
         let parent_para_id = match existing_parent_para_id {
             Some(para_id) => para_id,
-            None => allocate_para_id(self.comments.as_ref(), self.comments_extended.as_ref())?,
+            None => allocate_para_id_from_occupied(&mut occupied)?,
         };
-        let para_id = allocate_para_id_with_reserved(
-            self.comments.as_ref(),
-            self.comments_extended.as_ref(),
-            Some(&parent_para_id),
-        )?;
+        let (paragraphs, paragraph_ids, para_id) = comment_text_paragraphs(text, &mut occupied)?;
         self.ensure_comment_models()?;
         self.ensure_comment_relationships()?;
         let id = self.identifiers.reserve_comment_id()?;
@@ -1406,16 +1409,14 @@ impl Document {
         if parent.paragraph_ids.len() < parent.paragraphs.len() {
             parent.paragraph_ids.resize(parent.paragraphs.len(), None);
         }
-        parent.paragraph_ids[0] = Some(parent_para_id.clone());
-        let mut paragraph = CT_P::new();
-        paragraph.add_run(text);
+        parent.paragraph_ids[parent.paragraphs.len() - 1] = Some(parent_para_id.clone());
         comments.comments.push(CT_Comment {
             id,
             author: Some(author.to_owned()),
             date: date.map(str::to_owned),
             initials: None,
-            paragraphs: vec![paragraph],
-            paragraph_ids: vec![Some(para_id.clone())],
+            paragraphs,
+            paragraph_ids,
             extra_attributes: Vec::new(),
             extra_xml: Vec::new(),
         });
@@ -1466,7 +1467,7 @@ impl Document {
         else {
             return Ok(false);
         };
-        let existing_para_id = first_para_id(
+        let existing_para_id = last_para_id(
             &self
                 .comments
                 .as_ref()
@@ -1491,7 +1492,8 @@ impl Document {
         if comment.paragraph_ids.len() < comment.paragraphs.len() {
             comment.paragraph_ids.resize(comment.paragraphs.len(), None);
         }
-        comment.paragraph_ids[0] = Some(para_id.clone());
+        let last = comment.paragraphs.len() - 1;
+        comment.paragraph_ids[last] = Some(para_id.clone());
         let extended = self
             .comments_extended
             .as_mut()
@@ -1538,14 +1540,14 @@ impl Document {
         let id_by_para = comments
             .comments
             .iter()
-            .filter_map(|comment| first_para_id(comment).map(|para| (para.to_owned(), comment.id)))
+            .flat_map(|comment| para_ids(comment).map(|para| (para.to_owned(), comment.id)))
             .collect::<HashMap<_, _>>();
         let mut removed_ids = HashSet::from([id]);
         let mut removed_para_ids = comments
             .comments
             .iter()
             .filter(|comment| comment.id == id)
-            .filter_map(first_para_id)
+            .flat_map(para_ids)
             .map(str::to_owned)
             .collect::<HashSet<_>>();
         if let Some(extended) = self.comments_extended.as_ref() {
@@ -1560,6 +1562,14 @@ impl Document {
                     {
                         if let Some(comment_id) = id_by_para.get(&entry.para_id) {
                             removed_ids.insert(*comment_id);
+                            removed_para_ids.extend(
+                                comments
+                                    .comments
+                                    .iter()
+                                    .filter(|comment| comment.id == *comment_id)
+                                    .flat_map(para_ids)
+                                    .map(str::to_owned),
+                            );
                         }
                         changed = true;
                     }
@@ -1752,7 +1762,7 @@ fn selected_fragment_comment_ids(
                 .comments
                 .iter()
                 .filter(|comment| included_ids.contains(&comment.id))
-                .filter_map(first_para_id)
+                .flat_map(para_ids)
                 .collect::<HashSet<_>>();
             let before = included_ids.len();
             for extension in &extended.comments {
@@ -1763,7 +1773,7 @@ fn selected_fragment_comment_ids(
                     && let Some(comment) = source
                         .comments
                         .iter()
-                        .find(|comment| first_para_id(comment) == Some(&extension.para_id))
+                        .find(|comment| para_ids(comment).any(|para| para == extension.para_id))
                 {
                     included_ids.insert(comment.id);
                 }
@@ -1776,8 +1786,39 @@ fn selected_fragment_comment_ids(
     Ok(included_ids)
 }
 
-fn first_para_id(comment: &CT_Comment) -> Option<&str> {
-    comment.paragraph_ids.first()?.as_deref()
+/// The `w14:paraId` of the comment's last paragraph, which keys its
+/// `w15:commentEx` entry and names it as a reply's `w15:paraIdParent`.
+fn last_para_id(comment: &CT_Comment) -> Option<&str> {
+    let last = comment.paragraphs.len().checked_sub(1)?;
+    comment.paragraph_ids.get(last)?.as_deref()
+}
+
+/// Every `w14:paraId` of the comment. Identifiers are unique, so a parent
+/// link naming any of them, as older producers wrote, still finds it.
+fn para_ids(comment: &CT_Comment) -> impl Iterator<Item = &str> {
+    comment.paragraph_ids.iter().filter_map(Option::as_deref)
+}
+
+/// Build one comment paragraph per line of `text`, each with a fresh
+/// `w14:paraId`, and return the last one's identifier with them.
+fn comment_text_paragraphs(
+    text: &str,
+    occupied: &mut HashSet<u32>,
+) -> Result<(Vec<CT_P>, Vec<Option<String>>, String)> {
+    let mut paragraphs = Vec::new();
+    let mut paragraph_ids = Vec::new();
+    for line in text.split('\n') {
+        let mut paragraph = CT_P::new();
+        paragraph.add_run(line.strip_suffix('\r').unwrap_or(line));
+        paragraphs.push(paragraph);
+        paragraph_ids.push(Some(allocate_para_id_from_occupied(occupied)?));
+    }
+    let para_id = paragraph_ids
+        .last()
+        .cloned()
+        .flatten()
+        .expect("splitting text yields at least one line");
+    Ok((paragraphs, paragraph_ids, para_id))
 }
 
 fn validate_bookmark_name(name: &str) -> Result<()> {
@@ -2152,19 +2193,7 @@ fn allocate_para_id(
     comments: Option<&CT_Comments>,
     extended: Option<&CT_CommentsEx>,
 ) -> Result<String> {
-    allocate_para_id_with_reserved(comments, extended, None)
-}
-
-fn allocate_para_id_with_reserved(
-    comments: Option<&CT_Comments>,
-    extended: Option<&CT_CommentsEx>,
-    reserved: Option<&str>,
-) -> Result<String> {
-    let mut occupied = occupied_para_ids(comments, extended);
-    if let Some(reserved) = reserved.and_then(parse_para_id) {
-        occupied.insert(reserved);
-    }
-    allocate_para_id_from_occupied(&mut occupied)
+    allocate_para_id_from_occupied(&mut occupied_para_ids(comments, extended))
 }
 
 fn occupied_para_ids(
@@ -2731,6 +2760,367 @@ mod tests {
         let comments = document.comments();
         assert!(comments[0].resolved());
         assert!(!comments[1].resolved());
+    }
+
+    /// Five comments whose `w15:commentEx` rows are keyed, as Word and Google
+    /// Docs key them, by the paraId of each comment's last paragraph: a reply
+    /// of two paragraphs, a reply to a parent of two paragraphs and a
+    /// resolved comment of two paragraphs.
+    fn multi_paragraph_threads() -> Document {
+        const COMMENTS: [(&str, &[&str]); 5] = [
+            ("Ada", &["1A000001"]),
+            ("Ben", &["1B000001", "1B000002"]),
+            ("Ada", &["2A000001", "2A000002"]),
+            ("Ben", &["2B000001"]),
+            ("Ada", &["3A000001", "3A000002"]),
+        ];
+        let mut document = Document::new();
+        let mut paragraph = document.add_paragraph("");
+        paragraph.add_run("anchor");
+        let range = RunRange {
+            start: RunPosition {
+                body_index: 0,
+                run_index: 0,
+            },
+            end: RunPosition {
+                body_index: 0,
+                run_index: 1,
+            },
+        };
+        let ids = COMMENTS
+            .iter()
+            .map(|(author, _)| document.add_comment(range, author, None, "x").unwrap())
+            .collect::<Vec<_>>();
+        let comments = ids
+            .iter()
+            .zip(COMMENTS)
+            .map(|(id, (author, para_ids))| {
+                let paragraphs = para_ids
+                    .iter()
+                    .map(|para_id| {
+                        format!(
+                            r#"<w:p w14:paraId="{para_id}"><w:r><w:t>{para_id}</w:t></w:r></w:p>"#
+                        )
+                    })
+                    .collect::<String>();
+                format!(r#"<w:comment w:id="{id}" w:author="{author}">{paragraphs}</w:comment>"#)
+            })
+            .collect::<String>();
+        let comments = format!(
+            r#"<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">{comments}</w:comments>"#
+        );
+        let extended = r#"<w15:commentsEx xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"><w15:commentEx w15:paraId="1A000001" w15:done="0"/><w15:commentEx w15:paraId="1B000002" w15:paraIdParent="1A000001" w15:done="0"/><w15:commentEx w15:paraId="2A000002" w15:done="0"/><w15:commentEx w15:paraId="2B000001" w15:paraIdParent="2A000002" w15:done="0"/><w15:commentEx w15:paraId="3A000002" w15:done="1"/></w15:commentsEx>"#;
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+        package
+            .parts
+            .insert(DEFAULT_COMMENTS_PART.to_owned(), comments.into_bytes());
+        package.parts.insert(
+            DEFAULT_COMMENTS_EXTENDED_PART.to_owned(),
+            extended.as_bytes().to_vec(),
+        );
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        Document::from_bytes(bytes.get_ref()).unwrap()
+    }
+
+    fn comment_extensions(document: &Document) -> Vec<(String, Option<String>, Option<bool>)> {
+        document
+            .comments_extended
+            .as_ref()
+            .unwrap()
+            .comments
+            .iter()
+            .map(|entry| {
+                (
+                    entry.para_id.clone(),
+                    entry.para_id_parent.clone(),
+                    entry.done,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn threads_and_resolved_state_read_through_the_last_paragraph() {
+        let document = multi_paragraph_threads();
+        let comments = document.comments();
+        let ids = comments.iter().map(CommentRef::id).collect::<Vec<_>>();
+        let observed = comments
+            .iter()
+            .map(|comment| (comment.parent_id(), comment.resolved()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            observed,
+            [
+                (None, false),
+                (Some(ids[0]), false),
+                (None, false),
+                (Some(ids[2]), false),
+                (None, true),
+            ]
+        );
+        assert_eq!(comments[1].text(), "1B000001\n1B000002");
+    }
+
+    #[test]
+    fn reply_and_resolve_write_the_parent_last_paragraph() {
+        let mut document = multi_paragraph_threads();
+        let parent = document.comments()[2].id();
+
+        let reply = document.reply_to(parent, "Cy", "new reply").unwrap();
+        assert!(document.resolve_comment(parent, true).unwrap());
+
+        let extensions = comment_extensions(&document);
+        let reply_row = extensions.last().unwrap();
+        assert_eq!(reply_row.1.as_deref(), Some("2A000002"));
+        assert!(
+            extensions
+                .iter()
+                .any(|(para_id, _, done)| para_id == "2A000002" && *done == Some(true))
+        );
+        assert!(
+            extensions
+                .iter()
+                .all(|(para_id, _, _)| para_id != "2A000001")
+        );
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        let comments = reopened.comments();
+        let reread = comments
+            .iter()
+            .find(|comment| comment.id() == reply)
+            .unwrap();
+        assert_eq!(reread.parent_id(), Some(parent));
+        assert!(comments[2].resolved());
+    }
+
+    #[test]
+    fn removing_a_parent_of_several_paragraphs_removes_its_reply() {
+        let mut document = multi_paragraph_threads();
+        let ids = document
+            .comments()
+            .iter()
+            .map(CommentRef::id)
+            .collect::<Vec<_>>();
+
+        assert!(document.remove_comment(ids[2]).unwrap());
+
+        let remaining = document
+            .comments()
+            .iter()
+            .map(CommentRef::id)
+            .collect::<Vec<_>>();
+        assert_eq!(remaining, [ids[0], ids[1], ids[4]]);
+        assert!(
+            comment_extensions(&document)
+                .iter()
+                .all(|(para_id, _, _)| para_id != "2A000002" && para_id != "2B000001")
+        );
+    }
+
+    #[test]
+    fn a_windows_line_ending_starts_a_paragraph_without_a_carriage_return() {
+        let mut document = multi_paragraph_threads();
+        let root = document.comments()[0].id();
+
+        let reply = document.reply_to(root, "Cy", "first\r\nsecond").unwrap();
+
+        let comments = document.comments();
+        let reply = comments
+            .iter()
+            .find(|comment| comment.id() == reply)
+            .unwrap();
+        assert_eq!(reply.text(), "first\nsecond");
+    }
+
+    #[test]
+    fn each_line_of_a_comment_text_becomes_one_paragraph() {
+        let mut document = multi_paragraph_threads();
+        let read = document.comments()[1].text();
+
+        let root = document.comments()[0].id();
+        let reply = document.reply_to(root, "Cy", &read).unwrap();
+        let comment = document
+            .comments
+            .as_ref()
+            .unwrap()
+            .comments
+            .iter()
+            .find(|comment| comment.id == reply)
+            .unwrap();
+        assert_eq!(comment.paragraphs.len(), 2);
+        let last = comment.paragraph_ids[1].clone().unwrap();
+        assert_ne!(comment.paragraph_ids[0].as_deref(), Some(last.as_str()));
+        assert_eq!(
+            comment_extensions(&document).last().unwrap(),
+            &(last, Some("1A000001".to_owned()), None)
+        );
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        let comments = reopened.comments();
+        let reread = comments
+            .iter()
+            .find(|comment| comment.id() == reply)
+            .unwrap();
+        assert_eq!(reread.text(), read);
+        assert_eq!(reread.parent_id(), Some(root));
+    }
+
+    #[test]
+    fn every_comment_entry_point_preserves_empty_lines_and_unique_paragraph_ids() {
+        let mut document = Document::new();
+        document.add_paragraph("anchor");
+        let range = RunRange {
+            start: RunPosition {
+                body_index: 0,
+                run_index: 0,
+            },
+            end: RunPosition {
+                body_index: 0,
+                run_index: 1,
+            },
+        };
+        let text = "first\n\nlast\n";
+        let root = document.add_comment(range, "Ada", None, text).unwrap();
+        let found = document
+            .add_comment_on_text("anchor", 0, "Ben", None, text, None)
+            .unwrap();
+        let location = document.paragraph_story_location(0).unwrap().unwrap();
+        let story = document
+            .add_story_comment(
+                StoryRunRange {
+                    start: StoryRunPosition {
+                        location: location.clone(),
+                        run_index: 0,
+                    },
+                    end: StoryRunPosition {
+                        location,
+                        run_index: 1,
+                    },
+                },
+                "Cy",
+                None,
+                text,
+            )
+            .unwrap();
+        let reply = document.reply_to(root, "Dee", text).unwrap();
+        let empty = document.reply_to(root, "Eve", "").unwrap();
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        let model = reopened.comments.as_ref().unwrap();
+        let mut occupied = HashSet::new();
+        for id in [root, found, story, reply, empty] {
+            let comment = model.comments.iter().find(|item| item.id == id).unwrap();
+            let expected = if id == empty { "" } else { text };
+            assert_eq!(comment.paragraphs.len(), expected.split('\n').count());
+            assert_eq!(
+                reopened
+                    .comments()
+                    .iter()
+                    .find(|item| item.id() == id)
+                    .unwrap()
+                    .text(),
+                expected
+            );
+            for para_id in comment.paragraph_ids.iter().flatten() {
+                assert!(occupied.insert(para_id.clone()));
+            }
+        }
+        let xml = std::str::from_utf8(reopened.package.parts.get(DEFAULT_COMMENTS_PART).unwrap())
+            .unwrap();
+        assert!(!xml.contains("first\n"));
+    }
+
+    #[test]
+    fn missing_final_paragraph_ids_are_allocated_without_replacing_earlier_ids() {
+        for reply in [false, true] {
+            let mut document = multi_paragraph_threads();
+            let parent = document.comments()[2].id();
+            document.comments.as_mut().unwrap().comments[2].paragraph_ids[1] = None;
+            if reply {
+                document.reply_to(parent, "Cy", "reply\nlast").unwrap();
+            } else {
+                document.resolve_comment(parent, true).unwrap();
+            }
+            let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+            let comment = &reopened.comments.as_ref().unwrap().comments[2];
+            assert_eq!(comment.paragraph_ids[0].as_deref(), Some("2A000001"));
+            let last = comment.paragraph_ids[1].as_deref().unwrap();
+            assert_ne!(last, "2A000001");
+            assert!(
+                comment_extensions(&reopened)
+                    .iter()
+                    .any(|(id, _, done)| id == last && (reply || *done == Some(true)))
+            );
+            if reply {
+                assert_eq!(
+                    reopened.comments().last().unwrap().parent_id(),
+                    Some(parent)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fragment_import_keeps_last_paragraph_threads_and_unsupported_xml() {
+        let mut source = multi_paragraph_threads();
+        let root = source.comments()[2].id();
+        let raw = br#"<x:keep xmlns:x="urn:producer" x:flag='exact'><x:child /></x:keep>"#.to_vec();
+        source.comments.as_mut().unwrap().comments[2]
+            .extra_xml
+            .push((1, raw.clone()));
+        let mut destination = Document::new();
+        let remap = destination
+            .import_fragment_comments_staged(
+                source.comments.as_ref(),
+                source.comments_extended.as_ref(),
+                &[root.to_string()],
+            )
+            .unwrap();
+        assert_eq!(remap.len(), 2);
+        let bytes = destination.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        let comments = reopened.comments();
+        assert_eq!(comments.len(), 2);
+        assert_eq!(comments[1].parent_id(), Some(comments[0].id()));
+        let xml = reopened.package.parts.get(DEFAULT_COMMENTS_PART).unwrap();
+        assert!(xml.windows(raw.len()).any(|window| window == raw));
+    }
+
+    #[test]
+    fn removing_a_root_removes_nested_replies_linked_to_legacy_first_paragraphs() {
+        let mut document = multi_paragraph_threads();
+        let root = document.comments()[0].id();
+        let child = document.comments()[1].id();
+        let grandchild = document.reply_to(child, "Cy", "nested").unwrap();
+        let own = document
+            .comments
+            .as_ref()
+            .unwrap()
+            .comments
+            .last()
+            .unwrap()
+            .paragraph_ids[0]
+            .clone()
+            .unwrap();
+        let row = document
+            .comments_extended
+            .as_mut()
+            .unwrap()
+            .comments
+            .iter_mut()
+            .find(|row| row.para_id == own)
+            .unwrap();
+        row.para_id_parent = Some("1B000001".to_owned());
+        assert_eq!(document.comments().last().unwrap().parent_id(), Some(child));
+        assert!(document.remove_comment(root).unwrap());
+        assert!(
+            document
+                .comments()
+                .iter()
+                .all(|comment| ![root, child, grandchild].contains(&comment.id()))
+        );
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(reopened.comments().len(), 3);
     }
 
     #[test]

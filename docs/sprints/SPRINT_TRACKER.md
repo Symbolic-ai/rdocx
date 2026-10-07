@@ -564,6 +564,8 @@ defended.
 | F-X177 | S89 | S | 1 | 1 | 2026-10-05 | Integrated changjoon-park PR 269 fontdb feature-unification fix, with four feature configurations and unchanged hashes |
 | F-277 | S89 | L | 5 | 1 | 2026-10-05 | Added checked glossary creation, updates, insertion, removal and placeholder binding with raw XML preservation and atomic package closure |
 
+| F-X179 | S90 | S | 1 | 1 | 2026-10-07 | Integrated hadim PR 271 against every Issue 270 criterion, fixed nested legacy reply removal and retained all 49 hash entries |
+
 ## Velocity
 
 Recalculated at each sprint close. The backlog assumes about 2 stories per week
@@ -789,3 +791,13 @@ Issues [243](https://github.com/tensorbee/rdocx/issues/243#issuecomment-59595336
 ## S89 contribution reconciliation
 
 PR [269](https://github.com/tensorbee/rdocx/pull/269), contributed by Changjoon (`changjoon-park`), is superseded by the F-X177 integration at `8cced41d`. The original memmap compile reproducer fails before the fix and passes after it. Default, no-default, memmap and no-default plus memmap configurations passed on the integrated tree. Close the PR after pushing the S89 main merge, with an individual thank-you comment linking the integration and the sprint merge. No separate issue was assigned to S89. Issue 264's declarative authoring discussion remains open and outside this sprint's acceptance scope.
+
+## S90 contribution reconciliation
+
+PR [271](https://github.com/tensorbee/rdocx/pull/271), contributed by Hadrien
+Mary (`hadim`), is integrated through F-X179 with an additional reviewed fix
+for nested legacy reply removal. Every [Issue 270](https://github.com/tensorbee/rdocx/issues/270)
+criterion passes, including XML parent and done rows and multiline authoring
+through all existing entry points. Reconcile both records only after the
+verified S90 merge is pushed through `/close-sprint`, with contributor thanks
+and links to the feature integration and main merge. Issue 264 is excluded.

@@ -17474,3 +17474,49 @@ closure. The 18-page Word SSIM trend is advisory and below its target.
 **Hash harness.** Unchanged on the integrated sprint tree, all 49 entries match.
 
 **Notes for future sessions.** Keep `work/f-277-codex` through sprint close. Content-control creation remains with F-285. Implicit AutoText expansion and new binding entry points remain outside this story.
+
+### F-X179, Correct multi-paragraph comment threads from PR 271
+
+**Sprint.** S90
+**Completed.** 2026-10-07
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Integrated [PR 271](https://github.com/tensorbee/rdocx/pull/271)
+from Hadrien Mary (`hadim`) at e22641a8f20a1c31d905a8c1b83171f548d2e230.
+Every [Issue 270](https://github.com/tensorbee/rdocx/issues/270) criterion now
+passes. Multi-paragraph comments read and write parent and resolved metadata
+through their last paragraph ids. Every existing comment authoring entry point
+writes one paragraph per newline and preserves blank and trailing lines.
+
+**Non-obvious choices.** Parent lookup and fragment closure accept every
+paragraph id for compatibility with older parent links. Removal carries all
+paragraph ids of each removed descendant, fixing the nested legacy-reply defect
+found in microscope pass 1. Paragraph ids remain unique and unsupported
+producer XML survives import byte for byte.
+
+**Deviations from the design plan.** None. The contributed patch needed the
+additional nested-descendant fix to satisfy its legacy-removal claim.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, Facade conventions,
+Word comment mutation.
+
+**Tests.** The regression gate
+`threads_and_resolved_state_read_through_the_last_paragraph` failed before the
+implementation and passes after it. All 18 comment tests pass. The complete
+changed-crate gate passed 497 Word unit, 360 integration, 778 regression,
+61 CLI and two doc tests with pinned LibreOffice 26.2.5.2, Poppler 26.01.0
+and a 16 MiB test stack. Scoped Clippy, formatting, 140 policy tests with two
+expected skips, prose, generated skills, README examples and archive inventory
+passed under Rust 1.97.1. Both locally patched publication dry runs passed.
+Microscope pass 2 reports zero defects and zero smells.
+
+**Hash harness.** Unchanged, all 49 deterministic entries match.
+
+**Notes for future sessions.** Issue 264 and F-X178 were excluded. Preserve
+that exclusion during the requested sprint run. PR 271 and Issue 270 remain
+open until the verified S90 result reaches main through `/close-sprint`.
+Thank hadim for identifying the last-paragraph contract and contributing the
+fix, citing this integration and the sprint merge. Native checks used
+`/private/tmp/rdocx-fx179-build` because the old repository build cache stalled
+inside macOS library loading. Set `RUSTUP_TOOLCHAIN=1.97.1` for temporary
+README consumers, and retain the pinned viewer paths from S89.

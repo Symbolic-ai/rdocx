@@ -6530,6 +6530,38 @@ fontdb/memmap` fails on the claimed base and passes after the fix. Default,
 no-default and no-default plus memmap checks and font tests pass, with all
 49 hash entries unchanged. Record the contributor disposition for sprint close.
 
+### F-X179, Correct multi-paragraph comment threads from PR 271 (S)
+
+Adopt [PR 271](https://github.com/tensorbee/rdocx/pull/271) from `hadim`,
+reviewed at `e22641a8f20a1c31d905a8c1b83171f548d2e230`, against every
+acceptance criterion of [Issue 270](https://github.com/tensorbee/rdocx/issues/270).
+Read and write thread and resolved metadata using each comment's last
+paragraph id. Author one paragraph per newline through every existing comment
+entry point. Preserve legacy parent links, unrelated producer XML and fragment
+thread closure. Leave Issue 264 and F-X178 untouched.
+**Depends on**: none.
+**Test gate**: regression. Last-paragraph reading, reply and resolution XML,
+multiline save and reopen, single-paragraph controls, missing ids, fragment
+closure and removal all pass. The contributed gate fails before the fix.
+All 49 hash entries remain unchanged. Record acceptance and contributor
+provenance for GitHub reconciliation through sprint close.
+
+### F-X178, Clearable direct run formatting setters (S)
+
+Follow-up to [Issue 264](https://github.com/tensorbee/rdocx/issues/264). A
+declarative wrapper needs one setter per run property that can set a value,
+write an explicit false, or clear direct formatting. `Run` lacks that form for
+double strike, all caps, small caps, vertical alignment, character spacing,
+width scale, position and hidden. Add `_value` setters that take an `Option`
+and match `set_bold_value`. Vertical alignment takes a typed value covering
+superscript, subscript and baseline. The existing one-way setters keep their
+behaviour. Rust facade only, binding parity is decided in design.
+**Depends on**: none.
+**Test gate**: unit and round trip. Each new setter writes a value, writes an
+explicit false where the property is boolean, removes only its own element on
+`None`, and adds no `w:rPr` to a run that has none. Values survive save and
+reopen, and all 49 hash entries are unchanged.
+
 ### F-X168, Current issue and contribution closure evidence (M)
 
 Reconcile the eight open issues and 31 open PRs from the 2 October GitHub snapshot

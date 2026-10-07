@@ -1719,8 +1719,10 @@ its paragraphs, which `Document::paragraph_story_location` returns for a
 paragraph index. The staged
 path validates both endpoints and edits cloned paragraphs before it creates
 comment relationships, so any path, run, or package failure publishes nothing.
-Replies follow paragraph-id parent linkage, resolution applies to the thread
-root, and removal deletes the selected comment plus descendant replies without
+Replies follow paragraph-id parent linkage through each comment's last
+paragraph, as `w15:commentEx` keys it, each line of a comment text is one
+paragraph. Resolution applies to the thread root, and removal deletes the
+selected comment plus descendant replies without
 deleting unrelated runs or producer XML.
 The additive `add_comment_with_date` and `reply_to_with_date` operations own
 validated optional timestamps. The original operations delegate with no date.
