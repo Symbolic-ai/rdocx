@@ -678,3 +678,23 @@ test. Run the existing workflow tests against the completed HLD contract.
 
 F-280 cannot share a wave with F-278, F-279, F-281, F-282 or F-283 when their
 claims overlap these files.
+
+## Accepted projection registration clarification
+
+The font-independent `evaluate_sequence_fields` requires
+`RevisionView::Accepted` and rejects Tracked input. Rendering other views retains
+producer SEQ caches with ordered diagnostics and emits no sequence event or
+repeat marker. Facade field evaluation uses its accepted source projection.
+The shared physical inventory registers revision-owned source fields as well
+as direct, control and hyperlink fields, preserving unique stable source
+identities. Registry, sequence collection and facade evaluation consume that
+same inventory. Accepted insertion rules remain separate from evaluation.
+
+TOC source discovery consumes the same accepted sequence snapshot through the
+existing evaluator, including accepted revision and inline-control fields. A
+private concrete `Arc` may share this snapshot between the ordinary evaluator
+and TOC discovery, its two actual consumers. Never restore an independent SEQ
+interpreter or join fields by displayed instruction text. Test deleted-before-
+visible physical inventory, accepted revision/control/hyperlink TOC prefixes,
+inherited locks and exclusion of generated cache fields. Correct any earlier
+unit that pinned revision-source omission to the actual registered inventory.
