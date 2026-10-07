@@ -404,6 +404,22 @@ operands retain their complete caches with precise diagnostics. Extend existing
 API documentation, all-target checks and affected published archive consumers.
 No new type, trait, generic or file is introduced.
 
+The additional source-built delimiter matrix is now authenticated under
+/private/tmp/S90-F280-ref-delimiter-controls. All 53 instructions and physical
+owners, 45 first-materialization outcomes and eight genuine comparison results
+are independently audited. Relative/full context inserts the requested hyphen
+before the current leaf when a preceding context prefix exists. Level-only,
+root and embedded-ancestor controls remain unchanged. Text omission retains the
+same context boundary. An empty delimiter inserts a space in the measured
+relative/full controls, while level-only remains unchanged. Do not equate an
+empty delimiter with an absent switch. A distinct no-F9 reopen preserves all
+53 rich caches and exact two-page PDF text and 96dpi pixels. Four package parts
+change only in classified producer metadata, so no archive byte-equality is
+claimed. Original numbering, styles, target properties and paired bookmark
+semantics remain preserved. The prepared target index list was stale after
+matrix assembly, and the audit binds the actual physical target positions.
+These bounded native results do not replace implementation parity checks.
+
 Map reference choices to REF text, level, relative and full-context switches.
 Position, hyperlink and text-omission choices retain their instruction
 semantics. Add validated delimiter and referenced-note copying through the
