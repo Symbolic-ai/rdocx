@@ -239,6 +239,33 @@ All captures use Word 16.113.2 build 16.113.26092012 and Poppler 26.01.0.
 They are actual update/save captures, with no reopened stability or native
 formatter parity claim yet. Full catalogue scope remains unchanged.
 
+Additional authenticated batches retain separate source and lifecycle evidence.
+The ten missing dense style baselines cover 180 fields, and the counts, Chicago
+ordering, authored-switch and locale controls add 403 fields. Their 20 no-F9
+reopens preserve every DOCX archive byte for byte and all per-page PDF text.
+Seven PDFs are pixel identical at 96dpi, while thirteen retain recorded
+horizontal positioning differences below 0.214 points, with identical font
+payloads and no vertical displacement. Do not claim aggregate pixel parity.
+These records are retained in /private/tmp/S90-F282-priority-reopen.
+
+The isolated repeated APA page, volume, prefix and suffix controls use the
+first supplied value, as does repeated IEEE page. Keep that distinct from the
+previous discriminating final-locale controls. Nondiscriminating combined and
+title-suppression cases do not establish universal association rules. The
+locale control 1133 produces Russian output, while 999999 differs from English
+in a full bibliography despite an equal Patent citation. Neither equality nor
+these control labels prove acceptance or a universal fallback policy.
+
+Ten contributor-role captures cover another 790 fields and retain all source
+XML, including repeated and empty name members. MLA and Turabian full lists
+apply repeated-author substitutions that change selected versus full entry
+text in the captured collection. Sparse profiles also expose style-specific
+invalid-source displays and omissions from full lists. Preserve these native
+collection effects and ambiguous identical-text ties explicitly, rather than
+assuming one standalone formatter result suffices in every collection.
+These captures add bounded contracts and do not complete the full catalogue,
+locale, adversarial, reopen or native implementation parity requirements.
+
 ## Rejected alternatives
 
 - Conventional part filenames miss noncanonical producers.
