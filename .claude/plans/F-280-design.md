@@ -178,13 +178,22 @@ consumer is captured annotation REF-f copy materialization. No new type, file,
 trait or generic is introduced.
 
 A hidden read-only Field::cached_result_comment_ranges slice getter exposes
-owned cached CommentRangeMarker values to the facade target-range extractor
-and layout comment-anchor discovery. These are two existing concrete consumers.
-Keep marker boundary positions in semantic field equality and source-aware
-nested cache projections. Prove parsed simple and complex caches retain their
-typed Field ownership, preserve no-op source bytes and render actual annotation
-anchors and callouts after reopening. Mere XML well-formedness or typed run
-presence does not establish the annotation rendering contract.
+owned cached CommentRangeMarker values to the existing facade target-range
+extractor. Keep marker boundary positions in semantic field equality and
+source-aware nested cache projections. Prove parsed simple and complex caches
+retain their typed Field ownership and preserve no-op source bytes. Reopened
+annotation copies must retain actual range endpoints, typed references and
+owned comment definitions, while their copied literal content still paints
+through the existing field cache path. Mere XML well-formedness or typed run
+presence does not establish that ownership and literal-display contract.
+
+The current layout engine treats CommentReference as nonpainting and has no
+Word comment-owner input or comment-callout renderer. Preserve that rendering
+boundary. F-280 does not add a speculative callout or anchor-overlay surface.
+DOCX-042 and F-275 own paired annotation ranges, and F-293 owns broader modern
+comment metadata authoring. REF-f closes only the captured copied dependency
+graph needed by the materialized field. Native Word anchor-outline pixels
+remain qualified oracle lifecycle evidence, not a new library paint target.
 
 The existing no-marker setter remains the ordinary typed-run operation.
 The marker operation owns validation and sibling serialization rather than
