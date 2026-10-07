@@ -76,13 +76,12 @@ pub struct TableOfFiguresOptions {
 
 pub struct TableOfAuthoritiesOptions {
     pub category: Option<u8>,
-    pub use_short_citations: bool,
+    pub include_category_headings: bool,
     pub use_passim: bool,
     pub entry_page_separator: String,
     pub page_separator: String,
     pub range_separator: String,
     pub leader: TabLeader,
-    pub hyperlink: bool,
 }
 
 pub struct GeneratedTablesReport {
@@ -157,6 +156,26 @@ than Rust string ordering masquerading as Word collation. Preserve
 case-sensitive display text and source formatting separately from sort keys.
 Support repeated pages, range bookmark endpoints, cross-reference entries,
 nested index levels, category grouping and captured passim behavior.
+
+Authority authoring follows the authenticated native producer. A numbered
+category authors one TOA field. `category: None` authors separate numbered
+fields for the populated categories in native category order and returns the
+first inserted location. Stage that complete insertion atomically. Do not
+encode All as category zero or omit its category operand. Native All captured
+categories 1, 2 and 5 as three fields, each with heading and passim switches.
+The category-heading option maps to `\h`. Short citations join occurrences
+to their long entry within a category. They are grouping keys, rather than a
+display-selection switch. The native dialog exposes no short-display or
+hyperlink option. Do not invent either switch or interpret TOA `\h` as a
+hyperlink. Preserve unsupported producer switches with diagnostics under the
+existing result-retention policy.
+
+Exact source, native dialog procedure, instructions and two-page results are
+recorded in the authenticated category-control and complete native All records
+under `/private/tmp/S90-Word-captures`. The original omitted-category and
+category-zero controls both return `Error! Category number not found.`. The
+complete All capture preserves all six TA markers and emits three numbered
+TOA fields. Source topology and instruction audits passed independently.
 
 Generated entries retain appropriate INDEX, Table of Figures and Table of
 Authorities styles, requested leaders, paragraph properties and source run
