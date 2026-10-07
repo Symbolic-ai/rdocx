@@ -146,8 +146,23 @@ impl Document {
     pub fn insert_citation(&mut self, position: &StoryRunPosition, options: &CitationOptions) -> Result<()>;
     pub fn insert_bibliography(&mut self, position: &ContentLocation, options: &BibliographyOptions) -> Result<()>;
     pub fn update_bibliography(&mut self) -> Result<BibliographyUpdateReport>;
+    pub fn update_bibliography_with_default_locale(&mut self, application_locale: u32) -> Result<BibliographyUpdateReport>;
 }
 ```
+
+Keep `update_bibliography` usable for owners whose locale resolves from the
+package. Add `update_bibliography_with_default_locale` for the external
+application locale required by source LCID 0 or other measured runtime-default
+cases. Validate a supplied locale as a supported nonzero LCID. Resolve that
+context only at the captured default-selection step, preserving explicit source
+and field overrides and leaving LCID 0 and omitted XML unchanged. With missing
+required context, retain the complete owner cache and report that application
+locale is required. This is missing context, not an unsupported locale. The
+explicit-context operation must implement every accepted locale. Existing
+citation insertion with absent or zero locale and imported zero-locale source
+updates are concrete consumers. No context wrapper, trait or generic is needed.
+Test equivalent explicit/default resolution, override precedence, zero and
+invalid context rejection, preserved XML and atomic cache retention.
 
 Use existing ContentLocation and StoryRunPosition. No new trait, generic, builder wrapper, runtime XSLT engine or dependency is proposed. Private source parsing and result formatting live together in bibliography.rs so a reader can identify the executing logic locally. All sixteen schema contributor roles are modeled. Source author data follows the Sources/Source tree, contributor-role Author structure, NameList/Person records and Corporate choices permitted by the schema. Repeated name/property members retain their sequence. The explicit property enum avoids ambiguous publication mappings and covers every standard source text property. Tag, Guid, SourceType, LCID and Author are modeled separately. Validate every property's schema cardinality, simple-type bound and role choice before authoring. Unknown producer extensions remain preserved outside these modeled members.
 
