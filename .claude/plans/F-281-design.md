@@ -245,7 +245,19 @@ paired page-size difference and at least 0.95 SSIM for each compared page.
 The semantic comparison remains exact. LibreOffice 26.2.5.2 is supplementary
 repair/render evidence and does not substitute for the Word update gate.
 
-No fresh INDEX, figure-table or TOA Word 16.113.2 capture has been located.
+Fresh initial and mutated INDEX, authority and figure-table captures are
+retained under /private/tmp/S90-F281-oracle and /private/tmp/S90-Word-captures,
+with their original source, action and saved-output provenance. Corrected
+complex XE and TA inputs retain source topology. The original full simple-marker
+inputs changed topology on native import and are excluded from this gate.
+This does not imply every simple marker is invalid. Native authoring uses the
+measured complex form, while reading preserves existing producer forms.
+
+Actual no-F9 reopens for both corrected INDEX cases and initial authorities
+retain exact rich XML and per-page PDF text and raster pixels. Native All and
+category controls also have authenticated reopen audits. Mutated authorities
+and both figure-table reopens remain pending. Native capture records are
+bounded evidence, rather than a completed Rust differential comparison.
 Missing capture, unavailable locale or a failed comparison blocks completion.
 Do not manufacture Word expectations from the implementation output.
 
