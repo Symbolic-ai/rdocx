@@ -108,6 +108,12 @@ absent, explicit false and true. Existing `dirty: Option<bool>` retains the same
 three states. Property-only edits retain producer XML outside the attribute.
 Untouched parsed fields keep original bytes.
 
+DOCX-045 describes checked construction and stored-cache round trips. Mark that
+capability complete with layout and rendering not applicable to its construction
+gate. Separate field capabilities own rendering and execution. Update the policy
+inventory of completed capability owners without relaxing the live-owner rule
+for any incomplete capability.
+
 No new trait, generic, crate, source file or feature flag is required. The facade
 API is additive. Low-level representation changes have intentional pre-1.0
 compatibility implications that completion documents.
@@ -173,6 +179,7 @@ Unexplained deltas block completion.
 - `README.md`, required measured archive inventory refresh
 - `crates/rdocx-oxml/README.md`, required measured archive inventory refresh
 - `scripts/readme_doctests.py`, matching measured archive constants and dates
+- `scripts/test_sprint_workflow.py`, completed builder capability owner inventory
 
 The shared regression entrypoint is exclusive. F-X178 and Issue 264 are outside
 this work.

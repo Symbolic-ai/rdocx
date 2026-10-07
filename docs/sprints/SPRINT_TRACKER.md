@@ -566,6 +566,8 @@ defended.
 
 | F-X179 | S90 | S | 1 | 1 | 2026-10-07 | Integrated hadim PR 271 against every Issue 270 criterion, fixed nested legacy reply removal and retained all 49 hash entries |
 
+| F-278 | S90 | L | 5 | 1 | 2026-10-07 | Added checked simple and complex fields, recursive operands, ordered caches and locks, with clean microscope and 49 unchanged hashes |
+
 ## Velocity
 
 Recalculated at each sprint close. The backlog assumes about 2 stories per week

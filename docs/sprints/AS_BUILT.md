@@ -17520,3 +17520,55 @@ fix, citing this integration and the sprint merge. Native checks used
 `/private/tmp/rdocx-fx179-build` because the old repository build cache stalled
 inside macOS library loading. Set `RUSTUP_TOOLCHAIN=1.97.1` for temporary
 README consumers, and retain the pinned viewer paths from S89.
+
+
+### F-278, General simple and complex field builder
+
+**Sprint.** S90
+**Completed.** 2026-10-07
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** Checked raw and typed native field construction supports
+explicit simple and complex forms, nested instruction operands, ordered CT_R
+caches and three-state field locks. Run attachment validates before mutation.
+Existing plain-string construction remains usable.
+
+**Non-obvious choices.** Unknown typed switch operands use quoted text or
+nested fields to retain operand positions. Known flags retain positional
+boundaries. Typed page and column cache controls are validated as XML nodes,
+not literal display characters. Recursive source identity prevents equal-text
+nested replacements from losing their cache formatting. Namespace-qualified
+validation preserves foreign lookalikes while rejecting actual raw Word field
+controls.
+
+**Deviations from the design plan.** The plan records the pre-1.0 projection
+clarification for otherwise ambiguous unknown switches and the required
+existing archive inventory refresh. DOCX-045 is complete for checked
+construction and stored-cache round trips. Layout and rendering are not
+applicable to that construction gate and remain assessed by separate field
+capabilities. The completed-owner policy inventory reflects that boundary
+without relaxing any incomplete capability's live-owner rule.
+
+**Spec sections touched.** Native capability scope, recursive field grammar,
+native facade stability and field construction tests in HLD 02, 03, 10 and 12.
+
+**Tests.** The round-trip gate exercises new APIs unavailable on the original
+source. All 613 low-level unit tests and one doctest passed. The facade gate
+passed 497 unit, 360 integration, 782 regression and two doctests with 21
+existing ignored tests. Scoped Clippy, format, prose, generated skills and
+140 policy tests passed with two expected skips. All 22 locally patched
+publication dry runs passed, with every archive below 10 MiB. Microscope
+pass 3 is clean after four initial findings and the recursive follow-up.
+The integration-only capability reconciliation also has a zero-finding review
+and passing affected policy checks. Source commit c1ba60985795 and integration
+84b4a4ba have identical crate and Cargo source graphs.
+
+**Hash harness.** Unchanged, all 49 deterministic entries match on the worker.
+The integrated dependency prefix retains that exact source graph. Full sprint
+verification and sprint review remain due after later stories.
+
+**Notes for future sessions.** Retain work/f-278-codex through sprint close.
+No package was uploaded. The validated handoff was consumed. The handoff-only
+commit follows an immutable reviewed source commit to avoid a self-referential
+SHA. Issue 264 remains excluded. Later stories require genuine fresh Word
+captures, not the prepared temporary input packages alone.

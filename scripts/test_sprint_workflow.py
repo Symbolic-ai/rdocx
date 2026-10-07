@@ -7808,6 +7808,9 @@ Pedro Assumpcao and the rdocx maintainers.
                 # F-274 completed DOCX-036 note policy and DOCX-041, so it
                 # no longer owns an incomplete row.
                 274,
+                # F-278 completes checked field construction in DOCX-045.
+                # Rendering and execution belong to separate capabilities.
+                278,
             }
         }
         self.assertEqual(
