@@ -125,6 +125,16 @@ owns the private checked insertion helper in field.rs. Use the existing
 ContentLocation and StoryRunPosition ownership checks, staged package patching,
 prepare-and-reopen validation and single commit_staged_mutation publication.
 
+The existing low-level CT_P owner adds a hidden public concrete
+insert_accepted_run(boundary, CT_R) operation returning RangeAnchorError.
+It reuses the accepted_range_sites zero-range resolver and existing direct or
+control insertion machinery. The two current consumers are checked sequence
+and cross-reference insertion. Preserve the established rejection of revision
+interiors and unsupported control boundaries, and leave the paragraph unchanged
+on failure. This existing-file cross-crate helper avoids synthetic marker
+round trips and adds no new type, trait or generic. Its pre-1.0 public surface
+joins the low-level model tests, documentation and verified archive riders.
+
 Use the existing sequence traversal with explicit story ownership. Main-body
 and selected anchored text-box fields participate in the captured document
 sequence context. Alternate fallback representations must not increment it
@@ -286,6 +296,7 @@ pass before completion and may not be replaced by guessed expectations.
 ## Exclusive resources
 
 - `crates/rdocx/src/field.rs`
+- `crates/rdocx-oxml/src/text.rs`, checked accepted-view run insertion using the existing range-site resolver
 - `crates/rdocx/src/lib.rs`
 - `crates/rdocx/tests/regression_test.rs`
 - `crates/rdocx/src/document.rs`, if checked story insertion needs an existing-owner helper
