@@ -356,6 +356,29 @@ stage the reference, copied note and its relationship closure in the same
 atomic package mutation. Rich runs, bookmark identities, hyperlink and image
 relationships require captured copy evidence. The measured note-context
 restriction retains literal content without allocating another note.
+Repeated explicit materialization must not accumulate orphan copied notes.
+The authenticated plain repeat retains four copied references and exactly six
+referenced normal owners. Changing only the original source note text refreshes
+all four copied payloads while retaining those owner IDs and all 31 field
+contracts. The rich inherited-Emphasis repeat preserves media bytes, note
+relationships, style definitions and six referenced owners without package
+or relationship growth. Copied drawing identities regenerate and remain
+unique, so do not claim byte-identical copied drawings. These controls are
+retained in /private/tmp/S90-F280-ref-owner-controls.
+
+Reuse a cached typed note owner only when the physical REF-f field exclusively
+owns its reference, it is distinct from the source target owner, and the
+candidate graph passes ownership validation. Refresh the payload from the
+frozen source inventory after original field traversal. Retain diagnostics for
+ambiguous or shared ownership, and never delete unowned note or relationship
+content. Extend the existing private append operation with a checked replacement
+path for this concrete materialization consumer, preserving ordinary fragment
+import append behavior. Plain and rich repeat tests must show stable referenced
+owner counts, refreshed source content, no orphan or dangling references,
+preserved original source ownership and bounded package relationship growth.
+All failures preserve complete receiver bytes. Saved ID stability does not
+establish Word's internal reuse mechanism or authorize general cleanup.
+
 Reject mutually exclusive numbering modes and malformed switch operands.
 
 Resolve bookmark position using physical story identity, accepted paragraph
