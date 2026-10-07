@@ -17647,3 +17647,71 @@ retained, while no original pass-4 full snapshot exists. Review records state
 that evidence limit rather than fabricate historical byte equality. Later
 fields reuse immutable physical source records and authoritative numbering.
 Issue 264 remains excluded. No push, main merge, tag or GitHub closure occurred.
+
+
+### F-280, Captions, sequences, and complete cross-references
+
+**Sprint.** S90
+**Completed.** 2026-10-08
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Atomic caption, sequence and cross-reference authoring uses
+checked physical story insertion and uniquely allocated caption bookmarks.
+Facade evaluation and rendering share accepted physical field identity, sequence
+placement, resolved numbering and bookmark position projections. REF supports
+related targets, numbered delimiters and typed note copies with bounded staged
+note, media and modern annotation graph refresh.
+
+**Non-obvious choices.** Generated caches, inherited locks and raw producer
+instructions remain separate from public visible field indexes. Ambiguous,
+unsupported or cross-owner position comparisons retain stored caches with
+ordered diagnostics. Same-owner containment retains caches and a diagnostic,
+distinct from Word's measured self-reference error. Invalid direct paragraph
+drawing is excluded. The regression uses a labelled cache-only derivative of
+the genuine schema-valid native package, preserving selected Choice and opaque
+Fallback separately.
+
+**Deviations from the design plan.** Approved existing-file riders add concrete
+read-only raw quote, source run, resolved bookmark numbering and relative
+position projections, shared accepted physical preparation and anchored
+furniture painting. No new production file, module, trait or dependency.
+Integration removes duplicate accepted-projection prose and restores the
+canonical malformed-quoting heading, preserving every requirement.
+
+**Spec sections touched.** HLD02 DOCX-047, HLD03 staged source-qualified fields
+and graph copying, HLD08 sequences and references, HLD10 native API boundaries
+and HLD12 authenticated verification. These are the five approved impact files.
+
+**Tests.** captions_and_references_match_pinned_word_before_and_after_renumbering
+passes. A compiling semantic reversion fails its runtime REF1 assertion and
+exact restoration passes. Final scoped worker evidence includes122 shared
+units,500 facade units with6 ignored,360 integrations with8 ignored,844
+regressions with7 ignored,317 layout units,627 XML units and four doc-test
+groups. A subsequent focused rerun proves exact same-owner instructions and
+opaque Fallback preservation. Warnings-denied all-target/all-feature lint and
+documentation pass. README27 and package inventories22 pass. Workflow policy
+passes140 cases with2 skips. Format, prose and26 generated adapters pass.
+Four actual affected publication dry runs verify current archive source without
+upload. Compressed sizes4634504,440535,308769 and1486141 bytes are below10MiB.
+
+Native evidence pins55 original and58 renumbered captions,33 physical sequence
+controls,20 optional bookmark controls,53 delimiters,31 REF-f owners and36
+same-owner position fields, plus typed note and annotation refresh controls.
+Each of six owner-specific updates changes only its six cache texts. Actual
+close and no-F9 reopen retain36 instructions,12 paired selected bookmarks,
+literal targets and qualified rich caches. PDF text is equal, but439 of861696
+native96dpi pixels differ. No pixel equality or universal parity claim.
+Implementation microscope pass2 and integration pass1 report zero defects,
+smells and nitpicks. Three focused integrated capability-policy checks pass.
+
+**Hash harness.** Unchanged, all49 worker deterministic entries match. Every
+integrated crate source, HLD file and verified gate script equals reviewed
+worker Head9ce250276de9. Full integrated verification, union risk riders and
+sprint review remain due after later waves.
+
+**Notes for future sessions.** Worker source9ce250276de9 precedes handoff-only
+tip2ba509306eb7. Integrationfb9dff43 consumes the validated handoff. Retain
+work/f-280-codex through sprint close. Independent frozen pass2 patch is
+b5bcc4cdf8b0f3bdc234c5715e4876d82a4376fd7c3b49039500ee4c1e0a4e91.
+F-281 may consume this completed dependency prefix. Issue264 remains excluded.
+No push, main merge, tag or GitHub closure occurred.

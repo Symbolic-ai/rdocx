@@ -569,6 +569,8 @@ defended.
 | F-278 | S90 | L | 5 | 1 | 2026-10-07 | Added checked simple and complex fields, recursive operands, ordered caches and locks, with clean microscope and 49 unchanged hashes |
 | F-279 | S90 | L | 5 | 1 | 2026-10-07 | Added five-kind pagination materialization across modeled stories, authenticated Word ownership, clean implementation and integration reviews, 49 unchanged hashes and 22 verified packages |
 
+| F-280 | S90 | M | 2 | 1 | 2026-10-08 | Added atomic caption and cross-reference authoring, shared physical sequences and numbering, bounded note and annotation refresh, clean worker and integration reviews and unchanged49 worker hashes |
+
 ## Velocity
 
 Recalculated at each sprint close. The backlog assumes about 2 stories per week
