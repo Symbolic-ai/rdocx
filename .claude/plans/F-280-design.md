@@ -709,3 +709,22 @@ layout source registration and collection, and facade evaluation and raw
 updating. Reuse this borrowed inventory rather than duplicating traversal.
 Document the additive hidden getter and cover all-target consumers, verified
 archives, physical order, deleted-before-visible registration and unchanged XML.
+
+## README archive measurement rider
+
+Reconcile the four affected archive measurements in existing
+`scripts/readme_doctests.py`, `README.md`,
+`crates/oxml-layout/README.md`, `crates/rdocx-layout/README.md` and
+`crates/rdocx-oxml/README.md` against actual current archives. Root README is
+the facade crate README. Record measured compressed bytes, normalized member
+bytes and member counts using the existing command and preserve all other
+measurement rows and evidence conventions. Rerun README verification after
+recording, accounting for changed README bytes in the archives.
+
+The README measurement script uses archive-only
+`cargo package --locked --allow-dirty --no-verify` at its existing
+`target/package` location. This archive-only measurement route is permitted.
+It is not verified packaging evidence. Compilation, tests, docs, lint and
+verified publish dry runs retain the healthy target directory. Complete the
+four affected published archive verification dry runs with local patches and
+the ten MiB assertions separately, without substituting the measurement route.
