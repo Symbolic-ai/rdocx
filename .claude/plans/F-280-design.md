@@ -149,6 +149,18 @@ caption changes the later result only when the caller explicitly updates
 fields. Save remains a leave-alone operation. Shared header and footer cache
 values and per-page rendered repeats are distinct observations.
 
+Producer SEQ instructions can include the documented optional bookmark
+operand. Resolve that cross-reference against the checked physical target and
+the same sequence snapshot, rather than ignoring the operand or incrementing
+again. Caption authoring continues to generate its existing one-operand SEQ.
+Fresh controls must discriminate forward and backward references, an identifier
+mismatch, missing targets and ambiguous bookmarked ranges before completion.
+Until authenticated target semantics are available, explicit cache retention
+with a diagnostic is an implementation checkpoint, not complete SEQ support.
+Use existing field and range owners, without another public option type or
+counter interpreter. The [Microsoft SEQ reference](https://support.microsoft.com/en-us/word/field-codes-seq-sequence-field)
+is primary syntax evidence, not a substitute for the pinned Word comparison.
+
 ### Shared sequence snapshot
 
 Move sequence interpretation into one concrete, font-independent operation in
