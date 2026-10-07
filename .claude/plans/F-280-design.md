@@ -283,6 +283,27 @@ lookups matching WordLayoutResult. These bind the same physical owner without
 text matching, guessed child indices or a pagination pass. Include the retained
 projections in semantic snapshot equality and test selected alternate-content
 owners with identical displayed text, nested tables and locked caches.
+Nested complex fields may lack an isolated source_replacement even when their
+exact enclosing raw field is known. Retain compact namespace-parsed field
+semantics from the same SourceRegistry registration traversal: effective
+instruction, inherited lock and generated-cache membership. Expose one hidden
+read-only WordSequenceSnapshot::source_field_context(FieldSource) getter
+returning Option<(&str, bool, bool)> for the concrete facade selected-owner
+binder. Include these projections in semantic snapshot equality and public
+consumer and verified archive riders. No new field tree clone or source
+interpreter is introduced.
+
+The enclosing raw field, physical story, paragraph, preorder ordinal and
+matching nested instruction, inherited lock and generated status are jointly
+required before binding a child without standalone raw XML. Exact source
+identity never comes from displayed text or a global ordinal. Exclude generated
+cache children through that same source inventory. Prioritize known inherited
+locks and leave locked cache, dirty flags and controls verbatim. Ambiguous or
+unbound unlocked children retain a diagnostic instead of advancing a counter
+or rewriting a guessed owner. Cover selected nested controls, identical
+alternate branches, locked parent fields, zero counter advancement and failure
+atomicity in existing entrypoints.
+
 Each main event stores one successfully applied counter
 delta, including hidden increments and selected anchored boxes. Per-identifier
 indexes support predecessor lookup at an event boundary. Do not clone the entire
