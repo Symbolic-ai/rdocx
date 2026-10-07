@@ -7811,6 +7811,9 @@ Pedro Assumpcao and the rdocx maintainers.
                 # F-278 completes checked field construction in DOCX-045.
                 # Rendering and execution belong to separate capabilities.
                 278,
+                # F-279 completes modeled all-story pagination materialization.
+                # Opaque, unsupported and ambiguous source caches stay preserved.
+                279,
             }
         }
         self.assertEqual(

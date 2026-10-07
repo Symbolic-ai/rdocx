@@ -1720,12 +1720,29 @@ for exhaustive native matches. Python, WASM, and CLI surfaces gain no evaluator
 methods and continue to preserve the same package content. Python exposes
 `Document.update_layout_backed_fields() -> LayoutBackedFieldUpdateReport` and
 the count-only `Document.update_page_fields() -> int` wrapper. The frozen owned
-report carries separate PAGE, NUMPAGES, and PAGEREF counts plus an immutable
-diagnostic tuple. Both operations release the GIL while native deterministic
+report carries separate PAGE, NUMPAGES, PAGEREF, SECTION and SECTIONPAGES counts
+plus an immutable diagnostic tuple. Its total is the sum of all five counts. Both operations release the GIL while native deterministic
 layout runs and advance the document revision only when a cache is written, so
 handles taken earlier then raise `StaleElementError`. The new `field_source`
 member of `oxml-layout`'s `TextSegment`, `GlyphRun`, and
 `MultilingualGlyphRun` is a pre-1.0 source break for native struct literals.
+
+Native immutable layout snapshots expose page_sections, field_placements and
+bookmark_page_section while preserving bookmark_page compatibility. WordStory
+has a physical text-box variant with actual OPC part and logical owner path.
+Hidden ordered cached-field segment, section inventory and physical text-box owner
+accessors support checked staging. The hidden Field.cached_display_owner_is_locked
+accessor reports effective cached-owner ancestry and conservatively protects an
+owner outside the cached tree. LayoutInput adds actual story part names,
+authoritative optional rich story bodies and projected footnote compatibility
+booleans. CT_Shape adds optional text_body and source_text_box_owner projections.
+Format-neutral TextSegment, GlyphRun and MultilingualGlyphRun add optional
+note_reference_source for structural ownership independently of exact text spans.
+Hidden physical revision/control metadata accessors and the existing CT_R
+selected-MC raw-slot predicate support layout-only binding without changing
+producer serialization. Absent projections retain legacy callers. These pre-1.0 public struct and enum
+additions require exhaustive constructor updates and package consumer checks.
+Python gains the two report count getters. WASM and CLI gain no update methods.
 
 Native paragraph item inspection reports whether comment-range and bookmark
 marker source elements contained child elements or visible text. Complex-field

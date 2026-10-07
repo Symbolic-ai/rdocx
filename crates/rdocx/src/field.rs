@@ -167,6 +167,31 @@ impl Document {
     }
 }
 
+fn page_story_parts(document: &Document) -> Vec<(String, PackageStoryKind, Vec<u8>)> {
+    let mut parts = Vec::new();
+    for (is_header, kind) in [
+        (true, PackageStoryKind::Header),
+        (false, PackageStoryKind::Footer),
+    ] {
+        parts.extend(
+            referenced_header_footer_parts(document, is_header, true)
+                .into_iter()
+                .map(|(part, xml)| (part, kind, xml)),
+        );
+    }
+    for (relationship, kind) in [
+        (rel_types::FOOTNOTES, PackageStoryKind::Footnotes),
+        (rel_types::ENDNOTES, PackageStoryKind::Endnotes),
+    ] {
+        parts.extend(
+            relationship_parts(document, relationship)
+                .into_iter()
+                .map(|(part, xml)| (part, kind, xml)),
+        );
+    }
+    parts
+}
+
 fn legacy_story_parts(document: &Document) -> Result<Vec<(String, LegacyStoryKind, Vec<u8>)>> {
     let Some(relationships) = document.package.get_part_rels(&document.doc_part_name) else {
         return Ok(Vec::new());
@@ -685,6 +710,8 @@ pub struct LayoutBackedFieldUpdateReport {
     pub page_fields: usize,
     pub num_pages_fields: usize,
     pub page_reference_fields: usize,
+    pub section_fields: usize,
+    pub section_pages_fields: usize,
     pub diagnostics: Vec<String>,
 }
 
@@ -692,7 +719,11 @@ impl LayoutBackedFieldUpdateReport {
     /// Number of field caches written by the operation.
     #[must_use]
     pub fn updated_count(&self) -> usize {
-        self.page_fields + self.num_pages_fields + self.page_reference_fields
+        self.page_fields
+            + self.num_pages_fields
+            + self.page_reference_fields
+            + self.section_fields
+            + self.section_pages_fields
     }
 
     /// Number of layout diagnostics returned by the operation.
@@ -813,13 +844,13 @@ impl Document {
         collect_body_paragraphs(&self.document.body, &mut main);
         evaluator.evaluate_story("main", &main)?;
 
-        for (part_name, xml) in referenced_header_footer_parts(self, true) {
+        for (part_name, xml) in referenced_header_footer_parts(self, true, false) {
             if let Ok(part) = CT_HdrFtr::from_xml(&xml) {
                 let paragraphs = part.paragraphs.iter().collect::<Vec<_>>();
                 evaluator.evaluate_story(&format!("header:{part_name}"), &paragraphs)?;
             }
         }
-        for (part_name, xml) in referenced_header_footer_parts(self, false) {
+        for (part_name, xml) in referenced_header_footer_parts(self, false, false) {
             if let Ok(part) = CT_HdrFtr::from_xml(&xml) {
                 let paragraphs = part.paragraphs.iter().collect::<Vec<_>>();
                 evaluator.evaluate_story(&format!("footer:{part_name}"), &paragraphs)?;
@@ -852,9 +883,9 @@ impl Document {
 
     /// Write layout-backed field caches and return the number changed.
     ///
-    /// PAGE takes the displayed number of the first page that shows it, so a
-    /// header or footer shared by many pages takes its first page. NUMPAGES
-    /// takes the page count. PAGEREF takes the page containing its resolved
+    /// PAGE takes its placed story owner's displayed number. Word preserves
+    /// dynamic PAGE and NUMPAGES caches in headers and footers on save, so
+    /// those caches remain unchanged. PAGEREF takes its resolved
     /// bookmark. Written fields are marked clean. Every other field keeps its
     /// cache, as does a layout-backed field that layout does not place, that
     /// uses an unsupported switch, or whose section page number format layout
@@ -865,11 +896,10 @@ impl Document {
         Ok(self.update_layout_backed_fields()?.updated_count())
     }
 
-    /// Write PAGE, NUMPAGES, and resolved PAGEREF caches from layout.
+    /// Write page, section, total and resolved bookmark page caches from one layout.
     ///
-    /// PAGE takes the displayed number of the first page that shows it, so a
-    /// shared header or footer takes its first page. NUMPAGES takes the page
-    /// count. PAGEREF takes the page containing its resolved bookmark. Fields
+    /// Each field uses its immutable placement and owning section. Header and
+    /// footer PAGE and NUMPAGES caches retain Word's saved-cache behavior. Fields
     /// with an unsupported switch or unresolved target retain their caches.
     /// Successful writes are marked clean and committed atomically.
     pub fn update_layout_backed_fields(&mut self) -> Result<LayoutBackedFieldUpdateReport> {
@@ -877,13 +907,20 @@ impl Document {
         candidate.flush_dirty_related_story_models()?;
         let layout = candidate.layout_deterministic()?;
         let (updates, mut report) = candidate.page_field_updates(&layout)?;
-        report.diagnostics = layout
-            .layout
-            .diagnostics
-            .iter()
-            .map(|diagnostic| diagnostic.message.clone())
-            .collect();
-        let updated = candidate.apply_cached_field_updates(&updates)?;
+        let textbox_updates = candidate.text_box_page_field_updates(&layout, &mut report)?;
+        report.diagnostics.extend(
+            layout
+                .layout
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.message.clone())
+                .collect::<Vec<_>>(),
+        );
+        let mut updated = candidate.apply_cached_page_field_updates(&updates)?;
+        for patch in textbox_updates {
+            candidate.patch_story_paragraph_field_sources(&patch.location, &patch.replacements)?;
+            updated += patch.updated;
+        }
         debug_assert_eq!(updated, report.updated_count());
         if updated != 0 {
             self.commit_staged_mutation(candidate);
@@ -903,7 +940,6 @@ impl Document {
         use rdocx_layout::{SourceNodeId, WordSourcePath, WordStory};
 
         let placed = placed_page_fields(layout);
-        let decimal_page_numbers = page_numbers_are_decimal(&self.document);
         let mut updates = Vec::new();
         let mut report = LayoutBackedFieldUpdateReport::default();
 
@@ -926,89 +962,163 @@ impl Document {
             &main,
             &main_paths,
             &placed,
-            decimal_page_numbers,
+            layout,
+            &self.document,
             &mut updates,
             &mut report,
         );
 
-        for is_header in [true, false] {
-            for (part_name, xml) in referenced_header_footer_parts(self, is_header) {
-                let Ok(part) = CT_HdrFtr::from_xml(&xml) else {
-                    continue;
-                };
-                // Layout keys a header or footer by relationship, and several
-                // relationships can share one part.
-                let stories = self
-                    .package
-                    .get_part_rels(&self.doc_part_name)
-                    .into_iter()
-                    .flat_map(|relationships| &relationships.items)
-                    .filter(|relationship| {
-                        OpcPackage::resolve_rel_target(&self.doc_part_name, &relationship.target)
-                            == part_name
-                    })
-                    .map(|relationship| {
-                        let relationship_id = relationship.id.clone();
-                        if is_header {
-                            WordStory::Header { relationship_id }
-                        } else {
-                            WordStory::Footer { relationship_id }
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                let paths = (0..part.paragraphs.len())
-                    .map(|index| {
-                        stories
-                            .iter()
-                            .map(|story| WordSourcePath {
-                                story: story.clone(),
-                                children: vec![index],
-                            })
-                            .collect()
-                    })
-                    .collect::<Vec<_>>();
-                let paragraphs = part.paragraphs.iter().collect::<Vec<_>>();
-                push_page_field_updates(
-                    &paragraphs,
-                    &paths,
-                    &placed,
-                    decimal_page_numbers,
-                    &mut updates,
-                    &mut report,
+        let input = self.build_layout_input();
+        for (part_name, kind, xml) in page_story_parts(self) {
+            let story = legacy_story_paragraphs(&xml, kind)?;
+            let paragraphs = story
+                .iter()
+                .map(|entry| &entry.paragraph)
+                .collect::<Vec<_>>();
+            let mut physical_paths = BTreeMap::<String, Vec<WordSourcePath>>::new();
+            for path in (1u32..)
+                .map_while(|index| SourceNodeId::new(index).and_then(|id| layout.source_node(id)))
+            {
+                let matches_kind = matches!(
+                    (&path.story, kind),
+                    (WordStory::Header { .. }, PackageStoryKind::Header)
+                        | (WordStory::Footer { .. }, PackageStoryKind::Footer)
+                        | (WordStory::Footnote { .. }, PackageStoryKind::Footnotes)
+                        | (WordStory::Endnote { .. }, PackageStoryKind::Endnotes)
                 );
-            }
-        }
-
-        push_page_field_updates(
-            &normal_note_paragraphs(&self.footnotes),
-            &note_paragraph_paths(&self.footnotes, |id| WordStory::Footnote { id }),
-            &placed,
-            decimal_page_numbers,
-            &mut updates,
-            &mut report,
-        );
-
-        let endnote_parts = relationship_parts(self, rel_types::ENDNOTES);
-        // Layout reads a single endnotes part, so several cannot be told apart.
-        let single_endnotes_part = endnote_parts.len() == 1;
-        for (_, xml) in endnote_parts {
-            if let Ok(part) = CT_Footnotes::from_xml(&xml) {
-                let mut paths = note_paragraph_paths(&part, |id| WordStory::Endnote { id });
-                if !single_endnotes_part {
-                    paths.iter_mut().for_each(Vec::clear);
+                if matches_kind && input.story_part_names.get(&path.story) == Some(&part_name) {
+                    // Header relationships sharing one physical part describe
+                    // alternative placements of the same paragraph inventory.
+                    let key = match &path.story {
+                        WordStory::Header { relationship_id }
+                        | WordStory::Footer { relationship_id } => relationship_id.clone(),
+                        _ => String::new(),
+                    };
+                    physical_paths.entry(key).or_default().push(path.clone());
                 }
-                push_page_field_updates(
-                    &normal_note_paragraphs(&part),
-                    &paths,
-                    &placed,
-                    decimal_page_numbers,
-                    &mut updates,
-                    &mut report,
-                );
             }
+            let paths = (0..paragraphs.len())
+                .map(|index| {
+                    physical_paths
+                        .values()
+                        .filter(|paths| paths.len() == paragraphs.len())
+                        .filter_map(|paths| paths.get(index).cloned())
+                        .collect()
+                })
+                .collect::<Vec<_>>();
+            push_page_field_updates(
+                &paragraphs,
+                &paths,
+                &placed,
+                layout,
+                &self.document,
+                &mut updates,
+                &mut report,
+            );
         }
 
         Ok((updates, report))
+    }
+
+    fn text_box_page_field_updates(
+        &self,
+        layout: &rdocx_layout::WordLayoutResult,
+        report: &mut LayoutBackedFieldUpdateReport,
+    ) -> Result<Vec<TextBoxCachePatch>> {
+        use rdocx_layout::{SourceNodeId, WordSourcePath, WordStory};
+        let mut nodes = Vec::new();
+        for index in 1u32.. {
+            let Some(node) = SourceNodeId::new(index) else {
+                break;
+            };
+            let Some(path) = layout.source_node(node) else {
+                break;
+            };
+            if matches!(path.story, WordStory::TextBox { .. }) {
+                nodes.push((node, path));
+            }
+        }
+        let placed = placed_page_fields(layout);
+        let mut result = Vec::new();
+        for source in self.text_box_cache_paragraphs()? {
+            let crate::document::TextBoxCacheParagraph {
+                location,
+                xml,
+                owner_index,
+                paragraph_index,
+            } = source;
+            let mut paragraph = CT_P::from_xml_fragment(&xml)?;
+            let mut fields = Vec::new();
+            for field in paragraph
+                .runs()
+                .into_iter()
+                .flat_map(|run| &run.content)
+                .filter_map(|content| match content {
+                    RunContent::Field(field) => Some(field),
+                    _ => None,
+                })
+            {
+                collect_preorder_fields(field, false, &mut fields);
+            }
+            if fields.is_empty() {
+                continue;
+            }
+            let raw = fields
+                .iter()
+                .map(|(field, _)| {
+                    field
+                        .source_replacement()
+                        .ok()
+                        .flatten()
+                        .map(|(source, _)| source.to_vec())
+                })
+                .collect::<Vec<_>>();
+            let matching = nodes.iter().filter(|(node, path)| {
+                matches!(&path.story, WordStory::TextBox { part_name, .. } if part_name == location.story().part_name())
+                    && layout.text_box_owner_index(&path.story) == Some(owner_index)
+                    && layout.text_box_paragraph_index(*node) == Some(paragraph_index)
+                    && raw.iter().enumerate().all(|(index, raw)| raw.as_deref().is_some_and(|raw| layout.source_field_xml(oxml_layout::FieldSource { node: *node, index: index as u32 }) == Some(raw)))
+                    && layout.source_field_xml(oxml_layout::FieldSource { node: *node, index: raw.len() as u32 }).is_none()
+            }).collect::<Vec<_>>();
+            let paths = if matching.len() == 1 {
+                vec![matching[0].1.clone()]
+            } else {
+                Vec::<WordSourcePath>::new()
+            };
+            let mut updates = Vec::new();
+            push_page_field_updates(
+                &[&paragraph],
+                &[paths],
+                &placed,
+                layout,
+                &self.document,
+                &mut updates,
+                report,
+            );
+            let count = updates.iter().flatten().count();
+            if count == 0 {
+                continue;
+            }
+            let mut consumed = 0;
+            apply_updates_to_paragraph(&mut paragraph, &updates, &mut consumed);
+            if consumed != updates.len() {
+                return Err(Error::Other(
+                    "text-box field traversal lost source identity".to_owned(),
+                ));
+            }
+            let replacements = paragraph_field_source_replacements(&paragraph)?;
+            if replacements.is_empty() {
+                return Err(Error::Other(
+                    "text-box cache edit has no producer source span".to_owned(),
+                ));
+            }
+            result.push(TextBoxCachePatch {
+                location,
+                replacements,
+                updated: count,
+            });
+        }
+        Ok(result)
     }
 
     /// Rebuild every supported table of contents already present in the document.
@@ -1310,6 +1420,72 @@ impl Document {
         self.apply_cached_field_updates(&updates)
     }
 
+    fn apply_cached_page_field_updates(
+        &mut self,
+        updates: &[Option<CachedFieldUpdate>],
+    ) -> Result<usize> {
+        if updates
+            .iter()
+            .flatten()
+            .any(|update| !update.cached_result.chars().all(valid_xml_character))
+        {
+            return Err(Error::Other(
+                "field result contains a character forbidden by XML 1.0".to_owned(),
+            ));
+        }
+        let updated = updates.iter().flatten().count();
+        if updated == 0 {
+            return Ok(0);
+        }
+        let package_before = self.package.clone();
+        let mut document = self.document.clone();
+        let mut update_index = 0;
+        apply_updates_to_body(&mut document.body, updates, &mut update_index);
+        let mut staged = Vec::new();
+        for (part_name, kind, xml) in page_story_parts(self) {
+            let mut paragraphs = legacy_story_paragraphs(&xml, kind)?;
+            let first = update_index;
+            for entry in &mut paragraphs {
+                apply_updates_to_paragraph(&mut entry.paragraph, updates, &mut update_index);
+            }
+            if updates[first..update_index].iter().any(Option::is_some) {
+                let xml = patch_legacy_story_field_sources(&xml, &paragraphs)?;
+                match kind {
+                    PackageStoryKind::Header | PackageStoryKind::Footer => {
+                        CT_HdrFtr::from_xml(&xml)?;
+                    }
+                    PackageStoryKind::Footnotes | PackageStoryKind::Endnotes => {
+                        CT_Footnotes::from_xml(&xml)?;
+                    }
+                }
+                staged.push((part_name, kind, xml));
+            }
+        }
+        if update_index != updates.len() {
+            return Err(Error::Other(format!(
+                "page field traversal consumed {update_index} of {} staged evaluations",
+                updates.len()
+            )));
+        }
+        CT_Document::from_xml(&document.to_xml()?)?;
+        self.document = document;
+        for (part_name, kind, xml) in staged {
+            if matches!(kind, PackageStoryKind::Footnotes) {
+                self.footnotes = CT_Footnotes::from_xml(&xml)?;
+                self.footnotes_dirty = false;
+            }
+            self.package.set_part(&part_name, xml);
+        }
+        self.package_signatures_invalidated |= self
+            .retained_package_signature_would_be_invalidated()?
+            || crate::embedded::synchronized_package_mutation_invalidates_signature(
+                &package_before,
+                &self.package,
+            );
+        self.invalidate_layout();
+        Ok(updated)
+    }
+
     /// Write one optional cache update per field, in update traversal order,
     /// through validated staged story parts. Returns the number written.
     fn apply_cached_field_updates(
@@ -1338,7 +1514,7 @@ impl Document {
 
         apply_updates_to_body(&mut document.body, updates, &mut update_index);
 
-        for (part_name, xml) in referenced_header_footer_parts(self, true) {
+        for (part_name, xml) in referenced_header_footer_parts(self, true, false) {
             if let Ok(mut part) = CT_HdrFtr::from_xml(&xml) {
                 let part_start = update_index;
                 apply_updates_to_paragraphs(&mut part.paragraphs, updates, &mut update_index);
@@ -1354,7 +1530,7 @@ impl Document {
                 }
             }
         }
-        for (part_name, xml) in referenced_header_footer_parts(self, false) {
+        for (part_name, xml) in referenced_header_footer_parts(self, false, false) {
             if let Ok(mut part) = CT_HdrFtr::from_xml(&xml) {
                 let part_start = update_index;
                 apply_updates_to_paragraphs(&mut part.paragraphs, updates, &mut update_index);
@@ -9182,6 +9358,12 @@ fn empty_section_properties() -> CT_SectPr {
     }
 }
 
+struct TextBoxCachePatch {
+    location: crate::ContentLocation,
+    replacements: Vec<(Vec<u8>, Vec<u8>)>,
+    updated: usize,
+}
+
 struct CachedFieldUpdate {
     cached_result: String,
     dirty: bool,
@@ -9349,7 +9531,7 @@ impl<'a> Evaluator<'a> {
         }
 
         let outcome = match instruction.name.as_str() {
-            "PAGE" | "NUMPAGES" => FieldOutcome::DeferredPagination,
+            "PAGE" | "NUMPAGES" | "SECTION" | "SECTIONPAGES" => FieldOutcome::DeferredPagination,
             "PAGEREF" => self.evaluate_pageref(instruction),
             "REF" => self.evaluate_ref(instruction, story, paragraph_index),
             "IF" => self.evaluate_if(instruction, story, paragraphs, paragraph_index),
@@ -9393,7 +9575,11 @@ impl<'a> Evaluator<'a> {
         paragraphs: &[&CT_P],
         paragraph_index: usize,
     ) {
-        for nested in field.effective_nested_fields_in_source_order(instruction) {
+        for nested in field
+            .effective_nested_fields_in_source_order(instruction)
+            .into_iter()
+            .chain(field.cached_fields_in_source_order())
+        {
             let key = std::ptr::from_ref(nested) as usize;
             if !self
                 .nested_outcomes
@@ -10237,7 +10423,11 @@ impl<'a> Evaluator<'a> {
     }
 }
 
-fn referenced_header_footer_parts(document: &Document, is_header: bool) -> Vec<(String, Vec<u8>)> {
+fn referenced_header_footer_parts(
+    document: &Document,
+    is_header: bool,
+    include_control_sections: bool,
+) -> Vec<(String, Vec<u8>)> {
     let Some(relationships) = document.package.get_part_rels(&document.doc_part_name) else {
         return Vec::new();
     };
@@ -10246,19 +10436,26 @@ fn referenced_header_footer_parts(document: &Document, is_header: bool) -> Vec<(
     } else {
         rel_types::FOOTER
     };
-    let sections = document
-        .document
-        .body
-        .content
-        .iter()
-        .filter_map(|content| match content {
-            BodyContent::Paragraph(paragraph) => paragraph
-                .properties
-                .as_ref()
-                .and_then(|properties| properties.sect_pr.as_ref()),
-            BodyContent::Table(_) | BodyContent::ContentControl(_) | BodyContent::RawXml(_) => None,
-        })
-        .chain(document.document.body.sect_pr.iter());
+    // Pagination inventories modeled block-control section endings. General
+    // field evaluation retains its existing direct-body story discovery.
+    let sections = if include_control_sections {
+        rdocx_layout::engine::document_sections(&document.document)
+    } else {
+        document
+            .document
+            .body
+            .content
+            .iter()
+            .filter_map(|content| match content {
+                BodyContent::Paragraph(paragraph) => paragraph
+                    .properties
+                    .as_ref()
+                    .and_then(|properties| properties.sect_pr.as_ref()),
+                _ => None,
+            })
+            .chain(document.document.body.sect_pr.as_ref())
+            .collect()
+    };
     let mut seen = HashSet::new();
     let mut parts = Vec::new();
     for section in sections {
@@ -10328,197 +10525,250 @@ fn normal_note_paragraphs(notes: &CT_Footnotes) -> Vec<&CT_P> {
         .collect()
 }
 
-/// Layout source paths of `normal_note_paragraphs`, one list per paragraph.
-/// A paragraph of a note whose id repeats gets none, since layout cannot tell
-/// such notes apart.
-fn note_paragraph_paths(
-    notes: &CT_Footnotes,
-    story: impl Fn(i32) -> rdocx_layout::WordStory,
-) -> Vec<Vec<rdocx_layout::WordSourcePath>> {
-    let mut paths = Vec::new();
-    for note in &notes.footnotes {
-        if note.note_type != NoteType::Normal {
-            continue;
-        }
-        let unique = notes
-            .footnotes
-            .iter()
-            .filter(|other| other.id == note.id)
-            .count()
-            == 1;
-        for index in 0..note.paragraphs.len() {
-            paths.push(if unique {
-                vec![rdocx_layout::WordSourcePath {
-                    story: story(note.id),
-                    children: vec![index],
-                }]
-            } else {
-                Vec::new()
-            });
-        }
-    }
-    paths
-}
-
-/// First placement of each identified layout-backed field, keyed by its
-/// source paragraph and field index, as `(physical page, kind, value)`.
+/// All immutable field occurrences keyed by paragraph path and preorder index.
 type PlacedPageFields =
-    HashMap<(rdocx_layout::WordSourcePath, u32), (usize, oxml_layout::FieldKind, usize)>;
+    HashMap<(rdocx_layout::WordSourcePath, u32), Vec<rdocx_layout::WordFieldPlacement>>;
 
 fn placed_page_fields(layout: &rdocx_layout::WordLayoutResult) -> PlacedPageFields {
-    let page_count = layout.layout.pages.len();
     let mut placed = PlacedPageFields::new();
-    for page in &layout.layout.pages {
-        oxml_layout::walk(&page.elements, &mut |element, _| {
-            let (kind, source, text) = match element {
-                oxml_layout::PositionedElement::Text(run) => {
-                    (run.field_kind, run.field_source, run.text.as_str())
-                }
-                oxml_layout::PositionedElement::MultilingualText(run) => {
-                    (run.field_kind, run.field_source, run.logical_text.as_str())
-                }
-                _ => return,
-            };
-            let (Some(kind), Some(source)) = (kind, source) else {
-                return;
-            };
-            // The same values the post-pagination substitution pass renders.
-            let value = match kind {
-                oxml_layout::FieldKind::Page => page.displayed_page_number,
-                oxml_layout::FieldKind::NumPages => page_count,
-                oxml_layout::FieldKind::TargetPage(_) => match text.parse() {
-                    Ok(value) => value,
-                    Err(_) => return,
-                },
-                oxml_layout::FieldKind::Target(_) => return,
-            };
-            if let Some(path) = layout.source_node(source.node) {
-                placed.entry((path.clone(), source.index)).or_insert((
-                    page.page_number,
-                    kind,
-                    value,
-                ));
-            }
-        });
+    for &placement in layout.field_placements() {
+        if let Some(path) = layout.source_node(placement.source.node) {
+            placed
+                .entry((path.clone(), placement.source.index))
+                .or_default()
+                .push(placement);
+        }
     }
     placed
 }
 
-/// Stage cache updates for one story. `paths` holds, for each paragraph, every
-/// layout source path that places it, and the earliest placement wins.
+fn collect_preorder_fields<'a>(
+    field: &'a Field,
+    locked: bool,
+    fields: &mut Vec<(&'a Field, bool)>,
+) {
+    let locked = locked || field.locked() == Some(true);
+    fields.push((field, locked));
+    for nested in field.all_nested_fields_in_source_order() {
+        collect_preorder_fields(nested, locked, fields);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn push_page_field_updates(
     paragraphs: &[&CT_P],
     paths: &[Vec<rdocx_layout::WordSourcePath>],
     placed: &PlacedPageFields,
-    decimal_page_numbers: bool,
+    layout: &rdocx_layout::WordLayoutResult,
+    document: &CT_Document,
     updates: &mut Vec<Option<CachedFieldUpdate>>,
     report: &mut LayoutBackedFieldUpdateReport,
 ) {
     for (paragraph, paths) in paragraphs.iter().zip(paths) {
-        let fields = paragraph
+        let mut fields = Vec::new();
+        for field in paragraph
             .runs()
             .into_iter()
             .flat_map(|run| &run.content)
             .filter_map(|content| match content {
                 RunContent::Field(field) => Some(field),
                 _ => None,
-            });
-        for (field, index) in fields.zip(0u32..) {
+            })
+        {
+            collect_preorder_fields(field, false, &mut fields);
+        }
+        for ((field, locked), index) in fields.into_iter().zip(0u32..) {
+            let instruction = field.effective_instruction();
+            let name = instruction.name.as_str();
+            if !matches!(
+                name,
+                "PAGE" | "NUMPAGES" | "SECTION" | "SECTIONPAGES" | "PAGEREF"
+            ) {
+                updates.push(None);
+                continue;
+            }
+            let retained = |report: &mut LayoutBackedFieldUpdateReport, reason: &str| {
+                report
+                    .diagnostics
+                    .push(format!("{name} field {index} retained cache: {reason}"))
+            };
+            if locked {
+                retained(report, "locked owner");
+                updates.push(None);
+                continue;
+            }
             let placement = paths
                 .iter()
                 .filter_map(|path| placed.get(&(path.clone(), index)))
-                .min_by_key(|(page, _, _)| *page);
-            let update = placement.and_then(|&(_, kind, value)| {
-                page_field_result(field, kind, value, decimal_page_numbers).map(|cached_result| {
-                    match kind {
-                        oxml_layout::FieldKind::Page => report.page_fields += 1,
-                        oxml_layout::FieldKind::NumPages => report.num_pages_fields += 1,
-                        oxml_layout::FieldKind::TargetPage(_) => {
-                            report.page_reference_fields += 1;
-                        }
-                        oxml_layout::FieldKind::Target(_) => {}
+                .flatten()
+                .min_by_key(|placement| placement.physical_page);
+            if placement.is_none() && name != "PAGEREF" {
+                retained(report, "source did not reach pagination");
+                updates.push(None);
+                continue;
+            }
+            if matches!(name, "PAGE" | "NUMPAGES")
+                && paths.iter().any(|path| {
+                    matches!(
+                        path.story,
+                        rdocx_layout::WordStory::Header { .. }
+                            | rdocx_layout::WordStory::Footer { .. }
+                    )
+                })
+            {
+                retained(
+                    report,
+                    "Word preserves dynamic header and footer caches on update and save",
+                );
+                updates.push(None);
+                continue;
+            }
+            if let Some(switch) = unsupported_switch(&instruction) {
+                retained(report, &format!("unsupported switch \\{switch}"));
+                updates.push(None);
+                continue;
+            }
+            if let Err(reason) = validate_instruction_shape(&instruction) {
+                retained(report, &reason);
+                updates.push(None);
+                continue;
+            }
+            let value = match name {
+                "PAGE" => placement.map(|placement| placement.displayed_page),
+                "NUMPAGES" => Some(layout.layout.pages.len()),
+                "SECTION" => placement.map(|placement| placement.section_index + 1),
+                "SECTIONPAGES" => placement.map(|placement| {
+                    layout
+                        .page_sections()
+                        .iter()
+                        .filter(|record| record.section_index == placement.section_index)
+                        .map(|record| record.physical_page)
+                        .collect::<HashSet<_>>()
+                        .len()
+                }),
+                "PAGEREF" => {
+                    text_argument(&instruction, 0).and_then(|name| layout.bookmark_page(name))
+                }
+                _ => None,
+            };
+            let Some(value) = value else {
+                retained(report, "bookmark target is missing, ambiguous or unplaced");
+                updates.push(None);
+                continue;
+            };
+            let cached_result = page_field_result(
+                &instruction,
+                value,
+                if name == "PAGEREF" {
+                    text_argument(&instruction, 0)
+                        .and_then(|target| layout.bookmark_page_section(target))
+                        .and_then(|target| section_page_format(document, target.section_index))
+                } else if name == "PAGE" {
+                    placement.and_then(|placement| {
+                        section_page_format(document, placement.section_index)
+                    })
+                } else {
+                    Some("decimal".into())
+                },
+            );
+            match cached_result {
+                Ok(cached_result) => {
+                    match name {
+                        "PAGE" => report.page_fields += 1,
+                        "NUMPAGES" => report.num_pages_fields += 1,
+                        "SECTION" => report.section_fields += 1,
+                        "SECTIONPAGES" => report.section_pages_fields += 1,
+                        "PAGEREF" => report.page_reference_fields += 1,
+                        _ => {}
                     }
-                    CachedFieldUpdate {
+                    updates.push(Some(CachedFieldUpdate {
                         cached_result,
                         dirty: false,
-                    }
-                })
-            });
-            updates.push(update);
-            updates.resize_with(updates.len() + field_update_count(field) - 1, || None);
+                    }));
+                }
+                Err(reason) => {
+                    retained(report, &reason);
+                    updates.push(None);
+                }
+            }
         }
     }
 }
 
-/// Format a laid-out page value for `field`, or `None` to keep its cache.
 fn page_field_result(
-    field: &Field,
-    kind: oxml_layout::FieldKind,
+    instruction: &FieldInstruction,
     value: usize,
-    decimal_page_numbers: bool,
-) -> Option<String> {
-    let instruction = field.effective_instruction();
-    let supported = match kind {
-        oxml_layout::FieldKind::Page => decimal_page_numbers && instruction.name == "PAGE",
-        oxml_layout::FieldKind::NumPages => instruction.name == "NUMPAGES",
-        oxml_layout::FieldKind::TargetPage(_) => instruction.name == "PAGEREF",
-        oxml_layout::FieldKind::Target(_) => false,
-    };
-    if !supported
-        || unsupported_switch(&instruction).is_some()
-        || validate_instruction_shape(&instruction).is_err()
-    {
-        return None;
+    section_format: Option<String>,
+) -> std::result::Result<String, String> {
+    let decimal = value.to_string();
+    let section_format =
+        section_format.ok_or_else(|| "unsupported section page number format".to_owned())?;
+    let explicit_numeric = switch_text(instruction, "#").is_some()
+        || instruction.switches.iter().any(|switch| {
+            switch.name == "*"
+                && switch
+                    .argument
+                    .as_ref()
+                    .and_then(argument_text)
+                    .is_some_and(|value| {
+                        !matches!(
+                            value.to_ascii_lowercase().as_str(),
+                            "mergeformat" | "charformat"
+                        )
+                    })
+        });
+    if explicit_numeric {
+        return apply_formats(instruction, &decimal, None);
     }
-    apply_formats(&instruction, &value.to_string(), None).ok()
+    let value = match section_format.as_str() {
+        "decimal" => decimal,
+        "upperRoman" => apply_general_format(&decimal, "ROMAN")?,
+        "lowerRoman" => apply_general_format(&decimal, "roman")?,
+        "upperLetter" => page_alphabetic(parse_positive_integer(&decimal)?, true)?,
+        "lowerLetter" => page_alphabetic(parse_positive_integer(&decimal)?, false)?,
+        _ => return Err("unsupported section page number format".into()),
+    };
+    apply_formats(instruction, &value, None)
 }
 
-/// Number of cache updates `apply_updates_to_field` consumes for `field`.
-fn field_update_count(field: &Field) -> usize {
-    1 + field
-        .nested_fields_in_source_order()
-        .into_iter()
-        .map(field_update_count)
-        .sum::<usize>()
-}
-
-/// Whether every section shows plain decimal page numbers, the only form
-/// layout produces.
-fn page_numbers_are_decimal(document: &CT_Document) -> bool {
-    document
-        .body
-        .content
-        .iter()
-        .filter_map(|content| match content {
-            BodyContent::Paragraph(paragraph) => paragraph
-                .properties
-                .as_ref()
-                .and_then(|properties| properties.sect_pr.as_ref()),
-            BodyContent::Table(_) | BodyContent::ContentControl(_) | BodyContent::RawXml(_) => None,
-        })
-        .chain(document.body.sect_pr.iter())
-        .filter_map(|section| section.page_number.as_ref()?.raw_xml.as_deref())
-        .all(|xml| {
-            let mut reader = quick_xml::Reader::from_reader(xml);
-            let mut buffer = Vec::new();
-            loop {
-                match reader.read_event_into(&mut buffer) {
-                    Ok(Event::Start(element) | Event::Empty(element)) => {
-                        return element.attributes().all(|attribute| {
-                            attribute.is_ok_and(|attribute| {
-                                match attribute.key.local_name().as_ref() {
-                                    b"fmt" => attribute.value.as_ref() == b"decimal",
-                                    b"chapStyle" => false,
-                                    _ => true,
-                                }
-                            })
-                        });
+fn section_page_format(document: &CT_Document, index: usize) -> Option<String> {
+    let sections = rdocx_layout::engine::document_sections(document);
+    let section = sections.get(index).copied();
+    let Some(raw) = section
+        .and_then(|section| section.page_number.as_ref())
+        .and_then(|number| number.raw_xml.as_deref())
+    else {
+        return Some("decimal".into());
+    };
+    let mut reader = quick_xml::Reader::from_reader(raw);
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element) | Event::Empty(element)) => {
+                let mut format = "decimal".to_owned();
+                for attribute in element.attributes() {
+                    let attribute = attribute.ok()?;
+                    match attribute.key.local_name().as_ref() {
+                        b"fmt" => {
+                            format = attribute
+                                .decoded_and_normalized_value(
+                                    XmlVersion::Implicit1_0,
+                                    element.decoder(),
+                                )
+                                .ok()?
+                                .into_owned()
+                        }
+                        b"chapStyle" => return None,
+                        _ => {}
                     }
-                    Ok(Event::Eof) | Err(_) => return false,
-                    Ok(_) => {}
                 }
+                return Some(format);
             }
-        })
+            Ok(Event::Eof) | Err(_) => return None,
+            _ => {}
+        }
+        buffer.clear();
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -11259,7 +11509,7 @@ fn note_is_normal(element: &BytesStart<'_>, resolver: &NamespaceResolver) -> boo
     }
 }
 
-fn find_typed_field_source(
+pub(crate) fn find_typed_field_source(
     xml: &[u8],
     paragraph_start: usize,
     paragraph_end: usize,
@@ -11563,6 +11813,14 @@ fn apply_updates_to_field(
         if let Some(nested) = nested_field_mut(field, pointer) {
             apply_updates_to_field(nested, updates, update_index);
         }
+    }
+    for index in 0..field.cached_fields_in_source_order().len() {
+        if let Some(nested) = field.cached_field_mut(index) {
+            apply_updates_to_field(nested, updates, update_index);
+        }
+    }
+    if update.is_none() && !field.cached_fields_in_source_order().is_empty() {
+        field.refresh_cached_field_projection();
     }
 }
 
@@ -12254,7 +12512,7 @@ fn switch_text<'a>(instruction: &'a FieldInstruction, name: &str) -> Option<&'a 
 
 fn unsupported_switch(instruction: &FieldInstruction) -> Option<&str> {
     let allowed: &[&str] = match instruction.name.as_str() {
-        "PAGE" | "NUMPAGES" => &["*", "#"],
+        "PAGE" | "NUMPAGES" | "SECTION" | "SECTIONPAGES" => &["*", "#"],
         "REF" => &["h", "n", "r", "t", "w", "p", "*", "#"],
         "PAGEREF" => &["h", "p", "*", "#"],
         "IF" => &["*", "#"],
@@ -12282,7 +12540,8 @@ fn validate_instruction_shape(instruction: &FieldInstruction) -> std::result::Re
         return Err(format!("field {} has unclosed quoting", instruction.name));
     }
     let argument_range = match instruction.name.as_str() {
-        "PAGE" | "NUMPAGES" | "DATE" | "TIME" | "FILENAME" | "AUTHOR" => 0..=0,
+        "PAGE" | "NUMPAGES" | "SECTION" | "SECTIONPAGES" | "DATE" | "TIME" | "FILENAME"
+        | "AUTHOR" => 0..=0,
         "REF" | "PAGEREF" | "SEQ" | "DOCPROPERTY" | "DOCVARIABLE" | "STYLEREF" | "MERGEFIELD" => {
             1..=1
         }
@@ -12460,7 +12719,15 @@ fn apply_formats(
             .flatten()
             .and_then(argument_text)
     }) {
-        output = apply_general_format(&output, format)?;
+        output = if matches!(
+            instruction.name.as_str(),
+            "PAGE" | "NUMPAGES" | "SECTION" | "SECTIONPAGES" | "PAGEREF"
+        ) && format.eq_ignore_ascii_case("alphabetic")
+        {
+            page_alphabetic(parse_positive_integer(&output)?, format == "ALPHABETIC")?
+        } else {
+            apply_general_format(&output, format)?
+        };
     }
     Ok(output)
 }
@@ -12504,6 +12771,19 @@ fn capitalize_first(value: &str) -> String {
         .next()
         .map(|first| first.to_uppercase().chain(characters).collect())
         .unwrap_or_default()
+}
+
+fn page_alphabetic(value: u32, upper: bool) -> std::result::Result<String, String> {
+    // Word uses A..Z, AA..ZZ, AAA..ZZZ for alphabetic page fields.
+    // Keep hostile page-number restarts from allocating an unbounded cache.
+    let count = (value - 1) / 26 + 1;
+    if count > 4096 {
+        return Err("alphabetic page result exceeds 4096 characters".to_owned());
+    }
+    let base = if upper { b'A' } else { b'a' };
+    Ok(char::from(base + ((value - 1) % 26) as u8)
+        .to_string()
+        .repeat(count as usize))
 }
 
 fn alphabetic(mut value: u32, upper: bool) -> String {
@@ -12960,6 +13240,32 @@ mod tests {
     use rdocx_oxml::text::{CT_P, CT_R, Field, FieldSwitch, RunContent};
 
     use super::*;
+
+    #[test]
+    fn pagination_cache_failure_keeps_every_receiver_field_and_part() {
+        let mut document = Document::new();
+        for name in ["PAGE", "NUMPAGES"] {
+            document
+                .add_paragraph("")
+                .add_run("")
+                .add_field(name, "OLD")
+                .unwrap();
+        }
+        document.set_header("unchanged physical story");
+        let before = document.to_bytes().unwrap();
+        let updates = [
+            Some(CachedFieldUpdate {
+                cached_result: "1".into(),
+                dirty: false,
+            }),
+            Some(CachedFieldUpdate {
+                cached_result: "\0".into(),
+                dirty: false,
+            }),
+        ];
+        assert!(document.apply_cached_page_field_updates(&updates).is_err());
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
 
     #[test]
     fn toc_number_stop_saturates_for_a_producer_marker_beyond_the_twip_range() {

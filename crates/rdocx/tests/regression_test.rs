@@ -9757,7 +9757,7 @@ fn top_level_field_caches<'a>(
 }
 
 #[test]
-fn update_page_fields_writes_first_placed_page_values_through_staged_parts() {
+fn update_page_fields_writes_body_and_nested_caches_preserving_footer_sources() {
     fn complex_field(instruction: &str, cached: &str) -> String {
         format!(
             r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> {instruction} </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>{cached}</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#
@@ -9852,9 +9852,9 @@ fn update_page_fields_writes_first_placed_page_values_through_staged_parts() {
     assert!(placed[1].contains(&(footer_story(&footer_id), vec![0], 0)));
     drop(layout);
 
-    assert_eq!(document.update_page_fields().unwrap(), 5);
+    assert_eq!(document.update_page_fields().unwrap(), 4);
     let updated = document.to_bytes().unwrap();
-    assert_eq!(document.update_page_fields().unwrap(), 5);
+    assert_eq!(document.update_page_fields().unwrap(), 4);
     assert_eq!(document.to_bytes().unwrap(), updated);
 
     let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(updated)).unwrap();
@@ -9882,16 +9882,40 @@ fn update_page_fields_writes_first_placed_page_values_through_staged_parts() {
         ])
     );
     assert!(
-        String::from_utf8_lossy(document_xml).contains("<w:t>5</w:t>"),
-        "the nested PAGE is not laid out and keeps its cache"
+        !String::from_utf8_lossy(document_xml).contains("<w:t>5</w:t>"),
+        "the nested instruction PAGE uses its outer field placement"
     );
+    let nested_page = body
+        .content
+        .iter()
+        .filter_map(|content| match content {
+            BodyContent::Paragraph(paragraph) => Some(paragraph),
+            _ => None,
+        })
+        .flat_map(|paragraph| &paragraph.runs)
+        .flat_map(|run| &run.content)
+        .find_map(|content| match content {
+            rdocx_oxml::text::RunContent::Field(field) if field.instruction.name == "IF" => field
+                .instruction
+                .arguments
+                .iter()
+                .find_map(|argument| match argument {
+                    rdocx_oxml::text::FieldArgument::Nested(child) => Some(child.as_ref()),
+                    _ => None,
+                }),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(nested_page.instruction.name, "PAGE");
+    assert_eq!(nested_page.cached_result, "2");
+    assert_eq!(nested_page.dirty, Some(false));
     let footer = |part_name: &str| {
         rdocx_oxml::header_footer::CT_HdrFtr::from_xml(package.get_part(part_name).unwrap())
             .unwrap()
     };
     assert_eq!(
         top_level_field_caches(&footer("/word/footer1.xml").paragraphs),
-        caches(&[("PAGE", "1", Some(false)), ("NUMPAGES", "2", Some(false))])
+        caches(&[("PAGE", "7", None), ("NUMPAGES", "9", None)])
     );
     assert_eq!(
         top_level_field_caches(&footer("/word/footer2.xml").paragraphs),
@@ -9901,10 +9925,10 @@ fn update_page_fields_writes_first_placed_page_values_through_staged_parts() {
 }
 
 #[test]
-fn update_page_fields_keeps_page_caches_layout_does_not_format() {
+fn update_page_fields_formats_page_caches_in_the_owning_section() {
     let body = r#"<w:p><w:fldSimple w:instr="PAGE"><w:r><w:t>7</w:t></w:r></w:fldSimple><w:fldSimple w:instr="NUMPAGES"><w:r><w:t>9</w:t></w:r></w:fldSimple></w:p><w:sectPr><w:pgNumType w:fmt="lowerRoman"/></w:sectPr>"#;
     let mut document = document_with_field_parts(&wrap_word_body(body), None, None);
-    assert_eq!(document.update_page_fields().unwrap(), 1);
+    assert_eq!(document.update_page_fields().unwrap(), 2);
     let body = body_from_document(&mut document);
     let paragraphs = body.content.iter().filter_map(|content| match content {
         BodyContent::Paragraph(paragraph) => Some(paragraph),
@@ -9913,7 +9937,7 @@ fn update_page_fields_keeps_page_caches_layout_does_not_format() {
     assert_eq!(
         top_level_field_caches(paragraphs),
         vec![
-            ("PAGE".to_owned(), "7".to_owned(), None),
+            ("PAGE".to_owned(), "i".to_owned(), Some(false)),
             ("NUMPAGES".to_owned(), "1".to_owned(), Some(false)),
         ]
     );
@@ -28311,6 +28335,8 @@ fn empty_story_layout_input() -> rdocx_layout::LayoutInput {
     rdocx_layout::LayoutInput {
         automatic_hyphenation: false,
         clamp_tabs_past_margin: false,
+        modern_footnote_layout: false,
+        footnote_layout_like_word8: false,
         mirror_margins: false,
         gutter_at_top: false,
         do_not_use_html_paragraph_auto_spacing: false,
@@ -28320,6 +28346,8 @@ fn empty_story_layout_input() -> rdocx_layout::LayoutInput {
         document,
         styles: rdocx_oxml::styles::CT_Styles::new_default(),
         numbering: None,
+        story_part_names: Default::default(),
+        story_bodies: Default::default(),
         headers: HashMap::from([("rIdHeader".to_owned(), header)]),
         footers: HashMap::from([("rIdFooter".to_owned(), footer)]),
         images: HashMap::new(),
@@ -38355,14 +38383,26 @@ mod compare_producer_noise {
         format!(r#"<w:p><w:r><w:t xml:space="preserve">Page </w:t></w:r>{field}</w:p>"#)
     }
 
-    /// Compare a footer field against its copy refreshed by `update_page_fields`.
+    /// Compare an explicit stored cache edit in both complex wire forms.
     fn refreshed_field_comparison(packed: bool, cached: bool) -> String {
         let source = document_with_footer(&page_field(packed, cached))
             .to_bytes()
             .unwrap();
-        let mut refreshed = Document::from_bytes(&source).unwrap();
-        refreshed.update_page_fields().unwrap();
-        let refreshed = Document::from_bytes(&refreshed.to_bytes().unwrap()).unwrap();
+        let paragraph = page_field(packed, cached);
+        let edited = if cached {
+            paragraph.replace("<w:t>1</w:t>", "<w:t>2</w:t>")
+        } else if packed {
+            paragraph.replace(
+                r#"<w:fldChar w:fldCharType="separate"/>"#,
+                r#"<w:fldChar w:fldCharType="separate"/><w:t>2</w:t>"#,
+            )
+        } else {
+            paragraph.replace(
+                r#"<w:fldChar w:fldCharType="separate"/></w:r>"#,
+                r#"<w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>2</w:t></w:r>"#,
+            )
+        };
+        let refreshed = document_with_footer(&edited);
         let mut compared = Document::from_bytes(&source).unwrap();
         let diagnostics = compared
             .compare(&refreshed, "R", TIMESTAMP)
@@ -38387,7 +38427,7 @@ mod compare_producer_noise {
             assert_eq!(
                 result_and_end(&split),
                 format!(
-                    r#"{separate}<w:del w:id="0" w:author="R" w:date="{TIMESTAMP}">{deleted}</w:del><w:ins w:id="1" w:author="R" w:date="{TIMESTAMP}"><w:r><w:t>1</w:t></w:r></w:ins><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p></w:ftr>"#
+                    r#"{separate}<w:del w:id="0" w:author="R" w:date="{TIMESTAMP}">{deleted}</w:del><w:ins w:id="1" w:author="R" w:date="{TIMESTAMP}"><w:r><w:t>2</w:t></w:r></w:ins><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p></w:ftr>"#
                 ),
                 "cached={cached}"
             );
@@ -40005,6 +40045,8 @@ mod advanced_table_geometry_regressions {
         rdocx_layout::LayoutInput {
             automatic_hyphenation: false,
             clamp_tabs_past_margin: false,
+            modern_footnote_layout: false,
+            footnote_layout_like_word8: false,
             mirror_margins: false,
             gutter_at_top: false,
             do_not_use_html_paragraph_auto_spacing: false,
@@ -40023,6 +40065,8 @@ mod advanced_table_geometry_regressions {
             },
             styles: CT_Styles::new_default(),
             numbering: None,
+            story_part_names: Default::default(),
+            story_bodies: Default::default(),
             headers: std::collections::HashMap::new(),
             footers: std::collections::HashMap::new(),
             images: std::collections::HashMap::new(),
@@ -43013,8 +43057,8 @@ mod run_text_around_a_complex_field {
         );
         let (mut document, footer, _) = footer_document(&run, 2);
         let report = document.update_layout_backed_fields().unwrap();
-        assert_eq!(report.updated_count(), 2);
-        assert_eq!(document.footer_text().as_deref(), Some("Page 1 of 2"));
+        assert_eq!(report.updated_count(), 0);
+        assert_eq!(document.footer_text().as_deref(), Some("Page 9 of 9"));
 
         let saved = document.to_bytes().unwrap();
         let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
@@ -43022,7 +43066,7 @@ mod run_text_around_a_complex_field {
         assert_eq!(xml.matches(r#"w:fldCharType="begin""#).count(), 2, "{xml}");
         assert_eq!(xml.matches("Page ").count(), 1, "{xml}");
         let reopened = Document::from_bytes(&saved).unwrap();
-        assert_eq!(reopened.footer_text().as_deref(), Some("Page 1 of 2"));
+        assert_eq!(reopened.footer_text().as_deref(), Some("Page 9 of 9"));
 
         // The same run in the body.
         let mut document = self::document(&run);
@@ -47684,5 +47728,3308 @@ fn checked_cached_page_and_column_breaks_attach_and_reopen() {
                     .is_err()
             );
         }
+    }
+}
+
+#[test]
+fn pagination_snapshot_retains_field_and_section_ownership() {
+    let mut document = Document::new();
+    for instruction in ["PAGE", "NUMPAGES", "SECTION", "SECTIONPAGES"] {
+        document
+            .add_paragraph("")
+            .add_run("")
+            .add_field(instruction, "OLD")
+            .unwrap();
+    }
+    let layout = document.layout_deterministic().unwrap();
+    assert_eq!(layout.page_sections().len(), 1);
+    let section = &layout.page_sections()[0];
+    assert_eq!(
+        (
+            section.physical_page,
+            section.displayed_page,
+            section.section_index
+        ),
+        (1, 1, 0)
+    );
+    assert_eq!(layout.field_placements().len(), 4);
+    assert!(layout.bookmark_page("absent").is_none());
+    let report = document.update_layout_backed_fields().unwrap();
+    assert_eq!(
+        (
+            report.page_fields,
+            report.num_pages_fields,
+            report.section_fields,
+            report.section_pages_fields
+        ),
+        (1, 1, 1, 1)
+    );
+    assert_eq!(report.updated_count(), 4);
+}
+
+#[test]
+fn pure_evaluation_defers_every_layout_field() {
+    let mut document = Document::new();
+    for instruction in [
+        "PAGE",
+        "NUMPAGES",
+        "SECTION",
+        "SECTIONPAGES",
+        "PAGEREF target",
+    ] {
+        document
+            .add_paragraph("")
+            .add_run("")
+            .add_field(instruction, "OLD")
+            .unwrap();
+    }
+    document.add_paragraph("Target");
+    document
+        .add_bookmark(
+            "target",
+            RunRange {
+                start: RunPosition {
+                    body_index: 5,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 5,
+                    run_index: 1,
+                },
+            },
+        )
+        .unwrap();
+    let before = document.to_bytes().unwrap();
+    let evaluated = document
+        .evaluate_fields(&rdocx::FieldEvaluationContext::default())
+        .unwrap();
+    assert_eq!(evaluated.len(), 5);
+    assert!(
+        evaluated
+            .iter()
+            .all(|field| field.outcome == rdocx::FieldOutcome::DeferredPagination)
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn continuous_section_snapshot_tracks_both_owners_on_one_page() {
+    let mut document = Document::new();
+    document
+        .add_paragraph("")
+        .add_run("")
+        .add_field("SECTION", "OLD1")
+        .unwrap();
+    document.insert_section(1).unwrap();
+    document
+        .section_mut(0)
+        .unwrap()
+        .set_break_type(rdocx_oxml::shared::ST_SectionType::Continuous);
+    document
+        .section_mut(1)
+        .unwrap()
+        .set_break_type(rdocx_oxml::shared::ST_SectionType::Continuous);
+    document
+        .add_paragraph("")
+        .add_run("")
+        .add_field("SECTION", "OLD2")
+        .unwrap();
+    let layout = document.layout_deterministic().unwrap();
+    assert_eq!(layout.layout.pages.len(), 1);
+    assert_eq!(
+        layout
+            .page_sections()
+            .iter()
+            .map(|record| (record.physical_page, record.section_index))
+            .collect::<Vec<_>>(),
+        vec![(1, 0), (1, 1)]
+    );
+    assert_eq!(
+        layout
+            .field_placements()
+            .iter()
+            .map(|record| record.section_index)
+            .collect::<Vec<_>>(),
+        vec![0, 1]
+    );
+    let report = document.update_layout_backed_fields().unwrap();
+    assert_eq!(report.section_fields, 2);
+    let xml = document_xml(&mut document);
+    assert!(xml.contains("<w:t>1</w:t>"));
+    assert!(xml.contains("<w:t>2</w:t>"));
+    assert!(!xml.contains("OLD"));
+}
+
+#[test]
+fn nested_story_field_identity_is_collision_free() {
+    use rdocx_oxml::text::{CT_R, Field, FieldForm, RunContent};
+    let nested = Field::from_raw("PAGE", FieldForm::Complex, vec![CT_R::new("OLD-PAGE")]).unwrap();
+    let mut cache = CT_R::new("prefix ");
+    cache.content.push(RunContent::Field(nested));
+    let outer = Field::from_raw("UNKNOWN", FieldForm::Complex, vec![cache]).unwrap();
+    let mut document = Document::new();
+    document
+        .add_paragraph("")
+        .add_run("")
+        .add_field_value(outer)
+        .unwrap();
+    document
+        .add_paragraph("")
+        .add_run("")
+        .add_field("SECTION", "OLD-SECTION")
+        .unwrap();
+    let layout = document.layout_deterministic().unwrap();
+    let sources = layout
+        .field_placements()
+        .iter()
+        .map(|placement| (placement.source.node, placement.source.index))
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(sources.len(), 3);
+    let report = document.update_layout_backed_fields().unwrap();
+    assert_eq!((report.page_fields, report.section_fields), (1, 1));
+    let xml = document_xml(&mut document);
+    assert!(!xml.contains("OLD"));
+    assert_eq!(xml.matches("fldCharType=\"begin\"").count(), 2, "{xml}");
+    let bytes = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let evaluated = reopened
+        .evaluate_fields(&rdocx::FieldEvaluationContext::default())
+        .unwrap();
+    assert_eq!(evaluated.len(), 3);
+    assert_eq!(evaluated[1].cached_result, "1");
+    assert_eq!(evaluated[2].cached_result, "1");
+}
+
+// Replay semantics copied from the authenticated Word input generator.
+// Source SHA-256 ff7305b3ddd52b915317ea9ec1ad6ac6e9897535029cb67587874fa66f979576.
+fn f279_oracle_props() -> CT_RPr {
+    CT_RPr {
+        font_ascii: Some("Times New Roman".into()),
+        font_hansi: Some("Times New Roman".into()),
+        font_east_asia: Some("Times New Roman".into()),
+        font_cs: Some("Times New Roman".into()),
+        sz: Some(HalfPoint::from_pt(10.0)),
+        sz_cs: Some(HalfPoint::from_pt(10.0)),
+        ..CT_RPr::default()
+    }
+}
+fn f279_oracle_paragraph(label: &str, instruction: Option<&str>) -> CT_P {
+    let mut p = CT_P::new();
+    p.properties = Some(CT_PPr {
+        space_before: Some(Twips(0)),
+        space_after: Some(Twips(0)),
+        line_spacing: Some(Twips(240)),
+        line_rule: Some("exact".into()),
+        ..CT_PPr::default()
+    });
+    p.add_run(&format!("{label} = ")).properties = Some(f279_oracle_props());
+    if let Some(instruction) = instruction {
+        let mut run = CT_R::new("");
+        run.properties = Some(f279_oracle_props());
+        run.content = vec![rdocx_oxml::text::RunContent::Field(
+            rdocx_oxml::text::Field::new(instruction, &format!("OLD-{label}")),
+        )];
+        p.runs.push(run);
+    }
+    p
+}
+fn f279_oracle_current(d: &Document, story: &StoryId) -> StoryId {
+    d.stories()
+        .unwrap()
+        .into_iter()
+        .find(|s| {
+            s.kind() == story.kind()
+                && s.part_name() == story.part_name()
+                && s.owner_index() == story.owner_index()
+        })
+        .unwrap()
+}
+fn f279_oracle_append(d: &mut Document, story: &StoryId, p: CT_P) {
+    let s = f279_oracle_current(d, story);
+    d.insert_content(
+        &ContentLocation::end(s),
+        ContentFragment::paragraph(p).unwrap(),
+    )
+    .unwrap();
+}
+fn f279_oracle_fields(d: &mut Document, story: &StoryId, prefix: &str) {
+    for (name, instruction) in [
+        ("PAGE", "PAGE"),
+        ("NUMPAGES", "NUMPAGES"),
+        ("SECTION", "SECTION"),
+        ("SECTIONPAGES", "SECTIONPAGES"),
+        ("PAGEREF", "PAGEREF PROBE_TARGET"),
+    ] {
+        f279_oracle_append(
+            d,
+            story,
+            f279_oracle_paragraph(&format!("{prefix}-{name}"), Some(instruction)),
+        );
+    }
+}
+fn f279_oracle_geometry(d: &mut Document) {
+    for index in 0..d.section_count() {
+        let mut s = d.section_mut(index).unwrap();
+        s.set_page_size(Length::inches(8.5), Length::inches(11.0))
+            .unwrap();
+        s.set_margins(
+            Length::inches(1.25),
+            Length::inches(1.0),
+            Length::inches(1.25),
+            Length::inches(1.0),
+        )
+        .unwrap();
+        s.set_header_footer_distance(Length::inches(0.25), Length::inches(0.25))
+            .unwrap();
+    }
+}
+fn f279_oracle_generate(case: &str) -> Document {
+    let mut d = Document::new();
+    d.set_update_fields_on_open(Some(false)).unwrap();
+    let body = StoryId::body();
+    f279_oracle_append(
+        &mut d,
+        &body,
+        f279_oracle_paragraph(&format!("PROBE-{case}-BODY1"), None),
+    );
+    f279_oracle_fields(&mut d, &body, "B1");
+    if case != "shared" {
+        d.insert_section(d.section_count()).unwrap();
+        let mut section = d.section_mut(1).unwrap();
+        section.set_break_type(if case == "continuous" {
+            rdocx_oxml::shared::ST_SectionType::Continuous
+        } else {
+            rdocx_oxml::shared::ST_SectionType::NextPage
+        });
+        if case == "restart" {
+            section.set_page_number_start(7).unwrap();
+        }
+        if case == "continuous" {
+            d.section_mut(0)
+                .unwrap()
+                .set_break_type(rdocx_oxml::shared::ST_SectionType::Continuous);
+        }
+    }
+    let mut second = f279_oracle_paragraph(&format!("PROBE-{case}-BODY2"), None);
+    if case == "shared" {
+        second.properties.as_mut().unwrap().page_break_before = Some(true);
+    }
+    f279_oracle_append(&mut d, &body, second);
+    f279_oracle_fields(&mut d, &body, "B2");
+    f279_oracle_append(&mut d, &body, f279_oracle_paragraph("TARGET", None));
+    let h = d
+        .create_section_story(0, HeaderFooterKind::Header, HdrFtrType::Default)
+        .unwrap();
+    f279_oracle_fields(&mut d, &h, "H");
+    let f = d
+        .create_section_story(0, HeaderFooterKind::Footer, HdrFtrType::Default)
+        .unwrap();
+    f279_oracle_fields(&mut d, &f, "F");
+    if d.section_count() > 1 {
+        let h = f279_oracle_current(&d, &h);
+        d.link_section_story(1, HeaderFooterKind::Header, HdrFtrType::Default, &h)
+            .unwrap();
+        let f = f279_oracle_current(&d, &f);
+        d.link_section_story(1, HeaderFooterKind::Footer, HdrFtrType::Default, &f)
+            .unwrap();
+    }
+    f279_oracle_geometry(&mut d);
+    let body = f279_oracle_current(&d, &body);
+    let target = d
+        .story_items(&body)
+        .unwrap()
+        .into_iter()
+        .find(|i| {
+            i.kind() == StoryItemKind::Paragraph
+                && i.text().unwrap().is_some_and(|t| t.starts_with("TARGET ="))
+        })
+        .unwrap()
+        .location()
+        .clone();
+    d.add_story_bookmark(
+        "PROBE_TARGET",
+        StoryRunRange {
+            start: StoryRunPosition {
+                location: target.clone(),
+                run_index: 0,
+            },
+            end: StoryRunPosition {
+                location: target,
+                run_index: 1,
+            },
+        },
+    )
+    .unwrap();
+    d
+}
+
+fn f279_oracle_body_location(d: &Document, label: &str) -> ContentLocation {
+    let body = d
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|s| s.kind() == StoryKind::Body)
+        .unwrap();
+    d.story_items(&body)
+        .unwrap()
+        .into_iter()
+        .find(|i| {
+            i.kind() == StoryItemKind::Paragraph
+                && i.text().unwrap().is_some_and(|t| t.starts_with(label))
+        })
+        .unwrap()
+        .location()
+        .clone()
+}
+fn f279_oracle_extended(case: &str) -> Document {
+    let mut d = Document::new();
+    d.set_update_fields_on_open(Some(false)).unwrap();
+    let body = StoryId::body();
+    f279_oracle_append(
+        &mut d,
+        &body,
+        f279_oracle_paragraph(&format!("PROBE-{case}-BODY1"), None),
+    );
+    f279_oracle_fields(&mut d, &body, "B1");
+    let pages = if case == "variants" { 3 } else { 2 };
+    for index in 2..=pages {
+        let mut p = f279_oracle_paragraph(&format!("PROBE-{case}-BODY{index}"), None);
+        p.properties.as_mut().unwrap().page_break_before = Some(true);
+        f279_oracle_append(&mut d, &body, p);
+        f279_oracle_fields(&mut d, &body, &format!("B{index}"));
+    }
+    f279_oracle_append(&mut d, &body, f279_oracle_paragraph("TARGET", None));
+    if case == "variants" {
+        d.set_even_and_odd_headers(true).unwrap();
+        for kind in [HeaderFooterKind::Header, HeaderFooterKind::Footer] {
+            for variant in [HdrFtrType::Default, HdrFtrType::First, HdrFtrType::Even] {
+                let story = d.create_section_story(0, kind, variant).unwrap();
+                let prefix = format!(
+                    "{}-{}",
+                    if kind == HeaderFooterKind::Header {
+                        "H"
+                    } else {
+                        "F"
+                    },
+                    match variant {
+                        HdrFtrType::Default => "DEFAULT",
+                        HdrFtrType::First => "FIRST",
+                        HdrFtrType::Even => "EVEN",
+                    }
+                );
+                f279_oracle_fields(&mut d, &story, &prefix);
+            }
+        }
+    } else {
+        let reference = f279_oracle_body_location(&d, "PROBE-notes-textbox-BODY2");
+        let id = d.create_footnote(&reference, "").unwrap();
+        let note = d.footnote_story(id).unwrap().unwrap();
+        f279_oracle_fields(&mut d, &note, "FN");
+        let reference = f279_oracle_body_location(&d, "PROBE-notes-textbox-BODY2");
+        let id = d.create_endnote(&reference, "").unwrap();
+        let note = d.endnote_story(id).unwrap().unwrap();
+        f279_oracle_fields(&mut d, &note, "EN");
+        let zero = Length::pt(0.0);
+        let options = rdocx::TextBoxOptions {
+            width: Length::pt(360.0),
+            height: Length::pt(96.0),
+            anchor: rdocx::PictureAnchor {
+                horizontal_relative_from: rdocx::DrawingHorizontalRelativeFrom::Column,
+                horizontal_offset: zero,
+                horizontal_alignment: None,
+                vertical_relative_from: rdocx::DrawingVerticalRelativeFrom::Paragraph,
+                vertical_offset: Length::pt(60.0),
+                vertical_alignment: None,
+                wrap: rdocx::DrawingWrap::None,
+                distance_top: zero,
+                distance_bottom: zero,
+                distance_left: zero,
+                distance_right: zero,
+                relative_height: 1,
+                behind_text: false,
+            },
+            rotation_degrees: 0.0,
+            text_direction: rdocx::TextBoxDirection::Horizontal,
+            fill_color: None,
+        };
+        let body = f279_oracle_current(&d, &body);
+        d.add_text_box_to_story(&body, "", options).unwrap();
+        let box_story = d
+            .stories()
+            .unwrap()
+            .into_iter()
+            .find(|s| s.kind() == StoryKind::TextBox)
+            .unwrap();
+        f279_oracle_fields(&mut d, &box_story, "BOX");
+        for kind in [HeaderFooterKind::Header, HeaderFooterKind::Footer] {
+            let story = d
+                .create_section_story(0, kind, HdrFtrType::Default)
+                .unwrap();
+            f279_oracle_fields(
+                &mut d,
+                &story,
+                if kind == HeaderFooterKind::Header {
+                    "H"
+                } else {
+                    "F"
+                },
+            );
+        }
+    }
+    f279_oracle_geometry(&mut d);
+    let target = f279_oracle_body_location(&d, "TARGET =");
+    d.add_story_bookmark(
+        "PROBE_TARGET",
+        StoryRunRange {
+            start: StoryRunPosition {
+                location: target.clone(),
+                run_index: 0,
+            },
+            end: StoryRunPosition {
+                location: target,
+                run_index: 1,
+            },
+        },
+    )
+    .unwrap();
+    d
+}
+
+#[test]
+fn note_and_textbox_snapshot_preserves_physical_story_owners() {
+    let mut document = f279_oracle_extended("notes-textbox");
+    let bytes = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let layout = reopened.layout_deterministic().unwrap();
+    let mut story_counts = std::collections::HashMap::new();
+    for placement in layout.field_placements() {
+        let path = layout.source_node(placement.source.node).unwrap();
+        *story_counts
+            .entry(format!("{:?}", path.story))
+            .or_insert(0usize) += 1;
+    }
+    assert!(
+        story_counts
+            .keys()
+            .any(|story| story.starts_with("Footnote"))
+    );
+    assert!(
+        story_counts
+            .keys()
+            .any(|story| story.starts_with("Endnote"))
+    );
+    let boxes = layout
+        .field_placements()
+        .iter()
+        .filter(|placement| {
+            matches!(
+                layout.source_node(placement.source.node).unwrap().story,
+                rdocx_layout::WordStory::TextBox { .. }
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(boxes.len(), 5);
+    assert!(boxes.iter().all(|placement| placement.physical_page == 2));
+    for placement in boxes {
+        let rdocx_layout::WordStory::TextBox {
+            part_name,
+            owner_children,
+        } = &layout.source_node(placement.source.node).unwrap().story
+        else {
+            unreachable!()
+        };
+        assert_eq!(part_name, "/word/document.xml");
+        assert!(!owner_children.is_empty());
+    }
+}
+
+#[test]
+fn textbox_page_cache_updates_preserve_selected_choice_and_fallback() {
+    let mut document = f279_oracle_extended("notes-textbox");
+    let report = document.update_layout_backed_fields().unwrap();
+    assert_eq!(report.page_fields, 5);
+    let bytes = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let stories = reopened.stories().unwrap();
+    let story = stories
+        .iter()
+        .find(|story| story.kind() == StoryKind::TextBox)
+        .unwrap();
+    let text = reopened
+        .story_items(story)
+        .unwrap()
+        .into_iter()
+        .filter_map(|item| item.text().unwrap())
+        .collect::<String>();
+    assert!(!text.contains("OLD-BOX"), "{text}");
+    let package = f249_package(&bytes);
+    let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(xml.contains("Fallback"));
+}
+
+// Genuine native Word 16.113.2 build 16.113.26092012 records, captured 2026-10-07.
+// Procedure: explicit body and every visible owner CmdA/F9, save, export PDF,
+// save and close. Shared input was additionally reopened and exported again.
+// Values below are saved caches, rather than text inferred from a PDF.
+// Subsequent actual no-F9 Word saved-output reopens retain 957/957 fields in
+// 18 cases, with zero cache/dirty/lock changes and 180 source checks.
+// Authenticated per-case artifact chains: /private/tmp/S90-F279-reopen/summary.json.
+// Partial initial owner-update scopes remain those recorded for each case.
+type F279WordCacheRecord = (&'static str, &'static str, &'static str, &'static str);
+
+fn f279_pinned_word_records(case: &str) -> (&'static str, usize, &'static [F279WordCacheRecord]) {
+    match case {
+        "complex" => {
+            let (_, pages, records) = f279_pinned_word_records("shared");
+            (
+                "166d4fd528ad2a801c859d7c4fcd541b0deea7222fdf6d34cfac1eb993fb1265",
+                pages,
+                records,
+            )
+        }
+        "shared" => (
+            "b004993f2552494e4b566f90e6054cfca14f1be467611661c16a062380307423",
+            2,
+            &[
+                ("body", "B1-PAGE", "PAGE", "1"),
+                ("body", "B1-NUMPAGES", "NUMPAGES", "2"),
+                ("body", "B1-SECTION", "SECTION", "1"),
+                ("body", "B1-SECTIONPAGES", "SECTIONPAGES", "2"),
+                ("body", "B1-PAGEREF", "PAGEREF PROBE_TARGET", "2"),
+                ("body", "B2-PAGE", "PAGE", "2"),
+                ("body", "B2-NUMPAGES", "NUMPAGES", "2"),
+                ("body", "B2-SECTION", "SECTION", "1"),
+                ("body", "B2-SECTIONPAGES", "SECTIONPAGES", "2"),
+                ("body", "B2-PAGEREF", "PAGEREF PROBE_TARGET", "2"),
+                ("header", "H-PAGE", "PAGE", "OLD-H-PAGE"),
+                ("header", "H-NUMPAGES", "NUMPAGES", "OLD-H-NUMPAGES"),
+                ("header", "H-SECTION", "SECTION", "1"),
+                ("header", "H-SECTIONPAGES", "SECTIONPAGES", "2"),
+                ("header", "H-PAGEREF", "PAGEREF PROBE_TARGET", "2"),
+                ("footer", "F-PAGE", "PAGE", "OLD-F-PAGE"),
+                ("footer", "F-NUMPAGES", "NUMPAGES", "OLD-F-NUMPAGES"),
+                ("footer", "F-SECTION", "SECTION", "1"),
+                ("footer", "F-SECTIONPAGES", "SECTIONPAGES", "2"),
+                ("footer", "F-PAGEREF", "PAGEREF PROBE_TARGET", "2"),
+            ],
+        ),
+        "continuous" => (
+            "ed3c0a521752fa48c158ff25fcecf014094285097ffb5e3af729df1df65f507a",
+            1,
+            &[
+                ("body", "B1-PAGE", "PAGE", "1"),
+                ("body", "B1-NUMPAGES", "NUMPAGES", "1"),
+                ("body", "B1-SECTION", "SECTION", "1"),
+                ("body", "B1-SECTIONPAGES", "SECTIONPAGES", "1"),
+                ("body", "B1-PAGEREF", "PAGEREF PROBE_TARGET", "1"),
+                ("body", "B2-PAGE", "PAGE", "1"),
+                ("body", "B2-NUMPAGES", "NUMPAGES", "1"),
+                ("body", "B2-SECTION", "SECTION", "2"),
+                ("body", "B2-SECTIONPAGES", "SECTIONPAGES", "1"),
+                ("body", "B2-PAGEREF", "PAGEREF PROBE_TARGET", "1"),
+                ("header", "H-PAGE", "PAGE", "OLD-H-PAGE"),
+                ("header", "H-NUMPAGES", "NUMPAGES", "OLD-H-NUMPAGES"),
+                ("header", "H-SECTION", "SECTION", "1"),
+                ("header", "H-SECTIONPAGES", "SECTIONPAGES", "1"),
+                ("header", "H-PAGEREF", "PAGEREF PROBE_TARGET", "1"),
+                ("footer", "F-PAGE", "PAGE", "OLD-F-PAGE"),
+                ("footer", "F-NUMPAGES", "NUMPAGES", "OLD-F-NUMPAGES"),
+                ("footer", "F-SECTION", "SECTION", "1"),
+                ("footer", "F-SECTIONPAGES", "SECTIONPAGES", "1"),
+                ("footer", "F-PAGEREF", "PAGEREF PROBE_TARGET", "1"),
+            ],
+        ),
+        "restart" => (
+            "4a7173137d7cb69eab657395125cf130ae6c70de99e925feedf79fb1b086a0e6",
+            2,
+            &[
+                ("body", "B1-PAGE", "PAGE", "1"),
+                ("body", "B1-NUMPAGES", "NUMPAGES", "2"),
+                ("body", "B1-SECTION", "SECTION", "1"),
+                ("body", "B1-SECTIONPAGES", "SECTIONPAGES", "1"),
+                ("body", "B1-PAGEREF", "PAGEREF PROBE_TARGET", "7"),
+                ("body", "B2-PAGE", "PAGE", "7"),
+                ("body", "B2-NUMPAGES", "NUMPAGES", "2"),
+                ("body", "B2-SECTION", "SECTION", "2"),
+                ("body", "B2-SECTIONPAGES", "SECTIONPAGES", "1"),
+                ("body", "B2-PAGEREF", "PAGEREF PROBE_TARGET", "7"),
+                ("header", "H-PAGE", "PAGE", "OLD-H-PAGE"),
+                ("header", "H-NUMPAGES", "NUMPAGES", "OLD-H-NUMPAGES"),
+                ("header", "H-SECTION", "SECTION", "1"),
+                ("header", "H-SECTIONPAGES", "SECTIONPAGES", "1"),
+                ("header", "H-PAGEREF", "PAGEREF PROBE_TARGET", "7"),
+                ("footer", "F-PAGE", "PAGE", "OLD-F-PAGE"),
+                ("footer", "F-NUMPAGES", "NUMPAGES", "OLD-F-NUMPAGES"),
+                ("footer", "F-SECTION", "SECTION", "1"),
+                ("footer", "F-SECTIONPAGES", "SECTIONPAGES", "1"),
+                ("footer", "F-PAGEREF", "PAGEREF PROBE_TARGET", "7"),
+            ],
+        ),
+        "variants" => (
+            "9ba6e1b14c25d2288ea395dbae3bbd35acec56d88afa42368c7b444d3f0f0887",
+            3,
+            &[
+                ("body", "B1-PAGE", "PAGE", "1"),
+                ("body", "B1-NUMPAGES", "NUMPAGES", "3"),
+                ("body", "B1-SECTION", "SECTION", "1"),
+                ("body", "B1-SECTIONPAGES", "SECTIONPAGES", "3"),
+                ("body", "B1-PAGEREF", "PAGEREF PROBE_TARGET", "3"),
+                ("body", "B2-PAGE", "PAGE", "2"),
+                ("body", "B2-NUMPAGES", "NUMPAGES", "3"),
+                ("body", "B2-SECTION", "SECTION", "1"),
+                ("body", "B2-SECTIONPAGES", "SECTIONPAGES", "3"),
+                ("body", "B2-PAGEREF", "PAGEREF PROBE_TARGET", "3"),
+                ("body", "B3-PAGE", "PAGE", "3"),
+                ("body", "B3-NUMPAGES", "NUMPAGES", "3"),
+                ("body", "B3-SECTION", "SECTION", "1"),
+                ("body", "B3-SECTIONPAGES", "SECTIONPAGES", "3"),
+                ("body", "B3-PAGEREF", "PAGEREF PROBE_TARGET", "3"),
+                ("header", "H-EVEN-PAGE", "PAGE", "OLD-H-EVEN-PAGE"),
+                (
+                    "header",
+                    "H-EVEN-NUMPAGES",
+                    "NUMPAGES",
+                    "OLD-H-EVEN-NUMPAGES",
+                ),
+                ("header", "H-EVEN-SECTION", "SECTION", "1"),
+                ("header", "H-EVEN-SECTIONPAGES", "SECTIONPAGES", "3"),
+                ("header", "H-EVEN-PAGEREF", "PAGEREF PROBE_TARGET", "3"),
+                ("header", "H-DEFAULT-PAGE", "PAGE", "OLD-H-DEFAULT-PAGE"),
+                (
+                    "header",
+                    "H-DEFAULT-NUMPAGES",
+                    "NUMPAGES",
+                    "OLD-H-DEFAULT-NUMPAGES",
+                ),
+                ("header", "H-DEFAULT-SECTION", "SECTION", "1"),
+                ("header", "H-DEFAULT-SECTIONPAGES", "SECTIONPAGES", "3"),
+                ("header", "H-DEFAULT-PAGEREF", "PAGEREF PROBE_TARGET", "3"),
+                ("header", "H-FIRST-PAGE", "PAGE", "OLD-H-FIRST-PAGE"),
+                (
+                    "header",
+                    "H-FIRST-NUMPAGES",
+                    "NUMPAGES",
+                    "OLD-H-FIRST-NUMPAGES",
+                ),
+                ("header", "H-FIRST-SECTION", "SECTION", "1"),
+                ("header", "H-FIRST-SECTIONPAGES", "SECTIONPAGES", "3"),
+                ("header", "H-FIRST-PAGEREF", "PAGEREF PROBE_TARGET", "3"),
+                ("footer", "F-EVEN-PAGE", "PAGE", "OLD-F-EVEN-PAGE"),
+                (
+                    "footer",
+                    "F-EVEN-NUMPAGES",
+                    "NUMPAGES",
+                    "OLD-F-EVEN-NUMPAGES",
+                ),
+                ("footer", "F-EVEN-SECTION", "SECTION", "1"),
+                ("footer", "F-EVEN-SECTIONPAGES", "SECTIONPAGES", "3"),
+                ("footer", "F-EVEN-PAGEREF", "PAGEREF PROBE_TARGET", "3"),
+                ("footer", "F-DEFAULT-PAGE", "PAGE", "OLD-F-DEFAULT-PAGE"),
+                (
+                    "footer",
+                    "F-DEFAULT-NUMPAGES",
+                    "NUMPAGES",
+                    "OLD-F-DEFAULT-NUMPAGES",
+                ),
+                ("footer", "F-DEFAULT-SECTION", "SECTION", "1"),
+                ("footer", "F-DEFAULT-SECTIONPAGES", "SECTIONPAGES", "3"),
+                ("footer", "F-DEFAULT-PAGEREF", "PAGEREF PROBE_TARGET", "3"),
+                ("footer", "F-FIRST-PAGE", "PAGE", "OLD-F-FIRST-PAGE"),
+                (
+                    "footer",
+                    "F-FIRST-NUMPAGES",
+                    "NUMPAGES",
+                    "OLD-F-FIRST-NUMPAGES",
+                ),
+                ("footer", "F-FIRST-SECTION", "SECTION", "1"),
+                ("footer", "F-FIRST-SECTIONPAGES", "SECTIONPAGES", "3"),
+                ("footer", "F-FIRST-PAGEREF", "PAGEREF PROBE_TARGET", "3"),
+            ],
+        ),
+        "notes-textbox" => (
+            "f9ca3ab64acc770ba5f448a042d942edad4562cfea9b038d4d185684394d3536",
+            2,
+            &[
+                ("body", "B1-PAGE", "PAGE", "1"),
+                ("body", "B1-NUMPAGES", "NUMPAGES", "2"),
+                ("body", "B1-SECTION", "SECTION", "1"),
+                ("body", "B1-SECTIONPAGES", "SECTIONPAGES", "2"),
+                ("body", "B1-PAGEREF", "PAGEREF PROBE_TARGET", "2"),
+                ("body", "B2-PAGE", "PAGE", "2"),
+                ("body", "B2-NUMPAGES", "NUMPAGES", "2"),
+                ("body", "B2-SECTION", "SECTION", "1"),
+                ("body", "B2-SECTIONPAGES", "SECTIONPAGES", "2"),
+                ("body", "B2-PAGEREF", "PAGEREF PROBE_TARGET", "2"),
+                ("textbox", "BOX-PAGE", "PAGE", "2"),
+                ("textbox", "BOX-NUMPAGES", "NUMPAGES", "2"),
+                ("textbox", "BOX-SECTION", "SECTION", "1"),
+                ("textbox", "BOX-SECTIONPAGES", "SECTIONPAGES", "2"),
+                ("textbox", "BOX-PAGEREF", "PAGEREF PROBE_TARGET", "2"),
+                ("header", "H-PAGE", "PAGE", "OLD-H-PAGE"),
+                ("header", "H-NUMPAGES", "NUMPAGES", "OLD-H-NUMPAGES"),
+                ("header", "H-SECTION", "SECTION", "1"),
+                ("header", "H-SECTIONPAGES", "SECTIONPAGES", "2"),
+                ("header", "H-PAGEREF", "PAGEREF PROBE_TARGET", "2"),
+                ("footer", "F-PAGE", "PAGE", "OLD-F-PAGE"),
+                ("footer", "F-NUMPAGES", "NUMPAGES", "OLD-F-NUMPAGES"),
+                ("footer", "F-SECTION", "SECTION", "1"),
+                ("footer", "F-SECTIONPAGES", "SECTIONPAGES", "2"),
+                ("footer", "F-PAGEREF", "PAGEREF PROBE_TARGET", "2"),
+                ("footnote", "FN-PAGE", "PAGE", "2"),
+                ("footnote", "FN-NUMPAGES", "NUMPAGES", "2"),
+                ("footnote", "FN-SECTION", "SECTION", "1"),
+                ("footnote", "FN-SECTIONPAGES", "SECTIONPAGES", "2"),
+                ("footnote", "FN-PAGEREF", "PAGEREF PROBE_TARGET", "2"),
+                ("endnote", "EN-PAGE", "PAGE", "2"),
+                ("endnote", "EN-NUMPAGES", "NUMPAGES", "2"),
+                ("endnote", "EN-SECTION", "SECTION", "1"),
+                ("endnote", "EN-SECTIONPAGES", "SECTIONPAGES", "2"),
+                ("endnote", "EN-PAGEREF", "PAGEREF PROBE_TARGET", "2"),
+            ],
+        ),
+        _ => panic!("unknown authenticated Word case"),
+    }
+}
+
+fn f279_normalized_caches(document: &Document) -> BTreeMap<(String, String), (String, String)> {
+    let mut result = BTreeMap::new();
+    for item in document.story_item_snapshots().unwrap() {
+        if item.location().item_kind() != StoryItemKind::Paragraph || !item.is_direct_child() {
+            continue;
+        }
+        let kind = match item.location().story().kind() {
+            StoryKind::Body => "body",
+            StoryKind::Header => "header",
+            StoryKind::Footer => "footer",
+            StoryKind::Footnote => "footnote",
+            StoryKind::Endnote => "endnote",
+            StoryKind::TextBox => "textbox",
+            _ => continue,
+        };
+        let scoped = format!(
+            "<w:document xmlns:w=\"{W_NS}\"><w:body>{}</w:body></w:document>",
+            String::from_utf8_lossy(item.xml())
+        );
+        let parsed = CT_Document::from_xml(scoped.as_bytes()).unwrap();
+        let BodyContent::Paragraph(paragraph) = &parsed.body.content[0] else {
+            panic!("expected typed paragraph");
+        };
+        let label = paragraph.text().split(" = ").next().unwrap().to_owned();
+        for field in paragraph
+            .runs()
+            .into_iter()
+            .flat_map(|run| &run.content)
+            .filter_map(|content| match content {
+                rdocx_oxml::text::RunContent::Field(field) => Some(field),
+                _ => None,
+            })
+        {
+            let key = (kind.to_owned(), label.clone());
+            assert!(
+                result
+                    .insert(
+                        key,
+                        (
+                            field.instruction.raw.trim().to_owned(),
+                            field.cached_result.clone()
+                        )
+                    )
+                    .is_none()
+            );
+        }
+    }
+    result
+}
+
+#[test]
+fn pagination_field_caches_match_pinned_word_across_stories() {
+    for case in [
+        "shared",
+        "complex",
+        "continuous",
+        "restart",
+        "variants",
+        "notes-textbox",
+    ] {
+        let (word_output_sha256, pages, expected) = f279_pinned_word_records(case);
+        assert_eq!(word_output_sha256.len(), 64);
+        let mut document = if matches!(case, "variants" | "notes-textbox") {
+            f279_oracle_extended(case)
+        } else {
+            f279_oracle_generate(if case == "complex" { "shared" } else { case })
+        };
+        // Replay the same Word input's geometry and paragraph font properties.
+        let input = document.to_bytes().unwrap();
+        document = if case == "complex" {
+            f279_complex_wire_input(&input)
+        } else {
+            Document::from_bytes(&input).unwrap()
+        };
+        let layout = document.layout_deterministic().unwrap();
+        assert_eq!(
+            layout.layout.pages.len(),
+            pages,
+            "{case} output {word_output_sha256}"
+        );
+        document.update_layout_backed_fields().unwrap();
+        let bytes = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        let actual = f279_normalized_caches(&reopened);
+        let expected = expected
+            .iter()
+            .map(|(kind, label, instruction, cache)| {
+                (
+                    (kind.to_string(), label.to_string()),
+                    (instruction.to_string(), cache.to_string()),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            actual, expected,
+            "{case} pinned Word output {word_output_sha256}"
+        );
+    }
+}
+
+// Authenticated input generator SHA-256 1591d9feed33bcc9d6e99af353495648da2ffac3f727db02523e81028d53e77d.
+fn f279_oracle_formatting() -> Document {
+    let mut d = Document::new();
+    d.set_update_fields_on_open(Some(false)).unwrap();
+    let body = StoryId::body();
+    for (section, (format, start)) in [("decimal", 11u32), ("lowerRoman", 5), ("upperLetter", 27)]
+        .into_iter()
+        .enumerate()
+    {
+        if section > 0 {
+            d.insert_section(d.section_count()).unwrap();
+        }
+        d.section_mut(section)
+            .unwrap()
+            .set_break_type(rdocx_oxml::shared::ST_SectionType::NextPage);
+        let mut number = rdocx_oxml::document::CT_PageNumberType::new(start);
+        number.raw_xml=Some(format!(r#"<w:pgNumType xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:fmt="{format}" w:start="{start}"/>"#).into_bytes());
+        number.parsed_start = Some(start);
+        number.start_attribute_name = Some(b"w:start".to_vec());
+        number.start_insertion_prefix = Some(b"w".to_vec());
+        d.section_properties_mut().page_number = Some(number);
+        for page in 1..=2 {
+            let mut heading =
+                f279_oracle_paragraph(&format!("FMT_S{}_P{}_TITLE", section + 1, page), None);
+            heading.properties.as_mut().unwrap().page_break_before = Some(page == 2);
+            f279_oracle_append(&mut d, &body, heading);
+            if page == 2 {
+                f279_oracle_append(
+                    &mut d,
+                    &body,
+                    f279_oracle_paragraph(&format!("FMT_TARGET_S{}", section + 1), None),
+                );
+            }
+            let target = format!("FMT_TARGET_S{}", section + 1);
+            for name in ["PAGE", "NUMPAGES", "SECTION", "SECTIONPAGES", "PAGEREF"] {
+                let base = if name == "PAGEREF" {
+                    format!("PAGEREF {target}")
+                } else {
+                    name.into()
+                };
+                for (tag, switch) in [
+                    ("BASE", ""),
+                    ("Arabic", r" \* Arabic"),
+                    ("roman", r" \* roman"),
+                    ("ROMAN", r" \* ROMAN"),
+                    ("ALPHA", r" \* ALPHABETIC"),
+                    ("alpha", r" \* alphabetic"),
+                    ("N000", r#" \# "000""#),
+                    ("N0p00", r#" \# "0.00""#),
+                ] {
+                    let label = format!("S{}P{}-{name}-{tag}", section + 1, page);
+                    f279_oracle_append(
+                        &mut d,
+                        &body,
+                        f279_oracle_paragraph(&label, Some(&format!("{base}{switch}"))),
+                    );
+                }
+            }
+            for target_section in 1..=3 {
+                if target_section != section + 1 {
+                    f279_oracle_append(
+                        &mut d,
+                        &body,
+                        f279_oracle_paragraph(
+                            &format!("S{}P{}-XREF-S{target_section}", section + 1, page),
+                            Some(&format!("PAGEREF FMT_TARGET_S{target_section}")),
+                        ),
+                    );
+                }
+            }
+        }
+    }
+    f279_oracle_geometry(&mut d);
+    for section in 1..=3 {
+        let name = format!("FMT_TARGET_S{section}");
+        let target = f279_oracle_body_location(&d, &format!("{name} ="));
+        d.add_story_bookmark(
+            &name,
+            StoryRunRange {
+                start: StoryRunPosition {
+                    location: target.clone(),
+                    run_index: 0,
+                },
+                end: StoryRunPosition {
+                    location: target,
+                    run_index: 1,
+                },
+            },
+        )
+        .unwrap();
+    }
+    d
+}
+
+#[test]
+fn page_field_formatting_is_scoped_to_its_section() {
+    // Saved Word 16.113.2 build 16.113.26092012, explicit body F9 then save,
+    // PDF export, save and close. Independently audited all 252 identities,
+    // instructions, order, page restarts, formats, geometry and target owners.
+    const WORD_OUTPUT_SHA256: &str =
+        "2ef7d2e60e2396ece83b7528c9025c7d11cfddd37ba75ad99e385ef866825001";
+    let expected = [
+        ("S1P1-PAGE-BASE", "PAGE", "11"),
+        ("S1P1-PAGE-Arabic", "PAGE \\* Arabic", "11"),
+        ("S1P1-PAGE-roman", "PAGE \\* roman", "xi"),
+        ("S1P1-PAGE-ROMAN", "PAGE \\* ROMAN", "XI"),
+        ("S1P1-PAGE-ALPHA", "PAGE \\* ALPHABETIC", "K"),
+        ("S1P1-PAGE-alpha", "PAGE \\* alphabetic", "k"),
+        ("S1P1-PAGE-N000", "PAGE \\# \"000\"", "011"),
+        ("S1P1-PAGE-N0p00", "PAGE \\# \"0.00\"", "11.00"),
+        ("S1P1-NUMPAGES-BASE", "NUMPAGES", "6"),
+        ("S1P1-NUMPAGES-Arabic", "NUMPAGES \\* Arabic", "6"),
+        ("S1P1-NUMPAGES-roman", "NUMPAGES \\* roman", "vi"),
+        ("S1P1-NUMPAGES-ROMAN", "NUMPAGES \\* ROMAN", "VI"),
+        ("S1P1-NUMPAGES-ALPHA", "NUMPAGES \\* ALPHABETIC", "F"),
+        ("S1P1-NUMPAGES-alpha", "NUMPAGES \\* alphabetic", "f"),
+        ("S1P1-NUMPAGES-N000", "NUMPAGES \\# \"000\"", "006"),
+        ("S1P1-NUMPAGES-N0p00", "NUMPAGES \\# \"0.00\"", "6.00"),
+        ("S1P1-SECTION-BASE", "SECTION", "1"),
+        ("S1P1-SECTION-Arabic", "SECTION \\* Arabic", "1"),
+        ("S1P1-SECTION-roman", "SECTION \\* roman", "i"),
+        ("S1P1-SECTION-ROMAN", "SECTION \\* ROMAN", "I"),
+        ("S1P1-SECTION-ALPHA", "SECTION \\* ALPHABETIC", "A"),
+        ("S1P1-SECTION-alpha", "SECTION \\* alphabetic", "a"),
+        ("S1P1-SECTION-N000", "SECTION \\# \"000\"", "001"),
+        ("S1P1-SECTION-N0p00", "SECTION \\# \"0.00\"", "1.00"),
+        ("S1P1-SECTIONPAGES-BASE", "SECTIONPAGES", "2"),
+        ("S1P1-SECTIONPAGES-Arabic", "SECTIONPAGES \\* Arabic", "2"),
+        ("S1P1-SECTIONPAGES-roman", "SECTIONPAGES \\* roman", "ii"),
+        ("S1P1-SECTIONPAGES-ROMAN", "SECTIONPAGES \\* ROMAN", "II"),
+        (
+            "S1P1-SECTIONPAGES-ALPHA",
+            "SECTIONPAGES \\* ALPHABETIC",
+            "B",
+        ),
+        (
+            "S1P1-SECTIONPAGES-alpha",
+            "SECTIONPAGES \\* alphabetic",
+            "b",
+        ),
+        ("S1P1-SECTIONPAGES-N000", "SECTIONPAGES \\# \"000\"", "002"),
+        (
+            "S1P1-SECTIONPAGES-N0p00",
+            "SECTIONPAGES \\# \"0.00\"",
+            "2.00",
+        ),
+        ("S1P1-PAGEREF-BASE", "PAGEREF FMT_TARGET_S1", "12"),
+        (
+            "S1P1-PAGEREF-Arabic",
+            "PAGEREF FMT_TARGET_S1 \\* Arabic",
+            "12",
+        ),
+        (
+            "S1P1-PAGEREF-roman",
+            "PAGEREF FMT_TARGET_S1 \\* roman",
+            "xii",
+        ),
+        (
+            "S1P1-PAGEREF-ROMAN",
+            "PAGEREF FMT_TARGET_S1 \\* ROMAN",
+            "XII",
+        ),
+        (
+            "S1P1-PAGEREF-ALPHA",
+            "PAGEREF FMT_TARGET_S1 \\* ALPHABETIC",
+            "L",
+        ),
+        (
+            "S1P1-PAGEREF-alpha",
+            "PAGEREF FMT_TARGET_S1 \\* alphabetic",
+            "l",
+        ),
+        (
+            "S1P1-PAGEREF-N000",
+            "PAGEREF FMT_TARGET_S1 \\# \"000\"",
+            "012",
+        ),
+        (
+            "S1P1-PAGEREF-N0p00",
+            "PAGEREF FMT_TARGET_S1 \\# \"0.00\"",
+            "12.00",
+        ),
+        ("S1P1-XREF-S2", "PAGEREF FMT_TARGET_S2", "vi"),
+        ("S1P1-XREF-S3", "PAGEREF FMT_TARGET_S3", "BB"),
+        ("S1P2-PAGE-BASE", "PAGE", "12"),
+        ("S1P2-PAGE-Arabic", "PAGE \\* Arabic", "12"),
+        ("S1P2-PAGE-roman", "PAGE \\* roman", "xii"),
+        ("S1P2-PAGE-ROMAN", "PAGE \\* ROMAN", "XII"),
+        ("S1P2-PAGE-ALPHA", "PAGE \\* ALPHABETIC", "L"),
+        ("S1P2-PAGE-alpha", "PAGE \\* alphabetic", "l"),
+        ("S1P2-PAGE-N000", "PAGE \\# \"000\"", "012"),
+        ("S1P2-PAGE-N0p00", "PAGE \\# \"0.00\"", "12.00"),
+        ("S1P2-NUMPAGES-BASE", "NUMPAGES", "6"),
+        ("S1P2-NUMPAGES-Arabic", "NUMPAGES \\* Arabic", "6"),
+        ("S1P2-NUMPAGES-roman", "NUMPAGES \\* roman", "vi"),
+        ("S1P2-NUMPAGES-ROMAN", "NUMPAGES \\* ROMAN", "VI"),
+        ("S1P2-NUMPAGES-ALPHA", "NUMPAGES \\* ALPHABETIC", "F"),
+        ("S1P2-NUMPAGES-alpha", "NUMPAGES \\* alphabetic", "f"),
+        ("S1P2-NUMPAGES-N000", "NUMPAGES \\# \"000\"", "006"),
+        ("S1P2-NUMPAGES-N0p00", "NUMPAGES \\# \"0.00\"", "6.00"),
+        ("S1P2-SECTION-BASE", "SECTION", "1"),
+        ("S1P2-SECTION-Arabic", "SECTION \\* Arabic", "1"),
+        ("S1P2-SECTION-roman", "SECTION \\* roman", "i"),
+        ("S1P2-SECTION-ROMAN", "SECTION \\* ROMAN", "I"),
+        ("S1P2-SECTION-ALPHA", "SECTION \\* ALPHABETIC", "A"),
+        ("S1P2-SECTION-alpha", "SECTION \\* alphabetic", "a"),
+        ("S1P2-SECTION-N000", "SECTION \\# \"000\"", "001"),
+        ("S1P2-SECTION-N0p00", "SECTION \\# \"0.00\"", "1.00"),
+        ("S1P2-SECTIONPAGES-BASE", "SECTIONPAGES", "2"),
+        ("S1P2-SECTIONPAGES-Arabic", "SECTIONPAGES \\* Arabic", "2"),
+        ("S1P2-SECTIONPAGES-roman", "SECTIONPAGES \\* roman", "ii"),
+        ("S1P2-SECTIONPAGES-ROMAN", "SECTIONPAGES \\* ROMAN", "II"),
+        (
+            "S1P2-SECTIONPAGES-ALPHA",
+            "SECTIONPAGES \\* ALPHABETIC",
+            "B",
+        ),
+        (
+            "S1P2-SECTIONPAGES-alpha",
+            "SECTIONPAGES \\* alphabetic",
+            "b",
+        ),
+        ("S1P2-SECTIONPAGES-N000", "SECTIONPAGES \\# \"000\"", "002"),
+        (
+            "S1P2-SECTIONPAGES-N0p00",
+            "SECTIONPAGES \\# \"0.00\"",
+            "2.00",
+        ),
+        ("S1P2-PAGEREF-BASE", "PAGEREF FMT_TARGET_S1", "12"),
+        (
+            "S1P2-PAGEREF-Arabic",
+            "PAGEREF FMT_TARGET_S1 \\* Arabic",
+            "12",
+        ),
+        (
+            "S1P2-PAGEREF-roman",
+            "PAGEREF FMT_TARGET_S1 \\* roman",
+            "xii",
+        ),
+        (
+            "S1P2-PAGEREF-ROMAN",
+            "PAGEREF FMT_TARGET_S1 \\* ROMAN",
+            "XII",
+        ),
+        (
+            "S1P2-PAGEREF-ALPHA",
+            "PAGEREF FMT_TARGET_S1 \\* ALPHABETIC",
+            "L",
+        ),
+        (
+            "S1P2-PAGEREF-alpha",
+            "PAGEREF FMT_TARGET_S1 \\* alphabetic",
+            "l",
+        ),
+        (
+            "S1P2-PAGEREF-N000",
+            "PAGEREF FMT_TARGET_S1 \\# \"000\"",
+            "012",
+        ),
+        (
+            "S1P2-PAGEREF-N0p00",
+            "PAGEREF FMT_TARGET_S1 \\# \"0.00\"",
+            "12.00",
+        ),
+        ("S1P2-XREF-S2", "PAGEREF FMT_TARGET_S2", "vi"),
+        ("S1P2-XREF-S3", "PAGEREF FMT_TARGET_S3", "BB"),
+        ("S2P1-PAGE-BASE", "PAGE", "v"),
+        ("S2P1-PAGE-Arabic", "PAGE \\* Arabic", "5"),
+        ("S2P1-PAGE-roman", "PAGE \\* roman", "v"),
+        ("S2P1-PAGE-ROMAN", "PAGE \\* ROMAN", "V"),
+        ("S2P1-PAGE-ALPHA", "PAGE \\* ALPHABETIC", "E"),
+        ("S2P1-PAGE-alpha", "PAGE \\* alphabetic", "e"),
+        ("S2P1-PAGE-N000", "PAGE \\# \"000\"", "005"),
+        ("S2P1-PAGE-N0p00", "PAGE \\# \"0.00\"", "5.00"),
+        ("S2P1-NUMPAGES-BASE", "NUMPAGES", "6"),
+        ("S2P1-NUMPAGES-Arabic", "NUMPAGES \\* Arabic", "6"),
+        ("S2P1-NUMPAGES-roman", "NUMPAGES \\* roman", "vi"),
+        ("S2P1-NUMPAGES-ROMAN", "NUMPAGES \\* ROMAN", "VI"),
+        ("S2P1-NUMPAGES-ALPHA", "NUMPAGES \\* ALPHABETIC", "F"),
+        ("S2P1-NUMPAGES-alpha", "NUMPAGES \\* alphabetic", "f"),
+        ("S2P1-NUMPAGES-N000", "NUMPAGES \\# \"000\"", "006"),
+        ("S2P1-NUMPAGES-N0p00", "NUMPAGES \\# \"0.00\"", "6.00"),
+        ("S2P1-SECTION-BASE", "SECTION", "2"),
+        ("S2P1-SECTION-Arabic", "SECTION \\* Arabic", "2"),
+        ("S2P1-SECTION-roman", "SECTION \\* roman", "ii"),
+        ("S2P1-SECTION-ROMAN", "SECTION \\* ROMAN", "II"),
+        ("S2P1-SECTION-ALPHA", "SECTION \\* ALPHABETIC", "B"),
+        ("S2P1-SECTION-alpha", "SECTION \\* alphabetic", "b"),
+        ("S2P1-SECTION-N000", "SECTION \\# \"000\"", "002"),
+        ("S2P1-SECTION-N0p00", "SECTION \\# \"0.00\"", "2.00"),
+        ("S2P1-SECTIONPAGES-BASE", "SECTIONPAGES", "2"),
+        ("S2P1-SECTIONPAGES-Arabic", "SECTIONPAGES \\* Arabic", "2"),
+        ("S2P1-SECTIONPAGES-roman", "SECTIONPAGES \\* roman", "ii"),
+        ("S2P1-SECTIONPAGES-ROMAN", "SECTIONPAGES \\* ROMAN", "II"),
+        (
+            "S2P1-SECTIONPAGES-ALPHA",
+            "SECTIONPAGES \\* ALPHABETIC",
+            "B",
+        ),
+        (
+            "S2P1-SECTIONPAGES-alpha",
+            "SECTIONPAGES \\* alphabetic",
+            "b",
+        ),
+        ("S2P1-SECTIONPAGES-N000", "SECTIONPAGES \\# \"000\"", "002"),
+        (
+            "S2P1-SECTIONPAGES-N0p00",
+            "SECTIONPAGES \\# \"0.00\"",
+            "2.00",
+        ),
+        ("S2P1-PAGEREF-BASE", "PAGEREF FMT_TARGET_S2", "vi"),
+        (
+            "S2P1-PAGEREF-Arabic",
+            "PAGEREF FMT_TARGET_S2 \\* Arabic",
+            "6",
+        ),
+        (
+            "S2P1-PAGEREF-roman",
+            "PAGEREF FMT_TARGET_S2 \\* roman",
+            "vi",
+        ),
+        (
+            "S2P1-PAGEREF-ROMAN",
+            "PAGEREF FMT_TARGET_S2 \\* ROMAN",
+            "VI",
+        ),
+        (
+            "S2P1-PAGEREF-ALPHA",
+            "PAGEREF FMT_TARGET_S2 \\* ALPHABETIC",
+            "F",
+        ),
+        (
+            "S2P1-PAGEREF-alpha",
+            "PAGEREF FMT_TARGET_S2 \\* alphabetic",
+            "f",
+        ),
+        (
+            "S2P1-PAGEREF-N000",
+            "PAGEREF FMT_TARGET_S2 \\# \"000\"",
+            "006",
+        ),
+        (
+            "S2P1-PAGEREF-N0p00",
+            "PAGEREF FMT_TARGET_S2 \\# \"0.00\"",
+            "6.00",
+        ),
+        ("S2P1-XREF-S1", "PAGEREF FMT_TARGET_S1", "12"),
+        ("S2P1-XREF-S3", "PAGEREF FMT_TARGET_S3", "BB"),
+        ("S2P2-PAGE-BASE", "PAGE", "vi"),
+        ("S2P2-PAGE-Arabic", "PAGE \\* Arabic", "6"),
+        ("S2P2-PAGE-roman", "PAGE \\* roman", "vi"),
+        ("S2P2-PAGE-ROMAN", "PAGE \\* ROMAN", "VI"),
+        ("S2P2-PAGE-ALPHA", "PAGE \\* ALPHABETIC", "F"),
+        ("S2P2-PAGE-alpha", "PAGE \\* alphabetic", "f"),
+        ("S2P2-PAGE-N000", "PAGE \\# \"000\"", "006"),
+        ("S2P2-PAGE-N0p00", "PAGE \\# \"0.00\"", "6.00"),
+        ("S2P2-NUMPAGES-BASE", "NUMPAGES", "6"),
+        ("S2P2-NUMPAGES-Arabic", "NUMPAGES \\* Arabic", "6"),
+        ("S2P2-NUMPAGES-roman", "NUMPAGES \\* roman", "vi"),
+        ("S2P2-NUMPAGES-ROMAN", "NUMPAGES \\* ROMAN", "VI"),
+        ("S2P2-NUMPAGES-ALPHA", "NUMPAGES \\* ALPHABETIC", "F"),
+        ("S2P2-NUMPAGES-alpha", "NUMPAGES \\* alphabetic", "f"),
+        ("S2P2-NUMPAGES-N000", "NUMPAGES \\# \"000\"", "006"),
+        ("S2P2-NUMPAGES-N0p00", "NUMPAGES \\# \"0.00\"", "6.00"),
+        ("S2P2-SECTION-BASE", "SECTION", "2"),
+        ("S2P2-SECTION-Arabic", "SECTION \\* Arabic", "2"),
+        ("S2P2-SECTION-roman", "SECTION \\* roman", "ii"),
+        ("S2P2-SECTION-ROMAN", "SECTION \\* ROMAN", "II"),
+        ("S2P2-SECTION-ALPHA", "SECTION \\* ALPHABETIC", "B"),
+        ("S2P2-SECTION-alpha", "SECTION \\* alphabetic", "b"),
+        ("S2P2-SECTION-N000", "SECTION \\# \"000\"", "002"),
+        ("S2P2-SECTION-N0p00", "SECTION \\# \"0.00\"", "2.00"),
+        ("S2P2-SECTIONPAGES-BASE", "SECTIONPAGES", "2"),
+        ("S2P2-SECTIONPAGES-Arabic", "SECTIONPAGES \\* Arabic", "2"),
+        ("S2P2-SECTIONPAGES-roman", "SECTIONPAGES \\* roman", "ii"),
+        ("S2P2-SECTIONPAGES-ROMAN", "SECTIONPAGES \\* ROMAN", "II"),
+        (
+            "S2P2-SECTIONPAGES-ALPHA",
+            "SECTIONPAGES \\* ALPHABETIC",
+            "B",
+        ),
+        (
+            "S2P2-SECTIONPAGES-alpha",
+            "SECTIONPAGES \\* alphabetic",
+            "b",
+        ),
+        ("S2P2-SECTIONPAGES-N000", "SECTIONPAGES \\# \"000\"", "002"),
+        (
+            "S2P2-SECTIONPAGES-N0p00",
+            "SECTIONPAGES \\# \"0.00\"",
+            "2.00",
+        ),
+        ("S2P2-PAGEREF-BASE", "PAGEREF FMT_TARGET_S2", "vi"),
+        (
+            "S2P2-PAGEREF-Arabic",
+            "PAGEREF FMT_TARGET_S2 \\* Arabic",
+            "6",
+        ),
+        (
+            "S2P2-PAGEREF-roman",
+            "PAGEREF FMT_TARGET_S2 \\* roman",
+            "vi",
+        ),
+        (
+            "S2P2-PAGEREF-ROMAN",
+            "PAGEREF FMT_TARGET_S2 \\* ROMAN",
+            "VI",
+        ),
+        (
+            "S2P2-PAGEREF-ALPHA",
+            "PAGEREF FMT_TARGET_S2 \\* ALPHABETIC",
+            "F",
+        ),
+        (
+            "S2P2-PAGEREF-alpha",
+            "PAGEREF FMT_TARGET_S2 \\* alphabetic",
+            "f",
+        ),
+        (
+            "S2P2-PAGEREF-N000",
+            "PAGEREF FMT_TARGET_S2 \\# \"000\"",
+            "006",
+        ),
+        (
+            "S2P2-PAGEREF-N0p00",
+            "PAGEREF FMT_TARGET_S2 \\# \"0.00\"",
+            "6.00",
+        ),
+        ("S2P2-XREF-S1", "PAGEREF FMT_TARGET_S1", "12"),
+        ("S2P2-XREF-S3", "PAGEREF FMT_TARGET_S3", "BB"),
+        ("S3P1-PAGE-BASE", "PAGE", "AA"),
+        ("S3P1-PAGE-Arabic", "PAGE \\* Arabic", "27"),
+        ("S3P1-PAGE-roman", "PAGE \\* roman", "xxvii"),
+        ("S3P1-PAGE-ROMAN", "PAGE \\* ROMAN", "XXVII"),
+        ("S3P1-PAGE-ALPHA", "PAGE \\* ALPHABETIC", "AA"),
+        ("S3P1-PAGE-alpha", "PAGE \\* alphabetic", "aa"),
+        ("S3P1-PAGE-N000", "PAGE \\# \"000\"", "027"),
+        ("S3P1-PAGE-N0p00", "PAGE \\# \"0.00\"", "27.00"),
+        ("S3P1-NUMPAGES-BASE", "NUMPAGES", "6"),
+        ("S3P1-NUMPAGES-Arabic", "NUMPAGES \\* Arabic", "6"),
+        ("S3P1-NUMPAGES-roman", "NUMPAGES \\* roman", "vi"),
+        ("S3P1-NUMPAGES-ROMAN", "NUMPAGES \\* ROMAN", "VI"),
+        ("S3P1-NUMPAGES-ALPHA", "NUMPAGES \\* ALPHABETIC", "F"),
+        ("S3P1-NUMPAGES-alpha", "NUMPAGES \\* alphabetic", "f"),
+        ("S3P1-NUMPAGES-N000", "NUMPAGES \\# \"000\"", "006"),
+        ("S3P1-NUMPAGES-N0p00", "NUMPAGES \\# \"0.00\"", "6.00"),
+        ("S3P1-SECTION-BASE", "SECTION", "3"),
+        ("S3P1-SECTION-Arabic", "SECTION \\* Arabic", "3"),
+        ("S3P1-SECTION-roman", "SECTION \\* roman", "iii"),
+        ("S3P1-SECTION-ROMAN", "SECTION \\* ROMAN", "III"),
+        ("S3P1-SECTION-ALPHA", "SECTION \\* ALPHABETIC", "C"),
+        ("S3P1-SECTION-alpha", "SECTION \\* alphabetic", "c"),
+        ("S3P1-SECTION-N000", "SECTION \\# \"000\"", "003"),
+        ("S3P1-SECTION-N0p00", "SECTION \\# \"0.00\"", "3.00"),
+        ("S3P1-SECTIONPAGES-BASE", "SECTIONPAGES", "2"),
+        ("S3P1-SECTIONPAGES-Arabic", "SECTIONPAGES \\* Arabic", "2"),
+        ("S3P1-SECTIONPAGES-roman", "SECTIONPAGES \\* roman", "ii"),
+        ("S3P1-SECTIONPAGES-ROMAN", "SECTIONPAGES \\* ROMAN", "II"),
+        (
+            "S3P1-SECTIONPAGES-ALPHA",
+            "SECTIONPAGES \\* ALPHABETIC",
+            "B",
+        ),
+        (
+            "S3P1-SECTIONPAGES-alpha",
+            "SECTIONPAGES \\* alphabetic",
+            "b",
+        ),
+        ("S3P1-SECTIONPAGES-N000", "SECTIONPAGES \\# \"000\"", "002"),
+        (
+            "S3P1-SECTIONPAGES-N0p00",
+            "SECTIONPAGES \\# \"0.00\"",
+            "2.00",
+        ),
+        ("S3P1-PAGEREF-BASE", "PAGEREF FMT_TARGET_S3", "BB"),
+        (
+            "S3P1-PAGEREF-Arabic",
+            "PAGEREF FMT_TARGET_S3 \\* Arabic",
+            "28",
+        ),
+        (
+            "S3P1-PAGEREF-roman",
+            "PAGEREF FMT_TARGET_S3 \\* roman",
+            "xxviii",
+        ),
+        (
+            "S3P1-PAGEREF-ROMAN",
+            "PAGEREF FMT_TARGET_S3 \\* ROMAN",
+            "XXVIII",
+        ),
+        (
+            "S3P1-PAGEREF-ALPHA",
+            "PAGEREF FMT_TARGET_S3 \\* ALPHABETIC",
+            "BB",
+        ),
+        (
+            "S3P1-PAGEREF-alpha",
+            "PAGEREF FMT_TARGET_S3 \\* alphabetic",
+            "bb",
+        ),
+        (
+            "S3P1-PAGEREF-N000",
+            "PAGEREF FMT_TARGET_S3 \\# \"000\"",
+            "028",
+        ),
+        (
+            "S3P1-PAGEREF-N0p00",
+            "PAGEREF FMT_TARGET_S3 \\# \"0.00\"",
+            "28.00",
+        ),
+        ("S3P1-XREF-S1", "PAGEREF FMT_TARGET_S1", "12"),
+        ("S3P1-XREF-S2", "PAGEREF FMT_TARGET_S2", "vi"),
+        ("S3P2-PAGE-BASE", "PAGE", "BB"),
+        ("S3P2-PAGE-Arabic", "PAGE \\* Arabic", "28"),
+        ("S3P2-PAGE-roman", "PAGE \\* roman", "xxviii"),
+        ("S3P2-PAGE-ROMAN", "PAGE \\* ROMAN", "XXVIII"),
+        ("S3P2-PAGE-ALPHA", "PAGE \\* ALPHABETIC", "BB"),
+        ("S3P2-PAGE-alpha", "PAGE \\* alphabetic", "bb"),
+        ("S3P2-PAGE-N000", "PAGE \\# \"000\"", "028"),
+        ("S3P2-PAGE-N0p00", "PAGE \\# \"0.00\"", "28.00"),
+        ("S3P2-NUMPAGES-BASE", "NUMPAGES", "6"),
+        ("S3P2-NUMPAGES-Arabic", "NUMPAGES \\* Arabic", "6"),
+        ("S3P2-NUMPAGES-roman", "NUMPAGES \\* roman", "vi"),
+        ("S3P2-NUMPAGES-ROMAN", "NUMPAGES \\* ROMAN", "VI"),
+        ("S3P2-NUMPAGES-ALPHA", "NUMPAGES \\* ALPHABETIC", "F"),
+        ("S3P2-NUMPAGES-alpha", "NUMPAGES \\* alphabetic", "f"),
+        ("S3P2-NUMPAGES-N000", "NUMPAGES \\# \"000\"", "006"),
+        ("S3P2-NUMPAGES-N0p00", "NUMPAGES \\# \"0.00\"", "6.00"),
+        ("S3P2-SECTION-BASE", "SECTION", "3"),
+        ("S3P2-SECTION-Arabic", "SECTION \\* Arabic", "3"),
+        ("S3P2-SECTION-roman", "SECTION \\* roman", "iii"),
+        ("S3P2-SECTION-ROMAN", "SECTION \\* ROMAN", "III"),
+        ("S3P2-SECTION-ALPHA", "SECTION \\* ALPHABETIC", "C"),
+        ("S3P2-SECTION-alpha", "SECTION \\* alphabetic", "c"),
+        ("S3P2-SECTION-N000", "SECTION \\# \"000\"", "003"),
+        ("S3P2-SECTION-N0p00", "SECTION \\# \"0.00\"", "3.00"),
+        ("S3P2-SECTIONPAGES-BASE", "SECTIONPAGES", "2"),
+        ("S3P2-SECTIONPAGES-Arabic", "SECTIONPAGES \\* Arabic", "2"),
+        ("S3P2-SECTIONPAGES-roman", "SECTIONPAGES \\* roman", "ii"),
+        ("S3P2-SECTIONPAGES-ROMAN", "SECTIONPAGES \\* ROMAN", "II"),
+        (
+            "S3P2-SECTIONPAGES-ALPHA",
+            "SECTIONPAGES \\* ALPHABETIC",
+            "B",
+        ),
+        (
+            "S3P2-SECTIONPAGES-alpha",
+            "SECTIONPAGES \\* alphabetic",
+            "b",
+        ),
+        ("S3P2-SECTIONPAGES-N000", "SECTIONPAGES \\# \"000\"", "002"),
+        (
+            "S3P2-SECTIONPAGES-N0p00",
+            "SECTIONPAGES \\# \"0.00\"",
+            "2.00",
+        ),
+        ("S3P2-PAGEREF-BASE", "PAGEREF FMT_TARGET_S3", "BB"),
+        (
+            "S3P2-PAGEREF-Arabic",
+            "PAGEREF FMT_TARGET_S3 \\* Arabic",
+            "28",
+        ),
+        (
+            "S3P2-PAGEREF-roman",
+            "PAGEREF FMT_TARGET_S3 \\* roman",
+            "xxviii",
+        ),
+        (
+            "S3P2-PAGEREF-ROMAN",
+            "PAGEREF FMT_TARGET_S3 \\* ROMAN",
+            "XXVIII",
+        ),
+        (
+            "S3P2-PAGEREF-ALPHA",
+            "PAGEREF FMT_TARGET_S3 \\* ALPHABETIC",
+            "BB",
+        ),
+        (
+            "S3P2-PAGEREF-alpha",
+            "PAGEREF FMT_TARGET_S3 \\* alphabetic",
+            "bb",
+        ),
+        (
+            "S3P2-PAGEREF-N000",
+            "PAGEREF FMT_TARGET_S3 \\# \"000\"",
+            "028",
+        ),
+        (
+            "S3P2-PAGEREF-N0p00",
+            "PAGEREF FMT_TARGET_S3 \\# \"0.00\"",
+            "28.00",
+        ),
+        ("S3P2-XREF-S1", "PAGEREF FMT_TARGET_S1", "12"),
+        ("S3P2-XREF-S2", "PAGEREF FMT_TARGET_S2", "vi"),
+    ];
+    let mut document = f279_oracle_formatting();
+    let input = document.to_bytes().unwrap();
+    document = Document::from_bytes(&input).unwrap();
+    let layout = document.layout_deterministic().unwrap();
+    assert_eq!(layout.layout.pages.len(), 6, "{WORD_OUTPUT_SHA256}");
+    let target = layout.bookmark_page_section("FMT_TARGET_S2").unwrap();
+    assert_eq!(
+        (
+            target.physical_page,
+            target.displayed_page,
+            target.section_index
+        ),
+        (4, 6, 1)
+    );
+    assert_eq!(layout.bookmark_page("FMT_TARGET_S2"), Some(6));
+    assert_eq!(layout.bookmark_page_section("missing"), None);
+    let report = document.update_layout_backed_fields().unwrap();
+    assert_eq!(report.updated_count(), 252);
+    let bytes = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let actual = f279_normalized_caches(&reopened);
+    let expected = expected
+        .iter()
+        .map(|(label, instruction, cache)| {
+            (
+                ("body".to_owned(), label.to_string()),
+                (instruction.to_string(), cache.to_string()),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        actual, expected,
+        "mixed-format pinned Word output {WORD_OUTPUT_SHA256}"
+    );
+}
+
+#[test]
+fn page_fields_in_related_tables_and_controls_keep_physical_owners() {
+    use rdocx_layout::WordStory;
+    let mut source = f279_oracle_extended("notes-textbox");
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(source.to_bytes().unwrap()))
+            .unwrap();
+    let keep = "<x:keep xmlns:x=\"urn:f279:producer\"><x:p><x:fldSimple x:instr=\"SECTION\"><x:r><x:t>OLD-FOREIGN</x:t></x:r></x:fldSimple></x:p></x:keep>";
+    for (part, label) in [
+        ("/word/header1.xml", "H"),
+        ("/word/footer1.xml", "F"),
+        ("/word/footnotes.xml", "FN"),
+        ("/word/endnotes.xml", "EN"),
+    ] {
+        let mut xml = String::from_utf8(package.get_part(part).unwrap().to_vec()).unwrap();
+        for (suffix, table) in [("SECTION", true), ("SECTIONPAGES", false)] {
+            let index = xml.find(&format!("{label}-{suffix} = ")).unwrap();
+            let start = xml[..index]
+                .match_indices("<w:p")
+                .filter(|(start, _)| {
+                    matches!(xml.as_bytes().get(start + 4), Some(b' ') | Some(b'>'))
+                })
+                .map(|(start, _)| start)
+                .last()
+                .unwrap();
+            let end = index + xml[index..].find("</w:p>").unwrap() + "</w:p>".len();
+            let paragraph = &xml[start..end];
+            let replacement = if table {
+                format!(
+                    "<w:tbl><w:tblPr><w:tblW w:w=\"7200\" w:type=\"dxa\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"7200\"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcW w:w=\"7200\" w:type=\"dxa\"/></w:tcPr>{paragraph}</w:tc></w:tr></w:tbl>"
+                )
+            } else {
+                format!(
+                    "<w:sdt><w:sdtPr><w:tag w:val=\"F279-CONTROL\"/></w:sdtPr><w:sdtContent>{paragraph}</w:sdtContent></w:sdt>"
+                )
+            };
+            xml.replace_range(start..end, &replacement);
+        }
+        let end = xml.rfind("</w:").unwrap();
+        xml.insert_str(end, keep);
+        package.set_part(part, xml.into_bytes());
+    }
+    let rels_before = package
+        .get_part_rels("/word/document.xml")
+        .unwrap()
+        .to_xml()
+        .unwrap();
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+    let layout = document.layout_deterministic().unwrap();
+    assert_eq!(layout.layout.pages.len(), 2);
+    for matches in [
+        |story: &WordStory| matches!(story, WordStory::Header { .. }),
+        |story: &WordStory| matches!(story, WordStory::Footer { .. }),
+        |story: &WordStory| matches!(story, WordStory::Footnote { .. }),
+        |story: &WordStory| matches!(story, WordStory::Endnote { .. }),
+    ] {
+        let paths = layout
+            .field_placements()
+            .iter()
+            .filter_map(|placement| layout.source_node(placement.source.node))
+            .filter(|path| matches(&path.story))
+            .collect::<Vec<_>>();
+        assert!(
+            paths.iter().any(|path| path.children.len() >= 4),
+            "table field has a physical cell path: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .any(|path| path.children.len() >= 2 && path.children.len() < 4),
+            "control field has a physical block path: {paths:?}"
+        );
+    }
+    let report = document.update_layout_backed_fields().unwrap();
+    assert_eq!(report.section_fields, 7);
+    assert_eq!(report.section_pages_fields, 7);
+    let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let saved =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(reopened.to_bytes().unwrap()))
+            .unwrap();
+    assert_eq!(
+        saved
+            .get_part_rels("/word/document.xml")
+            .unwrap()
+            .to_xml()
+            .unwrap(),
+        rels_before
+    );
+    for (part, label) in [
+        ("/word/header1.xml", "H"),
+        ("/word/footer1.xml", "F"),
+        ("/word/footnotes.xml", "FN"),
+        ("/word/endnotes.xml", "EN"),
+    ] {
+        let xml = std::str::from_utf8(saved.get_part(part).unwrap()).unwrap();
+        assert!(xml.contains(keep));
+        assert!(xml.contains("<w:tbl>"));
+        assert!(xml.contains("F279-CONTROL"));
+        assert!(!xml.contains(&format!("OLD-{label}-SECTION<")), "{xml}");
+        assert!(
+            !xml.contains(&format!("OLD-{label}-SECTIONPAGES<")),
+            "{xml}"
+        );
+    }
+}
+
+// Replay the authenticated simple-to-complex transformation. Cached CT_R
+// children and every byte outside the exact canonical simple spans are retained.
+fn f279_complex_wire_input(bytes: &[u8]) -> Document {
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    for part in [
+        "/word/document.xml",
+        "/word/header1.xml",
+        "/word/footer1.xml",
+    ] {
+        let mut xml = String::from_utf8(package.get_part(part).unwrap().to_vec()).unwrap();
+        while let Some(start) = xml.find("<w:fldSimple ") {
+            let opening_end = start + xml[start..].find('>').unwrap() + 1;
+            let end = opening_end + xml[opening_end..].find("</w:fldSimple>").unwrap();
+            let opening = &xml[start..opening_end];
+            let instruction_start = opening.find("w:instr=\"").unwrap() + 9;
+            let instruction_end =
+                instruction_start + opening[instruction_start..].find('"').unwrap();
+            let instruction =
+                quick_xml::escape::unescape(&opening[instruction_start..instruction_end]).unwrap();
+            let instruction = quick_xml::escape::escape(instruction);
+            let mut flags = String::new();
+            for name in ["dirty", "fldLock"] {
+                let prefix = format!("w:{name}=\"");
+                if let Some(position) = opening.find(&prefix) {
+                    let value_start = position + prefix.len();
+                    let value_end = value_start + opening[value_start..].find('"').unwrap();
+                    flags.push_str(&format!(
+                        " w:{name}=\"{}\"",
+                        &opening[value_start..value_end]
+                    ));
+                }
+            }
+            let replacement = format!(
+                "<w:r><w:fldChar w:fldCharType=\"begin\"{flags}/></w:r><w:r><w:instrText xml:space=\"preserve\">{instruction}</w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>{}<w:r><w:fldChar w:fldCharType=\"end\"/></w:r>",
+                &xml[opening_end..end]
+            );
+            xml.replace_range(start..end + "</w:fldSimple>".len(), &replacement);
+        }
+        package.set_part(part, xml.into_bytes());
+    }
+    let mut output = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut output).unwrap();
+    Document::from_bytes(output.get_ref()).unwrap()
+}
+
+#[test]
+fn locked_and_unplaced_page_fields_keep_original_cache() {
+    use rdocx_oxml::text::{Field, FieldForm, RunContent};
+    let mut document = Document::new();
+    let mut nested_run = CT_R::new("");
+    nested_run.content = vec![RunContent::Field(
+        Field::from_raw(
+            "SECTIONPAGES",
+            FieldForm::Complex,
+            vec![CT_R::new("OLD-NESTED")],
+        )
+        .unwrap(),
+    )];
+    let mut locked = Field::from_raw("UNKNOWN", FieldForm::Complex, vec![nested_run]).unwrap();
+    locked.set_locked(Some(true));
+    document
+        .add_paragraph("")
+        .add_run("")
+        .add_field_value(locked)
+        .unwrap();
+    let inactive = document
+        .create_section_story(0, HeaderFooterKind::Header, HdrFtrType::First)
+        .unwrap();
+    f279_oracle_append(
+        &mut document,
+        &inactive,
+        f279_oracle_paragraph("INACTIVE-SECTION", Some("SECTION")),
+    );
+    document
+        .section_mut(0)
+        .unwrap()
+        .set_different_first_page(false);
+    let bytes = document.to_bytes().unwrap();
+    let mut document = Document::from_bytes(&bytes).unwrap();
+    let report = document.update_layout_backed_fields().unwrap();
+    assert_eq!(report.updated_count(), 0);
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|message| message.contains("locked owner"))
+    );
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|message| message.contains("did not reach pagination"))
+    );
+    assert_eq!(document.to_bytes().unwrap(), bytes);
+}
+
+#[test]
+fn related_only_pageref_discovers_its_body_target() {
+    let mut document = Document::new();
+    document.add_paragraph("target paragraph");
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    document
+        .add_story_bookmark(
+            "ONLY_HEADER_TARGET",
+            StoryRunRange {
+                start: StoryRunPosition {
+                    location: location.clone(),
+                    run_index: 0,
+                },
+                end: StoryRunPosition {
+                    location,
+                    run_index: 1,
+                },
+            },
+        )
+        .unwrap();
+    let header = document
+        .create_section_story(0, HeaderFooterKind::Header, HdrFtrType::Default)
+        .unwrap();
+    f279_oracle_append(
+        &mut document,
+        &header,
+        f279_oracle_paragraph("HEADER-ONLY", Some("PAGEREF ONLY_HEADER_TARGET")),
+    );
+    let snapshot = document.layout_deterministic().unwrap();
+    assert_eq!(snapshot.bookmark_page("ONLY_HEADER_TARGET"), Some(1));
+    assert_eq!(
+        document
+            .update_layout_backed_fields()
+            .unwrap()
+            .page_reference_fields,
+        1
+    );
+    let bytes = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let header = reopened
+        .section_story(0, HeaderFooterKind::Header, HdrFtrType::Default)
+        .unwrap()
+        .unwrap();
+    let xml = std::str::from_utf8(package.get_part(header.story().part_name()).unwrap()).unwrap();
+    assert!(!xml.contains("OLD-HEADER-ONLY"));
+    assert!(xml.contains("<w:t>1</w:t>"));
+}
+
+#[test]
+fn control_owned_section_breaks_keep_page_and_target_number_formats() {
+    let mut document = Document::new();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let xml = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>A-PAGE = </w:t></w:r><w:fldSimple w:instr="PAGE"><w:r><w:t>OLD-A</w:t></w:r></w:fldSimple></w:p>
+<w:p><w:r><w:t>A-XREF = </w:t></w:r><w:fldSimple w:instr="PAGEREF B_TARGET"><w:r><w:t>OLD-XREF</w:t></w:r></w:fldSimple></w:p>
+<w:sdt><w:sdtPr/><w:sdtContent><w:p><w:pPr><w:sectPr><w:type w:val="nextPage"/><w:pgNumType w:fmt="lowerRoman" w:start="5"/></w:sectPr></w:pPr></w:p></w:sdtContent></w:sdt>
+<w:p><w:bookmarkStart w:id="1" w:name="B_TARGET"/><w:r><w:t>B-PAGE = </w:t></w:r><w:fldSimple w:instr="PAGE"><w:r><w:t>OLD-B</w:t></w:r></w:fldSimple><w:bookmarkEnd w:id="1"/></w:p>
+<w:sectPr><w:type w:val="nextPage"/><w:pgNumType w:fmt="decimal" w:start="9"/></w:sectPr>
+</w:body></w:document>"#;
+    package.set_part("/word/document.xml", xml.as_bytes().to_vec());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+    let layout = document.layout_deterministic().unwrap();
+    assert_eq!(layout.layout.pages.len(), 2);
+    assert_eq!(
+        layout
+            .bookmark_page_section("B_TARGET")
+            .unwrap()
+            .section_index,
+        1
+    );
+    let report = document.update_layout_backed_fields().unwrap();
+    assert_eq!(report.updated_count(), 3);
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let actual = f279_normalized_caches(&reopened);
+    for (label, instruction, cache) in [
+        ("A-PAGE", "PAGE", "v"),
+        ("A-XREF", "PAGEREF B_TARGET", "9"),
+        ("B-PAGE", "PAGE", "9"),
+    ] {
+        assert_eq!(
+            actual.get(&("body".into(), label.into())),
+            Some(&(instruction.into(), cache.into()))
+        );
+    }
+}
+
+#[test]
+fn cached_child_fields_use_their_own_page_and_column_placement() {
+    use rdocx_oxml::text::{BreakType, Field, FieldForm, RunContent};
+    for outer_form in [FieldForm::Simple, FieldForm::Complex] {
+        for child_form in [FieldForm::Simple, FieldForm::Complex] {
+            for page_break in [true, false] {
+                for invisible in [false, true] {
+                    let mut result = CT_R::new("OLD-CHILD");
+                    result.properties = Some(CT_RPr {
+                        vanish: Some(invisible),
+                        ..Default::default()
+                    });
+                    let child = Field::from_raw("PAGE", child_form, vec![result]).unwrap();
+                    let mut child_run = CT_R::new("");
+                    child_run.content = vec![RunContent::Field(child)];
+                    let mut breaker = CT_R::new("");
+                    breaker.content = vec![RunContent::Break(if page_break {
+                        BreakType::Page
+                    } else {
+                        BreakType::Column
+                    })];
+                    let outer = Field::from_raw(
+                        "UNKNOWN",
+                        outer_form,
+                        vec![CT_R::new("prefix"), breaker, child_run],
+                    )
+                    .unwrap();
+                    let mut document = Document::new();
+                    document.section_properties_mut().columns =
+                        Some(rdocx_oxml::document::CT_Columns {
+                            num: Some(if page_break { 1 } else { 2 }),
+                            space: None,
+                            equal_width: Some(true),
+                            sep: None,
+                            columns: vec![],
+                        });
+                    document
+                        .add_paragraph("")
+                        .add_run("")
+                        .add_field_value(outer)
+                        .unwrap();
+                    let bytes = document.to_bytes().unwrap();
+                    let mut document = Document::from_bytes(&bytes).unwrap();
+                    let layout = document.layout_deterministic().unwrap();
+                    let child_places = layout
+                        .field_placements()
+                        .iter()
+                        .filter(|place| place.source.index == 1)
+                        .collect::<Vec<_>>();
+                    if invisible {
+                        assert!(
+                            child_places.is_empty(),
+                            "{outer_form:?}/{child_form:?} page={page_break}"
+                        );
+                    } else {
+                        assert_eq!(
+                            child_places.len(),
+                            1,
+                            "{outer_form:?}/{child_form:?} page={page_break}"
+                        );
+                        assert_eq!(
+                            child_places[0].physical_page,
+                            if page_break { 2 } else { 1 }
+                        );
+                    }
+                    let report = document.update_layout_backed_fields().unwrap();
+                    assert_eq!(report.page_fields, usize::from(!invisible));
+                    let bytes = document.to_bytes().unwrap();
+                    let reopened = Document::from_bytes(&bytes).unwrap();
+                    let fields = reopened
+                        .evaluate_fields(&rdocx::FieldEvaluationContext::default())
+                        .unwrap();
+                    assert_eq!(
+                        fields[1].cached_result,
+                        if invisible {
+                            "OLD-CHILD"
+                        } else if page_break {
+                            "2"
+                        } else {
+                            "1"
+                        }
+                    );
+                    if invisible {
+                        assert!(report.diagnostics.iter().any(|diagnostic| {
+                            diagnostic.contains("source did not reach pagination")
+                        }));
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn rich_text_box_tables_and_controls_keep_field_paths_and_producer_source() {
+    let mut source = f279_oracle_extended("notes-textbox");
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(source.to_bytes().unwrap()))
+            .unwrap();
+    let mut xml =
+        String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let fallback_start = xml.find("<mc:Fallback").unwrap();
+    let fallback_end = fallback_start
+        + xml[fallback_start..].find("</mc:Fallback>").unwrap()
+        + "</mc:Fallback>".len();
+    let fallback = xml[fallback_start..fallback_end].to_owned();
+    for (label, table) in [("BOX-PAGE", true), ("BOX-SECTION", false)] {
+        let index = xml.find(&format!("{label} = ")).unwrap();
+        let start = xml[..index]
+            .match_indices("<w:p")
+            .filter(|(index, _)| matches!(xml.as_bytes().get(index + 4), Some(b' ') | Some(b'>')))
+            .map(|(index, _)| index)
+            .last()
+            .unwrap();
+        let end = index + xml[index..].find("</w:p>").unwrap() + "</w:p>".len();
+        let paragraph = &xml[start..end];
+        let replacement = if table {
+            format!(
+                "<w:tbl><w:tblPr><w:tblW w:w=\"7200\" w:type=\"dxa\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"7200\"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcW w:w=\"7200\" w:type=\"dxa\"/></w:tcPr>{paragraph}</w:tc></w:tr></w:tbl>"
+            )
+        } else {
+            format!(
+                "<w:sdt><w:sdtPr><w:tag w:val=\"BOX-CONTROL\"/></w:sdtPr><w:sdtContent>{paragraph}</w:sdtContent></w:sdt>"
+            )
+        };
+        xml.replace_range(start..end, &replacement);
+    }
+    package.set_part("/word/document.xml", xml.into_bytes());
+    let relationships = package
+        .get_part_rels("/word/document.xml")
+        .unwrap()
+        .to_xml()
+        .unwrap();
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+    let layout = document.layout_deterministic().unwrap();
+    let mut box_paths = Vec::new();
+    for index in 1u32.. {
+        let Some(node) = rdocx_layout::SourceNodeId::new(index) else {
+            break;
+        };
+        let Some(path) = layout.source_node(node) else {
+            break;
+        };
+        if matches!(path.story, rdocx_layout::WordStory::TextBox { .. }) {
+            box_paths.push(path);
+        }
+    }
+    assert!(box_paths.iter().any(|path| path.children.len() >= 4));
+    assert!(box_paths.iter().any(|path| path.children.len() == 2));
+    let report = document.update_layout_backed_fields().unwrap();
+    assert_eq!(report.page_fields, 5);
+    assert_eq!(report.section_fields, 7);
+    let saved =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let saved_xml = std::str::from_utf8(saved.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(saved_xml.contains(&fallback));
+    assert_eq!(saved_xml.matches("OLD-BOX-PAGE").count(), 0);
+    assert_eq!(saved_xml.matches("OLD-BOX-SECTION<").count(), 0);
+    assert_eq!(
+        saved
+            .get_part_rels("/word/document.xml")
+            .unwrap()
+            .to_xml()
+            .unwrap(),
+        relationships
+    );
+}
+
+#[test]
+fn an_earlier_unregistered_text_box_cannot_take_an_anchored_box_placement() {
+    let mut source = f279_oracle_extended("notes-textbox");
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(source.to_bytes().unwrap()))
+            .unwrap();
+    let mut xml =
+        String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let start = xml.find("<w:body>").unwrap() + "<w:body>".len();
+    xml.insert_str(start, r#"<w:p><w:r><w:pict><v:shape xmlns:v="urn:schemas-microsoft-com:vml" id="UNREGISTERED" style="width:10pt;height:10pt"><v:textbox><w:txbxContent><w:p><w:fldSimple w:instr="PAGE"><w:r><w:t>OLD-UNREGISTERED</w:t></w:r></w:fldSimple></w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p>"#);
+    package.set_part("/word/document.xml", xml.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+    assert_eq!(
+        document
+            .stories()
+            .unwrap()
+            .iter()
+            .filter(|story| story.kind() == StoryKind::TextBox)
+            .count(),
+        2
+    );
+    let report = document.update_layout_backed_fields().unwrap();
+    assert_eq!(report.page_fields, 5);
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains("source did not reach pagination"))
+    );
+    let saved =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let xml = std::str::from_utf8(saved.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(xml.contains("OLD-UNREGISTERED"));
+    assert!(!xml.contains("OLD-BOX-PAGE"));
+}
+
+#[test]
+fn identical_text_boxes_keep_distinct_physical_owners_across_pages_and_inline_controls() {
+    for inline_control_first in [false, true] {
+        let mut source = f279_oracle_extended("notes-textbox");
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(source.to_bytes().unwrap()))
+                .unwrap();
+        let mut xml =
+            String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+        let start = xml.find("<mc:AlternateContent").unwrap();
+        let end = start
+            + xml[start..].find("</mc:AlternateContent>").unwrap()
+            + "</mc:AlternateContent>".len();
+        let duplicate = xml[start..end].to_owned();
+        let paragraph_end = end + xml[end..].find("</w:p>").unwrap() + "</w:p>".len();
+        if inline_control_first {
+            let run_start = xml[..start].rfind("<w:r>").unwrap();
+            let run_end = end + xml[end..].find("</w:r>").unwrap() + "</w:r>".len();
+            let original_run = xml[run_start..run_end].to_owned();
+            xml.replace_range(run_start..run_end, &format!(
+                "<w:sdt><w:sdtPr/><w:sdtContent>{original_run}</w:sdtContent></w:sdt><w:r><w:br w:type=\"page\"/>{duplicate}</w:r>"
+            ));
+        } else {
+            xml.insert_str(
+                paragraph_end,
+                &format!("<w:p><w:pPr><w:pageBreakBefore/></w:pPr><w:r>{duplicate}</w:r></w:p>"),
+            );
+        }
+        package.set_part("/word/document.xml", xml.into_bytes());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+        assert_eq!(
+            document
+                .stories()
+                .unwrap()
+                .iter()
+                .filter(|story| story.kind() == StoryKind::TextBox)
+                .count(),
+            2
+        );
+        let layout = document.layout_deterministic().unwrap();
+        let box_pages = layout
+            .field_placements()
+            .iter()
+            .filter_map(|placement| {
+                let path = layout.source_node(placement.source.node)?;
+                (matches!(path.story, rdocx_layout::WordStory::TextBox { .. })
+                    && placement.source.index == 0)
+                    .then(|| {
+                        (
+                            layout.text_box_owner_index(&path.story).unwrap(),
+                            placement.displayed_page,
+                        )
+                    })
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(box_pages.len(), 2);
+        if inline_control_first {
+            assert_eq!(box_pages.first().unwrap().1, box_pages.last().unwrap().1);
+        } else {
+            assert_ne!(box_pages.first().unwrap().1, box_pages.last().unwrap().1);
+        }
+        let report = document.update_layout_backed_fields().unwrap();
+        assert_eq!(report.page_fields, 6);
+        let saved =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+                .unwrap();
+        let xml = std::str::from_utf8(saved.get_part("/word/document.xml").unwrap()).unwrap();
+        assert_eq!(xml.matches("OLD-BOX-PAGE").count(), 0);
+        assert_eq!(xml.matches("OLD-BOX-SECTION<").count(), 0);
+        let owners = document
+            .stories()
+            .unwrap()
+            .into_iter()
+            .filter(|story| story.kind() == StoryKind::TextBox)
+            .collect::<Vec<_>>();
+        for (owner, page) in box_pages {
+            let text = document
+                .story_items(&owners[owner])
+                .unwrap()
+                .into_iter()
+                .find(|item| {
+                    item.text()
+                        .unwrap()
+                        .is_some_and(|text| text.starts_with("BOX-PAGE"))
+                })
+                .unwrap()
+                .text()
+                .unwrap()
+                .unwrap();
+            assert!(text.ends_with(&page.to_string()), "{text}");
+        }
+    }
+}
+
+// Exact replay of generator SHA-256 0335394fffe04039c4b194bd74546f80808f211ddf505a1d3405c877e32fb1d2.
+fn f279_continuous_oracle(case: &str) -> Document {
+    let mut d = Document::new();
+    d.set_update_fields_on_open(Some(false)).unwrap();
+    let body = StoryId::body();
+    f279_oracle_append(
+        &mut d,
+        &body,
+        f279_oracle_paragraph("PROBE-S1-REFERENCE", None),
+    );
+    f279_oracle_fields(&mut d, &body, "S1");
+    d.insert_section(d.section_count()).unwrap();
+    for index in 0..2 {
+        d.section_mut(index)
+            .unwrap()
+            .set_break_type(rdocx_oxml::shared::ST_SectionType::Continuous);
+    }
+    if case == "continuous-restart" {
+        d.section_mut(1).unwrap().set_page_number_start(7).unwrap();
+    }
+    f279_oracle_append(
+        &mut d,
+        &body,
+        f279_oracle_paragraph("PROBE-S2-REFERENCE", None),
+    );
+    f279_oracle_fields(&mut d, &body, "S2-P1");
+    if case.starts_with("continuous-") {
+        let mut page = f279_oracle_paragraph("PROBE-S2-NEXT-PHYSICAL-PAGE", None);
+        page.properties.as_mut().unwrap().page_break_before = Some(true);
+        f279_oracle_append(&mut d, &body, page);
+        f279_oracle_fields(&mut d, &body, "S2-P2");
+    } else {
+        for section in if case == "notes-both-continuous" {
+            vec![1, 2]
+        } else {
+            vec![2]
+        } {
+            let location = f279_oracle_body_location(&d, &format!("PROBE-S{section}-REFERENCE"));
+            let id = d.create_footnote(&location, "").unwrap();
+            let story = d.footnote_story(id).unwrap().unwrap();
+            f279_oracle_fields(&mut d, &story, &format!("S{section}-FN"));
+            let location = f279_oracle_body_location(&d, &format!("PROBE-S{section}-REFERENCE"));
+            let id = d.create_endnote(&location, "").unwrap();
+            let story = d.endnote_story(id).unwrap().unwrap();
+            f279_oracle_fields(&mut d, &story, &format!("S{section}-EN"));
+        }
+    }
+    f279_oracle_append(&mut d, &body, f279_oracle_paragraph("TARGET", None));
+    for section in 0..2 {
+        for kind in [HeaderFooterKind::Header, HeaderFooterKind::Footer] {
+            let story = d
+                .create_section_story(section, kind, HdrFtrType::Default)
+                .unwrap();
+            f279_oracle_fields(
+                &mut d,
+                &story,
+                &format!(
+                    "S{}-{}",
+                    section + 1,
+                    if kind == HeaderFooterKind::Header {
+                        "H"
+                    } else {
+                        "F"
+                    }
+                ),
+            );
+        }
+    }
+    f279_oracle_geometry(&mut d);
+    let target = f279_oracle_body_location(&d, "TARGET =");
+    d.add_story_bookmark(
+        "PROBE_TARGET",
+        StoryRunRange {
+            start: StoryRunPosition {
+                location: target.clone(),
+                run_index: 0,
+            },
+            end: StoryRunPosition {
+                location: target,
+                run_index: 1,
+            },
+        },
+    )
+    .unwrap();
+    d
+}
+
+#[test]
+fn continuous_furniture_and_restart_caches_match_authenticated_word() {
+    // Word 16.113.2 build 16.113.26092012. Explicit body and both physical
+    // section header/footer updates, save, PDF export, save and normal close.
+    // Independent raw topology and physical furniture audits passed.
+    let cases: &[(&str, &str, &[F279WordCacheRecord])] = &[
+        (
+            "continuous-furniture",
+            "d931eb4b7b51869e68e43de7060a5eb8fd00203441a8fe1dae3ff3cd58eb3092",
+            &[
+                ("body", "S1-PAGE", "PAGE", "1"),
+                ("body", "S1-NUMPAGES", "NUMPAGES", "2"),
+                ("body", "S1-SECTION", "SECTION", "1"),
+                ("body", "S1-SECTIONPAGES", "SECTIONPAGES", "1"),
+                ("body", "S1-PAGEREF", "PAGEREF PROBE_TARGET", "2"),
+                ("body", "S2-P1-PAGE", "PAGE", "1"),
+                ("body", "S2-P1-NUMPAGES", "NUMPAGES", "2"),
+                ("body", "S2-P1-SECTION", "SECTION", "2"),
+                ("body", "S2-P1-SECTIONPAGES", "SECTIONPAGES", "2"),
+                ("body", "S2-P1-PAGEREF", "PAGEREF PROBE_TARGET", "2"),
+                ("body", "S2-P2-PAGE", "PAGE", "2"),
+                ("body", "S2-P2-NUMPAGES", "NUMPAGES", "2"),
+                ("body", "S2-P2-SECTION", "SECTION", "2"),
+                ("body", "S2-P2-SECTIONPAGES", "SECTIONPAGES", "2"),
+                ("body", "S2-P2-PAGEREF", "PAGEREF PROBE_TARGET", "2"),
+                ("header", "S1-H-PAGE", "PAGE", "OLD-S1-H-PAGE"),
+                ("header", "S1-H-NUMPAGES", "NUMPAGES", "OLD-S1-H-NUMPAGES"),
+                ("header", "S1-H-SECTION", "SECTION", "1"),
+                ("header", "S1-H-SECTIONPAGES", "SECTIONPAGES", "1"),
+                ("header", "S1-H-PAGEREF", "PAGEREF PROBE_TARGET", "2"),
+                ("footer", "S1-F-PAGE", "PAGE", "OLD-S1-F-PAGE"),
+                ("footer", "S1-F-NUMPAGES", "NUMPAGES", "OLD-S1-F-NUMPAGES"),
+                ("footer", "S1-F-SECTION", "SECTION", "1"),
+                ("footer", "S1-F-SECTIONPAGES", "SECTIONPAGES", "1"),
+                ("footer", "S1-F-PAGEREF", "PAGEREF PROBE_TARGET", "2"),
+                ("header", "S2-H-PAGE", "PAGE", "OLD-S2-H-PAGE"),
+                ("header", "S2-H-NUMPAGES", "NUMPAGES", "OLD-S2-H-NUMPAGES"),
+                ("header", "S2-H-SECTION", "SECTION", "2"),
+                ("header", "S2-H-SECTIONPAGES", "SECTIONPAGES", "2"),
+                ("header", "S2-H-PAGEREF", "PAGEREF PROBE_TARGET", "2"),
+                ("footer", "S2-F-PAGE", "PAGE", "OLD-S2-F-PAGE"),
+                ("footer", "S2-F-NUMPAGES", "NUMPAGES", "OLD-S2-F-NUMPAGES"),
+                ("footer", "S2-F-SECTION", "SECTION", "2"),
+                ("footer", "S2-F-SECTIONPAGES", "SECTIONPAGES", "2"),
+                ("footer", "S2-F-PAGEREF", "PAGEREF PROBE_TARGET", "2"),
+            ],
+        ),
+        (
+            "continuous-restart",
+            "56cb649e34fa7b26e35f18040e69f32a9b39206bfcae831a64583fef698757a3",
+            &[
+                ("body", "S1-PAGE", "PAGE", "1"),
+                ("body", "S1-NUMPAGES", "NUMPAGES", "2"),
+                ("body", "S1-SECTION", "SECTION", "1"),
+                ("body", "S1-SECTIONPAGES", "SECTIONPAGES", "1"),
+                ("body", "S1-PAGEREF", "PAGEREF PROBE_TARGET", "8"),
+                ("body", "S2-P1-PAGE", "PAGE", "1"),
+                ("body", "S2-P1-NUMPAGES", "NUMPAGES", "2"),
+                ("body", "S2-P1-SECTION", "SECTION", "2"),
+                ("body", "S2-P1-SECTIONPAGES", "SECTIONPAGES", "2"),
+                ("body", "S2-P1-PAGEREF", "PAGEREF PROBE_TARGET", "8"),
+                ("body", "S2-P2-PAGE", "PAGE", "8"),
+                ("body", "S2-P2-NUMPAGES", "NUMPAGES", "2"),
+                ("body", "S2-P2-SECTION", "SECTION", "2"),
+                ("body", "S2-P2-SECTIONPAGES", "SECTIONPAGES", "2"),
+                ("body", "S2-P2-PAGEREF", "PAGEREF PROBE_TARGET", "8"),
+                ("header", "S1-H-PAGE", "PAGE", "OLD-S1-H-PAGE"),
+                ("header", "S1-H-NUMPAGES", "NUMPAGES", "OLD-S1-H-NUMPAGES"),
+                ("header", "S1-H-SECTION", "SECTION", "1"),
+                ("header", "S1-H-SECTIONPAGES", "SECTIONPAGES", "1"),
+                ("header", "S1-H-PAGEREF", "PAGEREF PROBE_TARGET", "8"),
+                ("footer", "S1-F-PAGE", "PAGE", "OLD-S1-F-PAGE"),
+                ("footer", "S1-F-NUMPAGES", "NUMPAGES", "OLD-S1-F-NUMPAGES"),
+                ("footer", "S1-F-SECTION", "SECTION", "1"),
+                ("footer", "S1-F-SECTIONPAGES", "SECTIONPAGES", "1"),
+                ("footer", "S1-F-PAGEREF", "PAGEREF PROBE_TARGET", "8"),
+                ("header", "S2-H-PAGE", "PAGE", "OLD-S2-H-PAGE"),
+                ("header", "S2-H-NUMPAGES", "NUMPAGES", "OLD-S2-H-NUMPAGES"),
+                ("header", "S2-H-SECTION", "SECTION", "2"),
+                ("header", "S2-H-SECTIONPAGES", "SECTIONPAGES", "2"),
+                ("header", "S2-H-PAGEREF", "PAGEREF PROBE_TARGET", "8"),
+                ("footer", "S2-F-PAGE", "PAGE", "OLD-S2-F-PAGE"),
+                ("footer", "S2-F-NUMPAGES", "NUMPAGES", "OLD-S2-F-NUMPAGES"),
+                ("footer", "S2-F-SECTION", "SECTION", "2"),
+                ("footer", "S2-F-SECTIONPAGES", "SECTIONPAGES", "2"),
+                ("footer", "S2-F-PAGEREF", "PAGEREF PROBE_TARGET", "8"),
+            ],
+        ),
+    ];
+    for (case, word_sha, expected) in cases {
+        let mut document = f279_continuous_oracle(case);
+        let input = document.to_bytes().unwrap();
+        let mut document = Document::from_bytes(&input).unwrap();
+        let layout = document.layout_deterministic().unwrap();
+        assert_eq!(layout.layout.pages.len(), 2, "{case} {word_sha}");
+        assert_eq!(
+            layout
+                .page_sections()
+                .iter()
+                .map(|record| (record.physical_page, record.section_index))
+                .collect::<Vec<_>>(),
+            vec![(1, 0), (1, 1), (2, 1)]
+        );
+        assert_eq!(
+            layout.layout.pages[1].displayed_page_number,
+            if *case == "continuous-restart" { 8 } else { 2 }
+        );
+        let report = document.update_layout_backed_fields().unwrap();
+        assert_eq!(report.updated_count(), 27);
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        let actual = f279_normalized_caches(&reopened);
+        let expected = expected
+            .iter()
+            .map(|(kind, label, instruction, cache)| {
+                (
+                    (kind.to_string(), label.to_string()),
+                    (instruction.to_string(), cache.to_string()),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(actual, expected, "pinned Word {case} {word_sha}");
+    }
+}
+
+#[test]
+fn continuous_note_caches_follow_authenticated_reference_owners() {
+    // Fresh Word 16.113.2 build 16.113.26092012. Root explicitly updated
+    // body, each reachable note and physical furniture owner, saved, exported
+    // PDF, saved and closed. Independent source topology and note-ID joins pass.
+    let cases: &[(&str, &str, usize, &[F279WordCacheRecord])] = &[
+        (
+            "notes-second-continuous",
+            "9c678ae9e200ac49e8da8a921b643827f43bcf2c3afd946f5102de2829ca0da9",
+            1,
+            &[
+                ("body", "S1-PAGE", "PAGE", "1"),
+                ("body", "S1-NUMPAGES", "NUMPAGES", "1"),
+                ("body", "S1-SECTION", "SECTION", "1"),
+                ("body", "S1-SECTIONPAGES", "SECTIONPAGES", "1"),
+                ("body", "S1-PAGEREF", "PAGEREF PROBE_TARGET", "1"),
+                ("body", "S2-P1-PAGE", "PAGE", "1"),
+                ("body", "S2-P1-NUMPAGES", "NUMPAGES", "1"),
+                ("body", "S2-P1-SECTION", "SECTION", "2"),
+                ("body", "S2-P1-SECTIONPAGES", "SECTIONPAGES", "1"),
+                ("body", "S2-P1-PAGEREF", "PAGEREF PROBE_TARGET", "1"),
+                ("header", "S1-H-PAGE", "PAGE", "OLD-S1-H-PAGE"),
+                ("header", "S1-H-NUMPAGES", "NUMPAGES", "OLD-S1-H-NUMPAGES"),
+                ("header", "S1-H-SECTION", "SECTION", "1"),
+                ("header", "S1-H-SECTIONPAGES", "SECTIONPAGES", "1"),
+                ("header", "S1-H-PAGEREF", "PAGEREF PROBE_TARGET", "1"),
+                ("footer", "S1-F-PAGE", "PAGE", "OLD-S1-F-PAGE"),
+                ("footer", "S1-F-NUMPAGES", "NUMPAGES", "OLD-S1-F-NUMPAGES"),
+                ("footer", "S1-F-SECTION", "SECTION", "1"),
+                ("footer", "S1-F-SECTIONPAGES", "SECTIONPAGES", "1"),
+                ("footer", "S1-F-PAGEREF", "PAGEREF PROBE_TARGET", "1"),
+                ("header", "S2-H-PAGE", "PAGE", "OLD-S2-H-PAGE"),
+                ("header", "S2-H-NUMPAGES", "NUMPAGES", "OLD-S2-H-NUMPAGES"),
+                ("header", "S2-H-SECTION", "SECTION", "OLD-S2-H-SECTION"),
+                (
+                    "header",
+                    "S2-H-SECTIONPAGES",
+                    "SECTIONPAGES",
+                    "OLD-S2-H-SECTIONPAGES",
+                ),
+                ("header", "S2-H-PAGEREF", "PAGEREF PROBE_TARGET", "1"),
+                ("footer", "S2-F-PAGE", "PAGE", "OLD-S2-F-PAGE"),
+                ("footer", "S2-F-NUMPAGES", "NUMPAGES", "OLD-S2-F-NUMPAGES"),
+                ("footer", "S2-F-SECTION", "SECTION", "OLD-S2-F-SECTION"),
+                (
+                    "footer",
+                    "S2-F-SECTIONPAGES",
+                    "SECTIONPAGES",
+                    "OLD-S2-F-SECTIONPAGES",
+                ),
+                ("footer", "S2-F-PAGEREF", "PAGEREF PROBE_TARGET", "1"),
+                ("footnote", "S2-FN-PAGE", "PAGE", "1"),
+                ("footnote", "S2-FN-NUMPAGES", "NUMPAGES", "1"),
+                ("footnote", "S2-FN-SECTION", "SECTION", "2"),
+                ("footnote", "S2-FN-SECTIONPAGES", "SECTIONPAGES", "1"),
+                ("footnote", "S2-FN-PAGEREF", "PAGEREF PROBE_TARGET", "1"),
+                ("endnote", "S2-EN-PAGE", "PAGE", "1"),
+                ("endnote", "S2-EN-NUMPAGES", "NUMPAGES", "1"),
+                ("endnote", "S2-EN-SECTION", "SECTION", "2"),
+                ("endnote", "S2-EN-SECTIONPAGES", "SECTIONPAGES", "1"),
+                ("endnote", "S2-EN-PAGEREF", "PAGEREF PROBE_TARGET", "1"),
+            ],
+        ),
+        (
+            "notes-both-continuous",
+            "4891a13bcd659256d617e523a6573e7f0f95aa26a2cb101dc4250c0c2e1fe985",
+            2,
+            &[
+                ("body", "S1-PAGE", "PAGE", "1"),
+                ("body", "S1-NUMPAGES", "NUMPAGES", "2"),
+                ("body", "S1-SECTION", "SECTION", "1"),
+                ("body", "S1-SECTIONPAGES", "SECTIONPAGES", "1"),
+                ("body", "S1-PAGEREF", "PAGEREF PROBE_TARGET", "2"),
+                ("body", "S2-P1-PAGE", "PAGE", "2"),
+                ("body", "S2-P1-NUMPAGES", "NUMPAGES", "2"),
+                ("body", "S2-P1-SECTION", "SECTION", "2"),
+                ("body", "S2-P1-SECTIONPAGES", "SECTIONPAGES", "1"),
+                ("body", "S2-P1-PAGEREF", "PAGEREF PROBE_TARGET", "2"),
+                ("header", "S1-H-PAGE", "PAGE", "OLD-S1-H-PAGE"),
+                ("header", "S1-H-NUMPAGES", "NUMPAGES", "OLD-S1-H-NUMPAGES"),
+                ("header", "S1-H-SECTION", "SECTION", "1"),
+                ("header", "S1-H-SECTIONPAGES", "SECTIONPAGES", "1"),
+                ("header", "S1-H-PAGEREF", "PAGEREF PROBE_TARGET", "2"),
+                ("footer", "S1-F-PAGE", "PAGE", "OLD-S1-F-PAGE"),
+                ("footer", "S1-F-NUMPAGES", "NUMPAGES", "OLD-S1-F-NUMPAGES"),
+                ("footer", "S1-F-SECTION", "SECTION", "1"),
+                ("footer", "S1-F-SECTIONPAGES", "SECTIONPAGES", "1"),
+                ("footer", "S1-F-PAGEREF", "PAGEREF PROBE_TARGET", "2"),
+                ("header", "S2-H-PAGE", "PAGE", "OLD-S2-H-PAGE"),
+                ("header", "S2-H-NUMPAGES", "NUMPAGES", "OLD-S2-H-NUMPAGES"),
+                ("header", "S2-H-SECTION", "SECTION", "2"),
+                ("header", "S2-H-SECTIONPAGES", "SECTIONPAGES", "1"),
+                ("header", "S2-H-PAGEREF", "PAGEREF PROBE_TARGET", "2"),
+                ("footer", "S2-F-PAGE", "PAGE", "OLD-S2-F-PAGE"),
+                ("footer", "S2-F-NUMPAGES", "NUMPAGES", "OLD-S2-F-NUMPAGES"),
+                ("footer", "S2-F-SECTION", "SECTION", "2"),
+                ("footer", "S2-F-SECTIONPAGES", "SECTIONPAGES", "1"),
+                ("footer", "S2-F-PAGEREF", "PAGEREF PROBE_TARGET", "2"),
+                ("footnote", "S1-FN-PAGE", "PAGE", "1"),
+                ("footnote", "S1-FN-NUMPAGES", "NUMPAGES", "2"),
+                ("footnote", "S1-FN-SECTION", "SECTION", "1"),
+                ("footnote", "S1-FN-SECTIONPAGES", "SECTIONPAGES", "1"),
+                ("footnote", "S1-FN-PAGEREF", "PAGEREF PROBE_TARGET", "2"),
+                ("footnote", "S2-FN-PAGE", "PAGE", "2"),
+                ("footnote", "S2-FN-NUMPAGES", "NUMPAGES", "2"),
+                ("footnote", "S2-FN-SECTION", "SECTION", "2"),
+                ("footnote", "S2-FN-SECTIONPAGES", "SECTIONPAGES", "1"),
+                ("footnote", "S2-FN-PAGEREF", "PAGEREF PROBE_TARGET", "2"),
+                ("endnote", "S1-EN-PAGE", "PAGE", "1"),
+                ("endnote", "S1-EN-NUMPAGES", "NUMPAGES", "2"),
+                ("endnote", "S1-EN-SECTION", "SECTION", "1"),
+                ("endnote", "S1-EN-SECTIONPAGES", "SECTIONPAGES", "1"),
+                ("endnote", "S1-EN-PAGEREF", "PAGEREF PROBE_TARGET", "2"),
+                ("endnote", "S2-EN-PAGE", "PAGE", "2"),
+                ("endnote", "S2-EN-NUMPAGES", "NUMPAGES", "2"),
+                ("endnote", "S2-EN-SECTION", "SECTION", "2"),
+                ("endnote", "S2-EN-SECTIONPAGES", "SECTIONPAGES", "1"),
+                ("endnote", "S2-EN-PAGEREF", "PAGEREF PROBE_TARGET", "2"),
+            ],
+        ),
+    ];
+    for (case, word_sha, pages, expected) in cases {
+        let mut document = f279_continuous_oracle(case);
+        let input = document.to_bytes().unwrap();
+        let mut document = Document::from_bytes(&input).unwrap();
+        let layout = document.layout_deterministic().unwrap();
+        assert_eq!(layout.layout.pages.len(), *pages, "{case} {word_sha}");
+        if *case == "notes-both-continuous" {
+            assert!(
+                layout
+                    .field_placements()
+                    .iter()
+                    .any(|placement| placement.physical_page == 2
+                        && placement.displayed_page == 1
+                        && placement.section_index == 0
+                        && matches!(
+                            layout.source_node(placement.source.node).unwrap().story,
+                            rdocx_layout::WordStory::Endnote { .. }
+                        ))
+            );
+        }
+        let report = document.update_layout_backed_fields().unwrap();
+        assert_eq!(
+            report.updated_count(),
+            expected
+                .iter()
+                .filter(|(_, _, _, cache)| !cache.starts_with("OLD-"))
+                .count()
+        );
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        let actual = f279_normalized_caches(&reopened);
+        let expected = expected
+            .iter()
+            .map(|(kind, label, instruction, cache)| {
+                (
+                    (kind.to_string(), label.to_string()),
+                    (instruction.to_string(), cache.to_string()),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(actual, expected, "pinned Word {case} {word_sha}");
+    }
+}
+
+#[test]
+fn final_continuous_member_places_section_end_notes_before_the_next_section() {
+    for following_section in [false, true] {
+        let mut document = Document::new();
+        let body = StoryId::body();
+        f279_oracle_append(
+            &mut document,
+            &body,
+            f279_oracle_paragraph("FIRST-REFERENCE", None),
+        );
+        let location = f279_oracle_body_location(&document, "FIRST-REFERENCE");
+        document
+            .create_endnote(&location, "DOCUMENT-END-NOTE-ONE")
+            .unwrap();
+        document.insert_section(document.section_count()).unwrap();
+        f279_oracle_append(
+            &mut document,
+            &body,
+            f279_oracle_paragraph("SECOND-REFERENCE", None),
+        );
+        let location = f279_oracle_body_location(&document, "SECOND-REFERENCE");
+        document
+            .create_endnote(&location, "SECTION-END-NOTE-TWO")
+            .unwrap();
+        for section in 0..2 {
+            document
+                .section_mut(section)
+                .unwrap()
+                .set_break_type(rdocx_oxml::shared::ST_SectionType::Continuous);
+        }
+        document.section_mut(1).unwrap().set_endnote_properties(
+            rdocx_oxml::document::CT_NoteProperties {
+                pos: Some("sectEnd".into()),
+                ..Default::default()
+            },
+        );
+        if following_section {
+            document.insert_section(document.section_count()).unwrap();
+            document
+                .section_mut(2)
+                .unwrap()
+                .set_break_type(rdocx_oxml::shared::ST_SectionType::NextPage);
+            f279_oracle_append(
+                &mut document,
+                &body,
+                f279_oracle_paragraph("THIRD-SECTION-BODY", None),
+            );
+        }
+        let layout = document.layout_deterministic().unwrap();
+        let text = layout
+            .layout
+            .pages
+            .iter()
+            .map(|page| f252_page_text(page))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(text.matches("SECTION-END-NOTE-TWO").count(), 1, "{text}");
+        assert_eq!(text.matches("DOCUMENT-END-NOTE-ONE").count(), 1, "{text}");
+        let section_end = text.find("SECTION-END-NOTE-TWO").unwrap();
+        let document_end = text.find("DOCUMENT-END-NOTE-ONE").unwrap();
+        assert!(section_end < document_end, "{text}");
+        if following_section {
+            let third = text.find("THIRD-SECTION-BODY").unwrap();
+            assert!(section_end < third && third < document_end, "{text}");
+        }
+    }
+}
+
+#[test]
+fn rich_note_tables_wrap_and_continue_without_losing_row_or_cell_sources() {
+    for endnote in [false, true] {
+        let mut document = Document::new();
+        document.add_paragraph("NOTE-REFERENCE");
+        let location = document.paragraph_story_location(0).unwrap().unwrap();
+        let id = if endnote {
+            document.create_endnote(&location, "").unwrap()
+        } else {
+            document.create_footnote(&location, "").unwrap()
+        };
+        let story = if endnote {
+            document.endnote_story(id).unwrap().unwrap()
+        } else {
+            document.footnote_story(id).unwrap().unwrap()
+        };
+        let mut rows = String::new();
+        for row in 0..20 {
+            rows.push_str(&format!(r#"<w:tr><w:trPr><w:trHeight w:val="1440" w:hRule="atLeast"/></w:trPr><w:tc><w:tcPr><w:tcW w:w="2160" w:type="dxa"/></w:tcPr><w:p><w:r><w:t>ROW-{row:02} alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu</w:t></w:r><w:fldSimple w:instr="PAGE"><w:r><w:t>OLD-PAGE-{row:02}</w:t></w:r></w:fldSimple></w:p></w:tc><w:tc><w:tcPr><w:tcW w:w="2160" w:type="dxa"/></w:tcPr><w:p><w:r><w:t>CELL-{row:02} </w:t></w:r><w:fldSimple w:instr="SECTION"><w:r><w:t>OLD-SECTION-{row:02}</w:t></w:r></w:fldSimple></w:p></w:tc></w:tr>"#));
+        }
+        let xml = format!(
+            r#"<w:tbl xmlns:w="{W_NS}"><w:tblPr><w:tblW w:w="4320" w:type="dxa"/></w:tblPr><w:tblGrid><w:gridCol w:w="2160"/><w:gridCol w:w="2160"/></w:tblGrid>{rows}</w:tbl>"#
+        );
+        let mut reader = quick_xml::Reader::from_reader(xml.as_bytes());
+        assert!(matches!(
+            reader.read_event().unwrap(),
+            quick_xml::events::Event::Start(_)
+        ));
+        let table = rdocx_oxml::table::CT_Tbl::from_xml(&mut reader).unwrap();
+        document
+            .insert_content(
+                &ContentLocation::end(story),
+                ContentFragment::table(table).unwrap(),
+            )
+            .unwrap();
+        let layout = document.layout_deterministic().unwrap();
+        assert!(layout.layout.pages.len() >= 3);
+        let fields = layout
+            .field_placements()
+            .iter()
+            .filter_map(|placement| {
+                let path = layout.source_node(placement.source.node)?;
+                matches!(
+                    path.story,
+                    rdocx_layout::WordStory::Footnote { .. }
+                        | rdocx_layout::WordStory::Endnote { .. }
+                )
+                .then_some((placement, path))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(fields.len(), 40);
+        assert!(
+            fields
+                .iter()
+                .all(|(placement, path)| path.children.len() >= 4
+                    && placement.displayed_page == 1
+                    && placement.section_index == 0)
+        );
+        assert!(
+            fields
+                .iter()
+                .map(|(placement, _)| placement.physical_page)
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                >= 3
+        );
+        let text = layout
+            .layout
+            .pages
+            .iter()
+            .map(|page| f252_page_text(page))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for row in 0..20 {
+            assert_eq!(text.matches(&format!("ROW-{row:02}")).count(), 1);
+            assert_eq!(text.matches(&format!("CELL-{row:02}")).count(), 1);
+        }
+        let report = document.update_layout_backed_fields().unwrap();
+        assert_eq!((report.page_fields, report.section_fields), (20, 20));
+        let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        let package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(reopened.to_bytes().unwrap()))
+                .unwrap();
+        let part = if endnote {
+            "/word/endnotes.xml"
+        } else {
+            "/word/footnotes.xml"
+        };
+        let xml = std::str::from_utf8(package.get_part(part).unwrap()).unwrap();
+        assert!(!xml.contains("OLD-PAGE-") && !xml.contains("OLD-SECTION-"));
+        assert_eq!(xml.matches("<w:tr>").count(), 20);
+    }
+}
+
+#[test]
+fn continuous_footnote_compatibility_matches_authenticated_word_minimal_pairs() {
+    // Fresh Word 16.113.2 build 16.113.26092012 minimal pairs update BODY ONLY.
+    // Assert measured pagination and body caches, never manufacture expected
+    // full-update note PAGEREF caches from that partial producer procedure.
+    let cases = [
+        (
+            Some(12),
+            None,
+            false,
+            2,
+            "b711e9fb3ef248a5da78db7e6b16033ed966faa7569ccc91c30d22ccb4c653f9",
+        ),
+        (
+            Some(15),
+            None,
+            false,
+            1,
+            "60c18dd8a0655ad1cb1c5b3f6b65f5d71b515f1d85860887aa398cc478e77420",
+        ),
+        (
+            None,
+            Some(false),
+            false,
+            2,
+            "81ae55ad9b6d8ed6d1185032f26b9b922e263dc379ca8f12f00b5527d4b326d5",
+        ),
+        (
+            None,
+            Some(true),
+            false,
+            2,
+            "9f59ba9fd835a83d409bb38acefacf2a0aa59bd9ec3456b0b26650a561c81b20",
+        ),
+        (
+            None,
+            Some(true),
+            true,
+            2,
+            "1f7a6e62cc41af2e56976123f353cf3edf385465f730bd905e2d2b7d2c6c9d3c",
+        ),
+    ];
+    for (mode, ww8, delayed, pages, evidence) in cases {
+        let mut document = f279_continuous_oracle("notes-both-continuous");
+        if let Some(mode) = mode {
+            document
+                .set_compatibility_setting(
+                    "compatibilityMode",
+                    "http://schemas.microsoft.com/office/word",
+                    &mode.to_string(),
+                )
+                .unwrap();
+        }
+        if let Some(enabled) = ww8 {
+            document
+                .set_compatibility_option(
+                    rdocx_oxml::settings::CompatibilityOption::FootnoteLayoutLikeWW8,
+                    enabled,
+                )
+                .unwrap();
+        }
+        if delayed {
+            let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(
+                document.to_bytes().unwrap(),
+            ))
+            .unwrap();
+            let mut xml =
+                String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec())
+                    .unwrap();
+            let reference = xml.find("<w:footnoteReference w:id=\"3\"").unwrap();
+            let start = xml[..reference].rfind("<w:r>").unwrap();
+            let end = reference + xml[reference..].find("</w:r>").unwrap() + "</w:r>".len();
+            let run = xml[start..end].to_owned();
+            xml.replace_range(start..end, "");
+            let target = xml.find("TARGET =").unwrap();
+            let at = target + xml[target..].find("<w:bookmarkEnd").unwrap();
+            xml.insert_str(at, &run);
+            package.set_part("/word/document.xml", xml.into_bytes());
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            package.write_to(&mut bytes).unwrap();
+            document = Document::from_bytes(bytes.get_ref()).unwrap();
+        }
+        let layout = document.layout_deterministic().unwrap();
+        assert_eq!(layout.layout.pages.len(), pages, "{evidence}");
+        document.update_layout_backed_fields().unwrap();
+        let actual = f279_normalized_caches(&document);
+        for (prefix, section, page, count) in [
+            ("S1", 1, 1, 1),
+            (
+                "S2-P1",
+                2,
+                if pages == 1 || delayed { 1 } else { 2 },
+                if delayed { 2 } else { 1 },
+            ),
+        ] {
+            for (kind, value) in [
+                ("PAGE", page),
+                ("NUMPAGES", pages),
+                ("SECTION", section),
+                ("SECTIONPAGES", count),
+                ("PAGEREF", pages),
+            ] {
+                let (_, cache) = &actual[&("body".into(), format!("{prefix}-{kind}"))];
+                assert_eq!(cache, &value.to_string(), "{evidence} {prefix}-{kind}");
+            }
+        }
+    }
+}
+
+#[test]
+fn nested_cache_wire_forms_paint_complete_display_and_child_properties() {
+    use rdocx_oxml::text::{Field, FieldForm, RunContent};
+    for outer_form in [FieldForm::Simple, FieldForm::Complex] {
+        for child_form in [FieldForm::Simple, FieldForm::Complex] {
+            let mut result = CT_R::new("OLD");
+            result.properties = Some(CT_RPr {
+                italic: Some(true),
+                ..Default::default()
+            });
+            let child = Field::from_raw("UNKNOWN_CHILD", child_form, vec![result]).unwrap();
+            let mut nested = CT_R::new("");
+            nested.content = vec![RunContent::Field(child)];
+            let outer = Field::from_raw(
+                "UNKNOWN",
+                outer_form,
+                vec![CT_R::new("prefix "), nested, CT_R::new(" suffix")],
+            )
+            .unwrap();
+            let mut paragraph = CT_P::new();
+            let mut run = CT_R::new("");
+            run.content = vec![RunContent::Field(outer)];
+            paragraph.runs.push(run);
+            let mut writer = quick_xml::Writer::new(Vec::new());
+            paragraph.to_xml(&mut writer).unwrap();
+            let xml = String::from_utf8(writer.into_inner()).unwrap().replacen(
+                "<w:p>",
+                &format!("<w:p xmlns:w=\"{W_NS}\">"),
+                1,
+            );
+            let mut paragraph = CT_P::from_xml_fragment(xml.as_bytes()).unwrap();
+            for cache in ["OLD", "EDITED"] {
+                if cache == "EDITED" {
+                    let RunContent::Field(outer) = &mut paragraph.runs[0].content[0] else {
+                        panic!("outer")
+                    };
+                    outer.cached_field_mut(0).unwrap().cached_result = cache.into();
+                    outer.refresh_cached_field_projection();
+                }
+                let mut document = Document::new();
+                let body = f279_oracle_current(&document, &StoryId::body());
+                document
+                    .insert_content(
+                        &ContentLocation::end(body),
+                        ContentFragment::paragraph(paragraph.clone()).unwrap(),
+                    )
+                    .unwrap();
+                let layout = document.layout_deterministic().unwrap();
+                assert_eq!(
+                    f252_page_text(&layout.layout.pages[0]),
+                    format!("prefix {cache} suffix"),
+                    "{outer_form:?}/{child_form:?}"
+                );
+                let mut child_italic = false;
+                oxml_layout::walk(&layout.layout.pages[0].elements, &mut |element, _| {
+                    if let oxml_layout::PositionedElement::Text(run) = element
+                        && run.text == cache
+                    {
+                        child_italic = run.italic;
+                    }
+                });
+                assert!(child_italic, "{outer_form:?}/{child_form:?} {cache}");
+            }
+        }
+    }
+}
+
+#[test]
+fn rich_related_story_rows_keep_wrapping_and_exact_cell_clip_geometry() {
+    let mut source = f279_oracle_extended("notes-textbox");
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(source.to_bytes().unwrap()))
+            .unwrap();
+    let keep = r#"<x:keep xmlns:x="urn:f279:rich-clip" x:producer="exact"><x:tbl><x:p>OPAQUE-CLIP</x:p></x:tbl></x:keep>"#;
+    for (part, label, closing) in [
+        ("/word/header1.xml", "H", "</w:hdr>"),
+        ("/word/footer1.xml", "F", "</w:ftr>"),
+        ("/word/footnotes.xml", "FN", "</w:footnote>"),
+        ("/word/endnotes.xml", "EN", "</w:endnote>"),
+        ("/word/document.xml", "BOX", "</w:txbxContent>"),
+    ] {
+        let mut xml = String::from_utf8(package.get_part(part).unwrap().to_vec()).unwrap();
+        let marker = xml.find(&format!("{label}-PAGE = ")).unwrap();
+        let at = marker + xml[marker..].find(closing).unwrap();
+        let paragraph = format!(
+            r#"<w:p><w:r><w:t>CLIPPED-{label} alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau</w:t></w:r><w:fldSimple w:instr="SECTION"><w:r><w:t>OLD-CLIPPED-{label}</w:t></w:r></w:fldSimple></w:p>"#
+        );
+        let table = format!(
+            r#"<w:tbl><w:tblPr><w:tblW w:w="2400" w:type="dxa"/></w:tblPr><w:tblGrid><w:gridCol w:w="2400"/></w:tblGrid><w:tr><w:trPr><w:trHeight w:val="360" w:hRule="exact"/></w:trPr><w:tc><w:tcPr><w:tcW w:w="2400" w:type="dxa"/></w:tcPr>{paragraph}</w:tc></w:tr><w:tr><w:tc><w:tcPr><w:tcW w:w="2400" w:type="dxa"/></w:tcPr><w:p><w:r><w:t>NEXT-ROW-{label}</w:t></w:r></w:p></w:tc></w:tr></w:tbl>{keep}"#
+        );
+        xml.insert_str(at, &table);
+        package.set_part(part, xml.into_bytes());
+    }
+    let relationships = package
+        .get_part_rels("/word/document.xml")
+        .unwrap()
+        .to_xml()
+        .unwrap();
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+    let layout = document.layout_deterministic().unwrap();
+    fn clips(
+        elements: &[oxml_layout::PositionedElement],
+        layout: &rdocx_layout::WordLayoutResult,
+        owners: &mut std::collections::BTreeSet<String>,
+    ) {
+        for element in elements {
+            match element {
+                oxml_layout::PositionedElement::Group(group) => {
+                    if let Some(bounds) = group.clip.as_ref().and_then(|clip| clip.bounds()) {
+                        let mut lines = std::collections::BTreeSet::new();
+                        oxml_layout::walk(&group.children, &mut |child, _| {
+                            if let oxml_layout::PositionedElement::Text(run) = child
+                                && let Some(source) = run.source
+                                && let Some(path) = layout.source_node(source.node)
+                            {
+                                owners.insert(format!("{:?}", path.story));
+                                lines.insert((run.origin.y * 1000.0).round() as i64);
+                            }
+                        });
+                        assert!((bounds.height - 18.0).abs() < 0.01, "{bounds:?}");
+                        assert!((bounds.width - 120.0).abs() < 0.01, "{bounds:?}");
+                        assert!(
+                            lines.len() > 1,
+                            "long paragraph wraps behind the exact row clip"
+                        );
+                    }
+                    clips(&group.children, layout, owners);
+                }
+                oxml_layout::PositionedElement::MarkedContent { children, .. } => {
+                    clips(children, layout, owners)
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut owners = std::collections::BTreeSet::new();
+    for page in &layout.layout.pages {
+        clips(&page.elements, &layout, &mut owners);
+    }
+    for kind in ["Header", "Footer", "Footnote", "Endnote", "TextBox"] {
+        assert!(
+            owners.iter().any(|owner| owner.starts_with(kind)),
+            "{kind}: {owners:?}"
+        );
+    }
+    document.update_layout_backed_fields().unwrap();
+    let saved =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    assert_eq!(
+        saved
+            .get_part_rels("/word/document.xml")
+            .unwrap()
+            .to_xml()
+            .unwrap(),
+        relationships
+    );
+    for part in [
+        "/word/document.xml",
+        "/word/header1.xml",
+        "/word/footer1.xml",
+        "/word/footnotes.xml",
+        "/word/endnotes.xml",
+    ] {
+        let xml = std::str::from_utf8(saved.get_part(part).unwrap()).unwrap();
+        assert!(xml.contains(keep), "{part} retains producer source");
+        assert!(!xml.contains("OLD-CLIPPED-"), "{part}");
+        assert!(xml.contains("w:hRule=\"exact\""), "{part}");
+    }
+}
+
+#[test]
+fn identical_field_sources_in_distinct_text_box_rows_keep_paragraph_identity() {
+    let mut source = f279_oracle_extended("notes-textbox");
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(source.to_bytes().unwrap()))
+            .unwrap();
+    let mut xml =
+        String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let marker = xml.find("BOX-PAGE = ").unwrap();
+    let start = xml[..marker].rfind("<w:p>").unwrap();
+    let end = marker + xml[marker..].find("</w:p>").unwrap() + "</w:p>".len();
+    let paragraph = &xml[start..end];
+    let row = format!("<w:tr><w:tc>{paragraph}</w:tc></w:tr>");
+    let table = format!(
+        "<w:tbl><w:tblPr><w:tblW w:w=\"7200\" w:type=\"dxa\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"7200\"/></w:tblGrid>{row}{row}{row}</w:tbl>"
+    );
+    xml.replace_range(start..end, &table);
+    package.set_part("/word/document.xml", xml.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+    let report = document.update_layout_backed_fields().unwrap();
+    assert_eq!(report.page_fields, 7);
+    let xml = document_xml(&mut document);
+    assert!(!xml.contains("OLD-BOX-PAGE"));
+    assert_eq!(xml.matches("BOX-PAGE = ").count(), 3);
+}
+
+#[test]
+fn text_box_physical_owners_survive_revisions_and_opaque_predecessors() {
+    for kind in [
+        "ins",
+        "moveTo",
+        "control-in-ins",
+        "control-in-moveTo",
+        "del",
+        "moveFrom",
+        "opaque-body",
+        "opaque-control",
+    ] {
+        let mut source = f279_oracle_extended("notes-textbox");
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(source.to_bytes().unwrap()))
+                .unwrap();
+        let mut xml =
+            String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+        let mc_start = xml.find("<mc:AlternateContent").unwrap();
+        let mc_end = mc_start
+            + xml[mc_start..].find("</mc:AlternateContent>").unwrap()
+            + "</mc:AlternateContent>".len();
+        let run_start = xml[..mc_start].rfind("<w:r>").unwrap();
+        let run_end = mc_end + xml[mc_end..].find("</w:r>").unwrap() + "</w:r>".len();
+        let run = xml[run_start..run_end].to_owned();
+        let hidden = matches!(kind, "del" | "moveFrom" | "opaque-body" | "opaque-control");
+        if kind == "opaque-body" {
+            let body_start = xml.find("<w:body>").unwrap() + "<w:body>".len();
+            xml.insert_str(
+                body_start,
+                &format!("<x:opaque xmlns:x=\"urn:f279:opaque\"><w:p>{run}</w:p></x:opaque>"),
+            );
+        } else {
+            let replacement = match kind {
+                "opaque-control" => format!(
+                    "<w:sdt><w:sdtPr/><w:sdtContent><x:opaque xmlns:x=\"urn:f279:opaque\">{run}</x:opaque></w:sdtContent></w:sdt>{run}"
+                ),
+                "control-in-ins" | "control-in-moveTo" => {
+                    let tag = kind.strip_prefix("control-in-").unwrap();
+                    format!(
+                        "<w:{tag} w:id=\"987\" w:author=\"probe\"><w:sdt><w:sdtPr/><w:sdtContent>{run}</w:sdtContent></w:sdt></w:{tag}>"
+                    )
+                }
+                _ => format!(
+                    "<w:{kind} w:id=\"987\" w:author=\"probe\">{run}</w:{kind}>{}",
+                    if hidden { run.as_str() } else { "" }
+                ),
+            };
+            xml.replace_range(run_start..run_end, &replacement);
+        }
+        package.set_part("/word/document.xml", xml.into_bytes());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+        let before = document.to_bytes().unwrap();
+        let opaque = kind.starts_with("opaque-");
+        let layout = document.layout_deterministic().unwrap();
+        let placed = layout
+            .field_placements()
+            .iter()
+            .filter_map(|placement| {
+                let path = layout.source_node(placement.source.node)?;
+                matches!(path.story, rdocx_layout::WordStory::TextBox { .. }).then(|| {
+                    layout
+                        .text_box_owner_index(&path.story)
+                        .unwrap_or_else(|| panic!("{kind}: unbound {:?}", path.story))
+                })
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            placed,
+            [usize::from(hidden && !opaque)].into_iter().collect(),
+            "{kind}: visible physical owner must survive accepted projection"
+        );
+        assert_eq!(
+            document.to_bytes().unwrap(),
+            before,
+            "{kind}: layout preserves producer bytes"
+        );
+        let report = document.update_layout_backed_fields().unwrap();
+        assert_eq!(
+            report.page_fields, 5,
+            "{kind}: visible box updates exactly once"
+        );
+        let owners = document
+            .stories()
+            .unwrap()
+            .into_iter()
+            .filter(|story| story.kind() == StoryKind::TextBox)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            owners.len(),
+            if hidden && !opaque { 2 } else { 1 },
+            "{kind}"
+        );
+        for (index, owner) in owners.iter().enumerate() {
+            let text = document
+                .story_items(owner)
+                .unwrap()
+                .into_iter()
+                .filter_map(|item| item.text().unwrap())
+                .collect::<String>();
+            assert_eq!(
+                text.contains("OLD-BOX-PAGE"),
+                hidden && !opaque && index == 0,
+                "{kind}: {index}: {text}"
+            );
+        }
+        if opaque {
+            let saved = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(
+                document.to_bytes().unwrap(),
+            ))
+            .unwrap();
+            let saved_xml =
+                std::str::from_utf8(saved.get_part("/word/document.xml").unwrap()).unwrap();
+            assert_eq!(
+                saved_xml.matches("OLD-BOX-PAGE</w:t>").count(),
+                1,
+                "{kind}: opaque identical cache is retained"
+            );
+            assert!(saved_xml.contains("urn:f279:opaque"));
+        }
+        if hidden && !opaque {
+            assert!(
+                report
+                    .diagnostics
+                    .iter()
+                    .any(|value| value.contains("source did not reach pagination")),
+                "{kind}: unreachable original retained"
+            );
+        }
+    }
+}
+
+#[test]
+fn direct_and_alternate_drawings_in_one_run_keep_physical_source_order() {
+    let mut source = f279_oracle_extended("notes-textbox");
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(source.to_bytes().unwrap()))
+            .unwrap();
+    let mut xml =
+        String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let mc_start = xml.find("<mc:AlternateContent").unwrap();
+    let mc_end = mc_start
+        + xml[mc_start..].find("</mc:AlternateContent>").unwrap()
+        + "</mc:AlternateContent>".len();
+    let anchor_start = mc_start + xml[mc_start..mc_end].find("<wp:anchor").unwrap();
+    let anchor_end = anchor_start
+        + xml[anchor_start..mc_end].find("</wp:anchor>").unwrap()
+        + "</wp:anchor>".len();
+    let anchor = xml[anchor_start..anchor_end].to_owned();
+    xml.insert_str(mc_end, &format!(r#"<w:drawing xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">{anchor}</w:drawing>"#));
+    // Keep the drawing namespace scope on the document root, whose namespace
+    // inventory survives the existing typed w:drawing serializer.
+    let root_start = xml.find("<w:document").unwrap();
+    let root_end = root_start + xml[root_start..].find('>').unwrap();
+    let namespaces = [
+        ("a", "http://schemas.openxmlformats.org/drawingml/2006/main"),
+        (
+            "wps",
+            "http://schemas.microsoft.com/office/word/2010/wordprocessingShape",
+        ),
+    ];
+    for (prefix, uri) in namespaces {
+        if !xml[..root_end].contains(&format!("xmlns:{prefix}=")) {
+            xml.insert_str(root_end, &format!(" xmlns:{prefix}=\"{uri}\""));
+        }
+    }
+    package.set_part("/word/document.xml", xml.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+    let before = document.to_bytes().unwrap();
+    let layout = document.layout_deterministic().unwrap();
+    let owners = layout
+        .field_placements()
+        .iter()
+        .filter_map(|placement| {
+            let path = layout.source_node(placement.source.node)?;
+            let rdocx_layout::WordStory::TextBox { owner_children, .. } = &path.story else {
+                return None;
+            };
+            Some((
+                *owner_children.last().unwrap(),
+                layout
+                    .text_box_owner_index(&path.story)
+                    .unwrap_or_else(|| panic!("unbound {:?}", path.story)),
+            ))
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        owners,
+        [(0, 1), (1, 0)].into_iter().collect(),
+        "logical direct-first drawing order must not overwrite actual MC-first physical ownership"
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let report = document.update_layout_backed_fields().unwrap();
+    assert_eq!(report.page_fields, 6);
+    let saved =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let saved_xml = std::str::from_utf8(saved.get_part("/word/document.xml").unwrap()).unwrap();
+    assert_eq!(saved_xml.matches("<mc:AlternateContent").count(), 1);
+    assert!(!saved_xml.contains("OLD-BOX-PAGE"));
+}
+
+#[test]
+fn aliased_nested_cache_preserves_inherited_foreign_word_prefix() {
+    for owner in ["x:fldSimple", "fldSimple"] {
+        let mut seed = Document::new();
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+                .unwrap();
+        let opaque =
+            r#"<w:fldSimple w:instr="PAGE"><w:r><w:t>FOREIGN-CACHE</w:t></w:r></w:fldSimple>"#;
+        let xml = format!(
+            r#"<x:document xmlns:x="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><x:body><x:p><{owner} xmlns="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w="urn:f279:foreign" x:instr="UNKNOWN" x:dirty="1"><x:r><x:t>prefix</x:t></x:r><x:fldSimple x:instr="PAGE"><x:r><x:t w:keep="opaque">GENUINE-CACHE</x:t></x:r></x:fldSimple>{opaque}</{owner}></x:p><x:sectPr/></x:body></x:document>"#
+        );
+        package.set_part("/word/document.xml", xml.into_bytes());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+        let layout = document.layout_deterministic().unwrap();
+        assert_eq!(
+            layout.field_placements().len(),
+            2,
+            "foreign field is not registered"
+        );
+        assert!(!f252_page_text(&layout.layout.pages[0]).contains("FOREIGN-CACHE"));
+        let report = document.update_layout_backed_fields().unwrap();
+        assert_eq!(report.updated_count(), 1);
+        let saved = document.to_bytes().unwrap();
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+        let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        assert!(xml.contains(opaque), "{xml}");
+        assert!(!xml.contains("GENUINE-CACHE"), "{xml}");
+        assert!(xml.contains("<x:t w:keep=\"opaque\">1</x:t>"), "{xml}");
+        let reopened = Document::from_bytes(&saved).unwrap();
+        assert_eq!(
+            reopened
+                .layout_deterministic()
+                .unwrap()
+                .field_placements()
+                .len(),
+            2,
+            "{xml}"
+        );
+    }
+}
+
+#[test]
+fn middle_locked_cached_owner_protects_leaf_display_and_flags() {
+    use rdocx_oxml::text::{Field, FieldForm, RunContent};
+    for form in [FieldForm::Simple, FieldForm::Complex] {
+        for locked in [false, true] {
+            let leaf = Field::from_raw("PAGE", form, vec![CT_R::new("LEAF-SENTINEL")]).unwrap();
+            let wrap = |field| {
+                let mut run = CT_R::new("");
+                run.content = vec![RunContent::Field(field)];
+                vec![run]
+            };
+            let mut middle = Field::from_raw("UNKNOWN", form, wrap(leaf)).unwrap();
+            middle.set_locked(Some(locked));
+            middle.dirty = Some(true);
+            let outer = Field::from_raw("UNKNOWN", form, wrap(middle)).unwrap();
+            let mut document = Document::new();
+            document
+                .add_paragraph("")
+                .add_run("")
+                .add_field_value(outer)
+                .unwrap();
+            let original = document.to_bytes().unwrap();
+            let mut document = Document::from_bytes(&original).unwrap();
+            let text = f252_page_text(&document.layout_deterministic().unwrap().layout.pages[0]);
+            assert_eq!(text.contains("LEAF-SENTINEL"), locked, "{form:?}: {text}");
+            let report = document.update_layout_backed_fields().unwrap();
+            assert_eq!(report.updated_count(), usize::from(!locked));
+            let saved = document.to_bytes().unwrap();
+            if locked {
+                assert_eq!(saved, original);
+            }
+            let reopened = Document::from_bytes(&saved).unwrap();
+            let text = f252_page_text(&reopened.layout_deterministic().unwrap().layout.pages[0]);
+            assert_eq!(text.contains("LEAF-SENTINEL"), locked, "{form:?}: {text}");
+            let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+            let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+            assert!(
+                xml.contains(if locked {
+                    "w:fldLock=\"1\""
+                } else {
+                    "w:fldLock=\"0\""
+                }),
+                "{xml}"
+            );
+            assert!(xml.contains("w:dirty=\"1\""), "{xml}");
+        }
+    }
+}
+
+#[test]
+fn control_owned_section_furniture_is_active_and_inherited() {
+    let mut document = Document::new();
+    document
+        .section_mut(0)
+        .unwrap()
+        .set_different_first_page(true);
+    for (kind, label) in [
+        (HeaderFooterKind::Header, "CONTROL-HEADER"),
+        (HeaderFooterKind::Footer, "CONTROL-FOOTER"),
+    ] {
+        let story = document
+            .create_section_story(0, kind, HdrFtrType::First)
+            .unwrap();
+        f279_oracle_append(
+            &mut document,
+            &story,
+            f279_oracle_paragraph(label, Some("SECTION")),
+        );
+    }
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let xml = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let start = xml.find("<w:sectPr").unwrap();
+    let end = start + xml[start..].find("</w:sectPr>").unwrap() + "</w:sectPr>".len();
+    let section = &xml[start..end];
+    let body_start = xml.find("<w:body>").unwrap() + "<w:body>".len();
+    let body_end = xml.find("</w:body>").unwrap();
+    let replacement = format!(
+        r#"<w:sdt><w:sdtPr/><w:sdtContent><w:p><w:pPr>{section}</w:pPr><w:r><w:t>CONTROL-BODY</w:t></w:r></w:p></w:sdtContent></w:sdt><w:p><w:r><w:t>INHERITED-BODY</w:t></w:r></w:p><w:sectPr><w:type w:val="nextPage"/><w:titlePg/></w:sectPr>"#
+    );
+    let mut xml = xml;
+    xml.replace_range(body_start..body_end, &replacement);
+    package.set_part("/word/document.xml", xml.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+    let layout = document.layout_deterministic().unwrap();
+    assert_eq!(layout.layout.pages.len(), 2);
+    for (index, page) in layout.layout.pages.iter().enumerate() {
+        let text = f252_page_text(page);
+        assert!(text.contains("CONTROL-HEADER"), "page {index}: {text}");
+        assert!(text.contains("CONTROL-FOOTER"), "page {index}: {text}");
+        assert!(!text.contains("OLD-CONTROL"), "page {index}: {text}");
+        assert!(
+            text.contains(&format!("CONTROL-HEADER = {}", index + 1)),
+            "page {index}: {text}"
+        );
+        assert!(
+            text.contains(&format!("CONTROL-FOOTER = {}", index + 1)),
+            "page {index}: {text}"
+        );
+    }
+    assert_eq!(layout.field_placements().len(), 4);
+    let report = document.update_layout_backed_fields().unwrap();
+    assert_eq!(report.updated_count(), 2);
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let layout = reopened.layout_deterministic().unwrap();
+    for page in &layout.layout.pages {
+        let text = f252_page_text(page);
+        assert!(text.contains("CONTROL-HEADER") && text.contains("CONTROL-FOOTER"));
     }
 }

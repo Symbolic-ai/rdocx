@@ -412,6 +412,8 @@ pub struct Field {
     pub legacy_form: Option<LegacyFormFieldData>,
     legacy_form_parse_error: bool,
     nested_order: Vec<NestedFieldPosition>,
+    cached_fields: Vec<(std::ops::Range<usize>, Field)>,
+    simple_cached_runs: Option<Vec<CT_R>>,
     source: FieldSource,
     /// The physical run this field shares with text outside it, if any.
     span: Option<Box<FieldRunSpan>>,
@@ -485,6 +487,8 @@ impl Field {
             legacy_form: None,
             legacy_form_parse_error: false,
             nested_order: Vec::new(),
+            cached_fields: Vec::new(),
+            simple_cached_runs: None,
             span: None,
         }
     }
@@ -634,6 +638,8 @@ impl Field {
             legacy_form: legacy_form.clone(),
             legacy_form_parse_error,
             nested_order: Vec::new(),
+            cached_fields: Vec::new(),
+            simple_cached_runs: None,
             span: None,
             source: FieldSource::Parsed {
                 source_id,
@@ -660,6 +666,111 @@ impl Field {
             return Vec::new();
         }
         self.nested_fields_from_instruction(&self.instruction, structured_unchanged)
+    }
+
+    /// Direct nested fields in the ordered cached result, without flattening it.
+    #[doc(hidden)]
+    pub fn cached_fields_in_source_order(&self) -> Vec<&Field> {
+        if let Some(runs) = &self.simple_cached_runs {
+            return runs
+                .iter()
+                .flat_map(|run| &run.content)
+                .filter_map(|content| match content {
+                    RunContent::Field(field) => Some(field),
+                    _ => None,
+                })
+                .collect();
+        }
+        match &self.source {
+            FieldSource::New {
+                cached_runs: Some(runs),
+                ..
+            } => runs
+                .iter()
+                .flat_map(|run| &run.content)
+                .filter_map(|content| match content {
+                    RunContent::Field(field) => Some(field),
+                    _ => None,
+                })
+                .collect(),
+            _ => self.cached_fields.iter().map(|(_, field)| field).collect(),
+        }
+    }
+
+    /// Direct nested operands followed by nested cached-result fields.
+    #[doc(hidden)]
+    pub fn all_nested_fields_in_source_order(&self) -> Vec<&Field> {
+        let mut fields = self.nested_fields_in_source_order();
+        fields.extend(self.cached_fields_in_source_order());
+        fields
+    }
+
+    /// Mutate a direct cached-result field by its physical encounter index.
+    /// Preserve a parsed child's identity. Checked serialization rejects a new
+    /// replacement without the original simple-cache source span.
+    #[doc(hidden)]
+    pub fn cached_field_mut(&mut self, index: usize) -> Option<&mut Field> {
+        if let Some(runs) = &mut self.simple_cached_runs {
+            return runs
+                .iter_mut()
+                .flat_map(|run| &mut run.content)
+                .filter_map(|content| match content {
+                    RunContent::Field(field) => Some(field),
+                    _ => None,
+                })
+                .nth(index);
+        }
+        match &mut self.source {
+            FieldSource::New {
+                cached_runs: Some(runs),
+                ..
+            } => runs
+                .iter_mut()
+                .flat_map(|run| &mut run.content)
+                .filter_map(|content| match content {
+                    RunContent::Field(field) => Some(field),
+                    _ => None,
+                })
+                .nth(index),
+            _ => self.cached_fields.get_mut(index).map(|(_, field)| field),
+        }
+    }
+
+    /// Refresh the display projection after nested cached fields were edited.
+    #[doc(hidden)]
+    pub fn refresh_cached_field_projection(&mut self) {
+        if let Some(value) = self.nested_cached_projection() {
+            self.cached_result = value;
+        }
+    }
+
+    fn nested_cached_projection(&self) -> Option<String> {
+        if let Some(runs) = &self.simple_cached_runs {
+            return Some(runs.iter().map(cached_run_display).collect());
+        }
+        match &self.source {
+            FieldSource::New {
+                cached_runs: Some(runs),
+                ..
+            } => Some(runs.iter().map(cached_run_display).collect()),
+            FieldSource::Parsed {
+                original_cached_result,
+                ..
+            } if !self.cached_fields.is_empty() => {
+                let mut value = original_cached_result.clone();
+                for (range, field) in self.cached_fields.iter().rev() {
+                    if !value.is_char_boundary(range.start)
+                        || !value.is_char_boundary(range.end)
+                        || range.end > value.len()
+                    {
+                        return None;
+                    }
+                    value.replace_range(range.clone(), &field.cached_result);
+                }
+                Some(value)
+            }
+            _ => None,
+        }
     }
 
     /// Reject a malformed legacy-form owner retained by this field.
@@ -824,6 +935,10 @@ impl Field {
                     && self.dirty == *original_dirty
                     && self.locked == *original_locked
                     && self.legacy_form == *original_legacy_form
+                    && self
+                        .cached_fields_in_source_order()
+                        .iter()
+                        .all(|field| field.is_unchanged())
             }
         }
     }
@@ -878,6 +993,15 @@ impl Field {
     /// Return the stored display split by its original result-run formatting.
     #[doc(hidden)]
     pub fn cached_display_segments(&self) -> Vec<(&str, Option<&CT_RPr>)> {
+        self.cached_display_field_segments()
+            .into_iter()
+            .map(|(text, properties, _)| (text, properties))
+            .collect()
+    }
+
+    /// Return the stored display split by its original result-run formatting.
+    #[doc(hidden)]
+    pub fn cached_display_field_segments(&self) -> Vec<(&str, Option<&CT_RPr>, &Field)> {
         let (original_cached_result, cached_segments) = match &self.source {
             FieldSource::Parsed {
                 original_cached_result,
@@ -890,11 +1014,56 @@ impl Field {
                 ..
             } => (original_cached_result, cached_segments),
         };
+        if self.nested_cached_projection().as_deref() == Some(self.cached_result.as_str()) {
+            let runs = self.simple_cached_runs.as_deref().or(match &self.source {
+                FieldSource::New {
+                    cached_runs: Some(runs),
+                    ..
+                } => Some(runs.as_slice()),
+                _ => None,
+            });
+            if let Some(runs) = runs {
+                return runs
+                    .iter()
+                    .flat_map(|run| {
+                        run.content.iter().flat_map(|content| match content {
+                            RunContent::Field(child) => child.cached_display_field_segments(),
+                            RunContent::Break(BreakType::Page) => {
+                                vec![("\u{000c}", run.properties.as_ref(), self)]
+                            }
+                            RunContent::Break(BreakType::Column) => {
+                                vec![("\u{000b}", run.properties.as_ref(), self)]
+                            }
+                            _ => vec![(CT_R::content_text(content), run.properties.as_ref(), self)],
+                        })
+                    })
+                    .collect();
+            }
+            if !self.cached_fields.is_empty() {
+                let mut segments = Vec::new();
+                let mut start = 0;
+                for (range, child) in &self.cached_fields {
+                    segments.extend(cached_display_range(
+                        cached_segments,
+                        start..range.start,
+                        self,
+                    ));
+                    segments.extend(child.cached_display_field_segments());
+                    start = range.end;
+                }
+                segments.extend(cached_display_range(
+                    cached_segments,
+                    start..original_cached_result.len(),
+                    self,
+                ));
+                return segments;
+            }
+        }
         if !cached_segments.is_empty() {
             if self.cached_result == *original_cached_result {
                 return cached_segments
                     .iter()
-                    .map(|segment| (segment.text.as_str(), segment.properties.as_ref()))
+                    .map(|segment| (segment.text.as_str(), segment.properties.as_ref(), self))
                     .collect();
             }
             return vec![(
@@ -902,9 +1071,27 @@ impl Field {
                 cached_segments
                     .first()
                     .and_then(|segment| segment.properties.as_ref()),
+                self,
             )];
         }
-        vec![(self.cached_result.as_str(), None)]
+        vec![(self.cached_result.as_str(), None, self)]
+    }
+
+    /// Whether this cached display owner is protected by any enclosing field.
+    /// An owner outside this field's cached tree is conservatively locked.
+    #[doc(hidden)]
+    pub fn cached_display_owner_is_locked(&self, owner: &Field) -> bool {
+        fn find(field: &Field, owner: &Field, inherited: bool) -> Option<bool> {
+            let locked = inherited || field.locked() == Some(true);
+            if std::ptr::eq(field, owner) {
+                return Some(locked);
+            }
+            field
+                .cached_fields_in_source_order()
+                .into_iter()
+                .find_map(|child| find(child, owner, locked))
+        }
+        find(self, owner, false).unwrap_or(true)
     }
 
     /// Return the parsed source fragment and its cache-aware replacement.
@@ -1099,6 +1286,27 @@ fn validate_raw_field_instruction(value: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn cached_display_range<'a>(
+    segments: &'a [CachedDisplaySegment],
+    range: std::ops::Range<usize>,
+    owner: &'a Field,
+) -> Vec<(&'a str, Option<&'a CT_RPr>, &'a Field)> {
+    let mut offset = 0;
+    let mut result = Vec::new();
+    for segment in segments {
+        let end = offset + segment.text.len();
+        let start = range.start.max(offset);
+        let stop = range.end.min(end);
+        if start < stop
+            && let Some(text) = segment.text.get(start - offset..stop - offset)
+        {
+            result.push((text, segment.properties.as_ref(), owner));
+        }
+        offset = end;
+    }
+    result
 }
 
 fn cached_run_display(run: &CT_R) -> String {
@@ -1885,7 +2093,9 @@ impl CT_R {
         encoded & RAW_ROOT_ATTRIBUTES_FLAG != 0
     }
 
-    fn raw_child_has_alternate_content_drawing(encoded: usize) -> bool {
+    /// Report whether this raw slot has one selected drawing projection.
+    #[doc(hidden)]
+    pub fn raw_child_has_alternate_content_drawing(encoded: usize) -> bool {
         encoded & RAW_ALTERNATE_CONTENT_DRAWING_FLAG != 0
     }
 
@@ -2627,11 +2837,14 @@ fn parse_simple_field(raw: &[u8], word_prefixes: &[String]) -> Result<Option<Fie
         buffer.clear();
     };
 
+    let result_start = reader.buffer_position() as usize;
+    let mut result_end = result_start;
     let mut cached_result = String::new();
     let mut cached_segments = Vec::new();
     let mut result_run_index = 0usize;
     loop {
         buffer.clear();
+        let before = reader.buffer_position() as usize;
         match reader.read_event_into(&mut buffer)? {
             Event::Start(start) => {
                 let child_prefixes = word_prefixes_at(&start, &prefixes)?;
@@ -2651,7 +2864,10 @@ fn parse_simple_field(raw: &[u8], word_prefixes: &[String]) -> Result<Option<Fie
                     reader.read_to_end_into(start.name(), &mut Vec::new())?;
                 }
             }
-            Event::End(end) if matches_local_name(end.name().as_ref(), b"fldSimple") => break,
+            Event::End(end) if matches_local_name(end.name().as_ref(), b"fldSimple") => {
+                result_end = before;
+                break;
+            }
             Event::Eof => break,
             _ => {}
         }
@@ -2661,15 +2877,64 @@ fn parse_simple_field(raw: &[u8], word_prefixes: &[String]) -> Result<Option<Fie
     if instruction.name.is_empty() {
         return Ok(None);
     }
-    Ok(Some(Field::parsed(
+    let mut field = Field::parsed(
         instruction,
         cached_result,
         cached_segments,
         dirty,
         FieldForm::Simple,
         raw.to_vec(),
-        prefixes,
-    )))
+        prefixes.clone(),
+    );
+    let result_xml = &raw[result_start..result_end];
+    // The typed pass still decides namespace and structure. This cheap absence
+    // test avoids reparsing ordinary text-only caches.
+    let possible_nested = result_xml.windows(7).any(|bytes| bytes == b"fldChar")
+        || result_xml.windows(9).any(|bytes| bytes == b"fldSimple");
+    if possible_nested {
+        // Reuse a Word prefix from the effective producer scope. Introducing
+        // a canonical w declaration here would reclassify foreign w children.
+        let prefix = prefixes
+            .iter()
+            .find(|prefix| !prefix.starts_with('\0'))
+            .ok_or_else(|| OxmlError::InvalidValue("simple field has no Word prefix".to_owned()))?;
+        let name = if prefix.is_empty() {
+            "p".to_owned()
+        } else {
+            format!("{prefix}:p")
+        };
+        let mut cache_xml = format!("<{name}>").into_bytes();
+        cache_xml.extend_from_slice(&raw[result_start..result_end]);
+        cache_xml.extend_from_slice(format!("</{name}>").as_bytes());
+        let mut cache_reader = Reader::from_reader(cache_xml.as_slice());
+        let mut cache_buffer = Vec::new();
+        let Event::Start(cache_root) = cache_reader.read_event_into(&mut cache_buffer)? else {
+            unreachable!("synthetic cache root");
+        };
+        let cache_prefixes = word_prefixes_at(&cache_root, &prefixes)?;
+        let paragraph = CT_P::from_xml_with_prefixes_and_root(
+            &mut cache_reader,
+            &cache_prefixes,
+            Some(&cache_root),
+        )?;
+        let runs = paragraph.runs().into_iter().cloned().collect::<Vec<_>>();
+        if runs
+            .iter()
+            .flat_map(|run| &run.content)
+            .any(|content| matches!(content, RunContent::Field(_)))
+        {
+            field.cached_result = runs.iter().map(cached_run_display).collect();
+            if let FieldSource::Parsed {
+                original_cached_result,
+                ..
+            } = &mut field.source
+            {
+                *original_cached_result = field.cached_result.clone();
+            }
+            field.simple_cached_runs = Some(runs);
+        }
+    }
+    Ok(Some(field))
 }
 
 /// Whether a preserved simple field is admitted by the complete typed parser.
@@ -3659,6 +3924,7 @@ struct ComplexFieldBuilder {
     instruction: Vec<InstructionPart>,
     cached_result: String,
     cached_segments: Vec<CachedDisplaySegment>,
+    cached_fields: Vec<(std::ops::Range<usize>, Field)>,
     valid: bool,
 }
 
@@ -3697,6 +3963,38 @@ fn project_complex_fields(projection: ComplexFieldProjection<'_>) -> Result<()> 
         let Some(raw) = run_sources[run_index].as_deref() else {
             continue;
         };
+        if let Some(child) = runs[run_index]
+            .content
+            .iter()
+            .find_map(|content| match content {
+                RunContent::Field(field) if field.form() == FieldForm::Simple => Some(field),
+                _ => None,
+            })
+        {
+            for parent in &mut stack {
+                if parent.separate_run.is_some() {
+                    parent.cached_result.push_str(&child.cached_result);
+                    for (text, properties) in child.cached_display_segments() {
+                        push_cached_display_segment(
+                            &mut parent.cached_segments,
+                            run_index,
+                            text,
+                            properties,
+                        );
+                    }
+                }
+            }
+            if let Some(parent) = stack.last_mut()
+                && parent.separate_run.is_some()
+            {
+                let end = parent.cached_result.len();
+                parent
+                    .cached_fields
+                    .push((end - child.cached_result.len()..end, child.clone()));
+            }
+            continue;
+        }
+
         for event in complex_field_events(raw, word_prefixes)? {
             match event {
                 ComplexFieldEvent::Begin(dirty) => stack.push(ComplexFieldBuilder {
@@ -3706,6 +4004,7 @@ fn project_complex_fields(projection: ComplexFieldProjection<'_>) -> Result<()> 
                     instruction: Vec::new(),
                     cached_result: String::new(),
                     cached_segments: Vec::new(),
+                    cached_fields: Vec::new(),
                     valid: true,
                 }),
                 ComplexFieldEvent::Instruction(text) => {
@@ -3793,6 +4092,7 @@ fn project_complex_fields(projection: ComplexFieldProjection<'_>) -> Result<()> 
                         word_prefixes.to_vec(),
                     );
                     parsed.nested_order = nested_order;
+                    parsed.cached_fields = field.cached_fields;
                     let valid = field.valid
                         && !parsed.instruction.name.is_empty()
                         && run_sources[field.start_run..=run_index]
@@ -3803,6 +4103,10 @@ fn project_complex_fields(projection: ComplexFieldProjection<'_>) -> Result<()> 
                             parent.valid = false;
                         } else if parent.separate_run.is_none() {
                             parent.instruction.push(InstructionPart::Nested(parsed));
+                        } else {
+                            let end = parent.cached_result.len();
+                            let start = end.saturating_sub(parsed.cached_result.len());
+                            parent.cached_fields.push((start..end, parsed));
                         }
                     } else if valid {
                         completed.push((field.start_run, run_index, parsed, None));
@@ -7034,7 +7338,7 @@ impl CT_P {
                         let raw = capture_element(reader, e)?;
                         if let Some(field) = parse_simple_field(&raw, &prefixes)? {
                             runs.push(field_run(field, None));
-                            run_sources.push(None);
+                            run_sources.push(Some(raw));
                             projected_run_count += 1;
                             tracked_run_count += 1;
                         } else {
@@ -7918,7 +8222,8 @@ fn write_field_with_result_properties<W: std::io::Write>(
         && instruction_source_identity_eq(&field.instruction, original_instruction)
         && field.instruction.raw == original_instruction.raw
     {
-        let cached_changed = field.cached_result != *original_cached_result;
+        let cached_changed = field.cached_result != *original_cached_result
+            && field.nested_cached_projection().as_ref() != Some(&field.cached_result);
         let legacy_form_changed = field.legacy_form != *original_legacy_form;
         let updated = match form {
             FieldForm::Simple => {
@@ -8342,6 +8647,40 @@ fn update_nested_field_sources(
         edits.push((span.start, span.end, replacement));
     }
 
+    let complex_children = field
+        .cached_fields
+        .iter()
+        .filter(|(_, child)| child.form() == FieldForm::Complex)
+        .collect::<Vec<_>>();
+    let simple_children = field
+        .cached_fields
+        .iter()
+        .filter(|(_, child)| child.form() == FieldForm::Simple)
+        .collect::<Vec<_>>();
+    if scan.result_nested.len() != complex_children.len()
+        || scan.result_simple.len() != simple_children.len()
+    {
+        return Err(OxmlError::MissingElement(
+            "nested cached field spans in owning complex field".to_owned(),
+        ));
+    }
+    for ((_, nested), span) in complex_children.into_iter().zip(scan.result_nested) {
+        if nested.is_unchanged() {
+            continue;
+        }
+        let replacement =
+            rewrite_isolated_nested_field(nested, raw, &span, &scan.runs, word_prefixes)?;
+        edits.push((span.start, span.end, replacement));
+    }
+    for ((_, child), (start, end)) in simple_children.into_iter().zip(scan.result_simple) {
+        if child.is_unchanged() {
+            continue;
+        }
+        let mut writer = Writer::new(Vec::new());
+        write_field(&mut writer, child, None)?;
+        edits.push((start, end, writer.into_inner()));
+    }
+    edits.sort_by_key(|(start, _, _)| *start);
     let mut updated = raw.to_vec();
     for (start, end, replacement) in edits.into_iter().rev() {
         updated.splice(start..end, replacement);
@@ -8353,6 +8692,8 @@ fn update_nested_field_sources(
 struct ComplexSourceScan {
     runs: Vec<RunSourceSpan>,
     nested: Vec<NestedComplexSpan>,
+    result_nested: Vec<NestedComplexSpan>,
+    result_simple: Vec<(usize, usize)>,
 }
 
 #[derive(Debug)]
@@ -8388,11 +8729,21 @@ fn scan_complex_source(raw: &[u8], word_prefixes: &[String]) -> Result<ComplexSo
     let mut runs = Vec::new();
     let mut open_fields = Vec::<OpenComplexSourceField>::new();
     let mut nested = Vec::new();
+    let mut result_nested = Vec::new();
+    let mut result_simple = Vec::new();
     loop {
         let run_start = reader.buffer_position() as usize;
         match reader.read_event_into(&mut buffer)? {
             Event::Start(element) => {
                 let run_prefixes = word_prefixes_at(&element, word_prefixes)?;
+                if is_word_element(element.name().as_ref(), b"fldSimple", &run_prefixes) {
+                    reader.read_to_end_into(element.name(), &mut Vec::new())?;
+                    if open_fields.len() == 1 && open_fields[0].separated {
+                        result_simple.push((run_start, reader.buffer_position() as usize));
+                    }
+                    buffer.clear();
+                    continue;
+                }
                 if !is_word_element(element.name().as_ref(), b"r", &run_prefixes) {
                     reader.read_to_end_into(element.name(), &mut Vec::new())?;
                     buffer.clear();
@@ -8421,6 +8772,7 @@ fn scan_complex_source(raw: &[u8], word_prefixes: &[String]) -> Result<ComplexSo
                                     run_index,
                                     &mut open_fields,
                                     &mut nested,
+                                    &mut result_nested,
                                 );
                             } else {
                                 reader.read_to_end_into(child.name(), &mut Vec::new())?;
@@ -8445,6 +8797,7 @@ fn scan_complex_source(raw: &[u8], word_prefixes: &[String]) -> Result<ComplexSo
                                     run_index,
                                     &mut open_fields,
                                     &mut nested,
+                                    &mut result_nested,
                                 );
                             }
                             if is_field_content {
@@ -8471,7 +8824,14 @@ fn scan_complex_source(raw: &[u8], word_prefixes: &[String]) -> Result<ComplexSo
                     }
                 }
             }
-            Event::Eof => return Ok(ComplexSourceScan { runs, nested }),
+            Event::Eof => {
+                return Ok(ComplexSourceScan {
+                    runs,
+                    nested,
+                    result_nested,
+                    result_simple,
+                });
+            }
             _ => {}
         }
         buffer.clear();
@@ -8541,6 +8901,7 @@ fn record_complex_source_marker(
     run_index: usize,
     open_fields: &mut Vec<OpenComplexSourceField>,
     nested: &mut Vec<NestedComplexSpan>,
+    result_nested: &mut Vec<NestedComplexSpan>,
 ) {
     match kind {
         Some("begin") => open_fields.push(OpenComplexSourceField {
@@ -8557,8 +8918,13 @@ fn record_complex_source_marker(
             let Some(field) = open_fields.pop() else {
                 return;
             };
-            if open_fields.len() == 1 && !open_fields[0].separated {
-                nested.push(NestedComplexSpan {
+            if open_fields.len() == 1 {
+                let target = if open_fields[0].separated {
+                    result_nested
+                } else {
+                    nested
+                };
+                target.push(NestedComplexSpan {
                     start: field.start,
                     end,
                     start_run: field.start_run,
@@ -8624,7 +8990,8 @@ fn rewrite_isolated_nested_field(
             .ok_or_else(|| OxmlError::MissingElement("typed legacy form data".to_owned()))?;
         updated = rewrite_legacy_form_source(&updated, word_prefixes, form)?;
     }
-    let cached_changed = field.cached_result != *original_cached_result;
+    let cached_changed = field.cached_result != *original_cached_result
+        && field.nested_cached_projection().as_ref() != Some(&field.cached_result);
     if cached_changed || field.dirty != *original_dirty {
         updated = update_complex_field_source(field, &updated, word_prefixes, cached_changed)?;
     }
@@ -8666,12 +9033,113 @@ struct FieldRewriteContext {
     canonical_end: Option<&'static str>,
 }
 
+fn find_cached_field_source(
+    raw: &[u8],
+    source: &[u8],
+    from: usize,
+    inherited: &[String],
+) -> Result<Option<usize>> {
+    let mut reader = Reader::from_reader(raw);
+    let mut buffer = Vec::new();
+    let mut scopes = Vec::<Vec<String>>::new();
+    loop {
+        let start = reader.buffer_position() as usize;
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) => {
+                let prefixes =
+                    word_prefixes_at(&element, scopes.last().map_or(inherited, Vec::as_slice))?;
+                let field_source = is_word_element(element.name().as_ref(), b"r", &prefixes)
+                    || is_word_element(element.name().as_ref(), b"fldSimple", &prefixes);
+                if !scopes.is_empty()
+                    && field_source
+                    && start >= from
+                    && raw.get(start..start.saturating_add(source.len())) == Some(source)
+                {
+                    return Ok(Some(start));
+                }
+                let wrapper = [
+                    b"fldSimple".as_slice(),
+                    b"hyperlink",
+                    b"sdt",
+                    b"sdtContent",
+                    b"ins",
+                    b"del",
+                    b"moveFrom",
+                    b"moveTo",
+                    b"smartTag",
+                    b"customXml",
+                ]
+                .iter()
+                .any(|local| is_word_element(element.name().as_ref(), local, &prefixes));
+                if wrapper {
+                    scopes.push(prefixes);
+                } else {
+                    reader.read_to_end_into(element.name(), &mut Vec::new())?;
+                }
+            }
+            Event::Empty(element) => {
+                let prefixes =
+                    word_prefixes_at(&element, scopes.last().map_or(inherited, Vec::as_slice))?;
+                if !scopes.is_empty()
+                    && is_word_element(element.name().as_ref(), b"fldSimple", &prefixes)
+                    && start >= from
+                    && raw.get(start..start.saturating_add(source.len())) == Some(source)
+                {
+                    return Ok(Some(start));
+                }
+            }
+            Event::End(_) => {
+                scopes.pop();
+            }
+            Event::Eof => return Ok(None),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
 fn update_simple_field_source(
     field: &Field,
     raw: &[u8],
     word_prefixes: &[String],
     cached_changed: bool,
 ) -> Result<Vec<u8>> {
+    let nested_source;
+    let raw = if let Some(runs) = &field.simple_cached_runs {
+        if field
+            .cached_fields_in_source_order()
+            .iter()
+            .any(|child| matches!(child.source, FieldSource::New { .. }))
+        {
+            return Err(OxmlError::MissingElement(
+                "replacement cached field has no original simple-cache source identity".to_owned(),
+            ));
+        }
+        let mut paragraph = CT_P::new();
+        paragraph.runs = runs.clone();
+        let mut replacements = Vec::new();
+        let mut boundary = 0;
+        while boundary < paragraph.runs.len() {
+            boundary += paragraph.field_source_replacements_at(boundary, &mut replacements)?;
+        }
+        let mut edits = Vec::new();
+        let mut cursor = 0;
+        for (source, replacement) in replacements {
+            let start = find_cached_field_source(raw, &source, cursor, word_prefixes)?.ok_or_else(
+                || OxmlError::MissingElement("nested simple-cache field source".to_owned()),
+            )?;
+            cursor = start + source.len();
+            edits.push((start..cursor, replacement));
+        }
+        let mut updated = raw.to_vec();
+        for (range, replacement) in edits.into_iter().rev() {
+            updated.splice(range, replacement);
+        }
+        nested_source = updated;
+        nested_source.as_slice()
+    } else {
+        raw
+    };
     let mut reader = Reader::from_reader(raw);
     reader.config_mut().trim_text(false);
     let mut output = Vec::new();
@@ -8691,20 +9159,65 @@ fn update_simple_field_source(
                 let depth = contexts.len();
                 let parent_is_word_run = contexts.last().is_some_and(|context| context.word_run);
                 if depth == 0 && is_word_element(element.name().as_ref(), b"fldSimple", &prefixes) {
-                    write_rewritten_field_element(
-                        &mut writer,
-                        &element,
-                        "w:fldSimple",
-                        &prefixes,
-                        &[("instr", field.instruction.raw.as_str())],
-                        field.dirty,
-                        true,
-                        false,
-                    )?;
+                    let foreign_word_binding =
+                        namespace_bindings(&prefixes)
+                            .into_iter()
+                            .any(|(prefix, namespace)| {
+                                prefix == "w" && namespace != crate::namespace::W_NS
+                            });
+                    if foreign_word_binding {
+                        // Keep the alias and original bindings on the cache owner.
+                        // A canonical w declaration would change opaque descendants.
+                        let mut replacement = element.clone().into_owned();
+                        replacement.clear_attributes();
+                        for attribute in element.attributes() {
+                            let attribute = attribute?;
+                            if !is_field_word_attribute(attribute.key.as_ref(), b"dirty", &prefixes)
+                            {
+                                replacement.push_attribute(attribute);
+                            }
+                        }
+                        if let Some(dirty) = field.dirty {
+                            let name = element.name();
+                            let prefix = std::str::from_utf8(name.as_ref())?
+                                .split_once(':')
+                                .map(|(prefix, _)| prefix)
+                                .or_else(|| {
+                                    prefixes
+                                        .iter()
+                                        .find(|prefix| {
+                                            !prefix.is_empty() && !prefix.starts_with('\0')
+                                        })
+                                        .map(String::as_str)
+                                })
+                                .ok_or_else(|| {
+                                    OxmlError::InvalidValue(
+                                        "field attribute requires a Word prefix".to_owned(),
+                                    )
+                                })?;
+                            let attribute = format!("{prefix}:dirty");
+                            replacement.push_attribute((
+                                attribute.as_str(),
+                                if dirty { "1" } else { "0" },
+                            ));
+                        }
+                        writer.write_event(Event::Start(replacement))?;
+                    } else {
+                        write_rewritten_field_element(
+                            &mut writer,
+                            &element,
+                            "w:fldSimple",
+                            &prefixes,
+                            &[("instr", field.instruction.raw.as_str())],
+                            field.dirty,
+                            true,
+                            false,
+                        )?;
+                    }
                     contexts.push(FieldRewriteContext {
                         prefixes,
                         word_run: false,
-                        canonical_end: Some("w:fldSimple"),
+                        canonical_end: (!foreign_word_binding).then_some("w:fldSimple"),
                     });
                 } else if depth == 2
                     && parent_is_word_run
@@ -8717,6 +9230,7 @@ fn update_simple_field_source(
                             &mut writer,
                             &element,
                             (!wrote_result).then_some(field.cached_result.as_str()),
+                            !prefixes.iter().any(|prefix| prefix == "w"),
                         )?;
                         wrote_result = true;
                     } else {
@@ -8735,7 +9249,11 @@ fn update_simple_field_source(
                 {
                     reader.read_to_end_into(element.name(), &mut Vec::new())?;
                     if !wrote_result {
-                        write_field_result_content(&mut writer, &field.cached_result)?;
+                        write_field_result_content_with_binding(
+                            &mut writer,
+                            &field.cached_result,
+                            !prefixes.iter().any(|prefix| prefix == "w"),
+                        )?;
                         wrote_result = true;
                     }
                 } else {
@@ -8766,6 +9284,7 @@ fn update_simple_field_source(
                             &mut writer,
                             &element,
                             (!wrote_result).then_some(field.cached_result.as_str()),
+                            !prefixes.iter().any(|prefix| prefix == "w"),
                         )?;
                         wrote_result = true;
                     } else {
@@ -8778,7 +9297,11 @@ fn update_simple_field_source(
                         || is_word_element(element.name().as_ref(), b"br", &prefixes))
                 {
                     if !wrote_result {
-                        write_field_result_content(&mut writer, &field.cached_result)?;
+                        write_field_result_content_with_binding(
+                            &mut writer,
+                            &field.cached_result,
+                            !prefixes.iter().any(|prefix| prefix == "w"),
+                        )?;
                         wrote_result = true;
                     }
                 } else {
@@ -8791,8 +9314,19 @@ fn update_simple_field_source(
                     buffer.clear();
                     continue;
                 };
-                if cached_changed && context.canonical_end == Some("w:fldSimple") && !wrote_result {
-                    write_field_result_run(&mut writer, field, None, None)?;
+                if cached_changed && contexts.is_empty() && !wrote_result {
+                    let foreign_word_namespace = namespace_bindings(&context.prefixes)
+                        .into_iter()
+                        .find(|(prefix, namespace)| {
+                            prefix == "w" && namespace != crate::namespace::W_NS
+                        })
+                        .map(|(_, namespace)| namespace);
+                    write_field_result_run(
+                        &mut writer,
+                        field,
+                        foreign_word_namespace.as_deref(),
+                        None,
+                    )?;
                     wrote_result = true;
                 }
                 if let Some(name) = context.canonical_end {
@@ -9294,12 +9828,13 @@ fn write_updated_text_element<W: std::io::Write>(
     writer: &mut Writer<W>,
     source: &BytesStart<'_>,
     value: Option<&str>,
+    canonical_word_binding: bool,
 ) -> Result<()> {
     reader.read_to_end_into(source.name(), &mut Vec::new())?;
     if let Some(value) = value {
-        write_field_result_content_with_source(writer, value, Some(source))?;
+        write_field_result_content_inner(writer, value, Some(source), canonical_word_binding)?;
     } else {
-        write_field_text_with_source(writer, "", Some(source), false)?;
+        write_field_text_with_source(writer, "", Some(source), canonical_word_binding)?;
     }
     Ok(())
 }
@@ -9308,11 +9843,12 @@ fn write_updated_empty_text_element<W: std::io::Write>(
     writer: &mut Writer<W>,
     source: &BytesStart<'_>,
     value: Option<&str>,
+    canonical_word_binding: bool,
 ) -> Result<()> {
     if let Some(value) = value {
-        write_field_result_content_with_source(writer, value, Some(source))?;
+        write_field_result_content_inner(writer, value, Some(source), canonical_word_binding)?;
     } else {
-        write_field_text_with_source(writer, "", Some(source), false)?;
+        write_field_text_with_source(writer, "", Some(source), canonical_word_binding)?;
     }
     Ok(())
 }
@@ -9322,14 +9858,6 @@ fn write_field_result_content<W: std::io::Write>(
     value: &str,
 ) -> Result<()> {
     write_field_result_content_with_binding(writer, value, false)
-}
-
-fn write_field_result_content_with_source<W: std::io::Write>(
-    writer: &mut Writer<W>,
-    value: &str,
-    source: Option<&BytesStart<'_>>,
-) -> Result<()> {
-    write_field_result_content_inner(writer, value, source, false)
 }
 
 fn write_field_result_content_with_binding<W: std::io::Write>(
@@ -9394,7 +9922,24 @@ fn write_field_text_with_source<W: std::io::Write>(
     source: Option<&BytesStart<'_>>,
     canonical_word_binding: bool,
 ) -> Result<()> {
-    let mut element = BytesStart::new("w:t");
+    // Keep the source Word alias when canonical w would shadow foreign
+    // attribute bindings. Generated text without a source gets its own scope.
+    let name = if canonical_word_binding {
+        source
+            .map(|source| {
+                let name = source.name();
+                let name = std::str::from_utf8(name.as_ref())?;
+                Ok::<_, OxmlError>(
+                    name.rsplit_once(':')
+                        .map_or_else(|| "t".to_owned(), |(prefix, _)| format!("{prefix}:t")),
+                )
+            })
+            .transpose()?
+            .unwrap_or_else(|| "w:t".to_owned())
+    } else {
+        "w:t".to_owned()
+    };
+    let mut element = BytesStart::new(name.as_str());
     if let Some(source) = source {
         for attribute in source.attributes() {
             let attribute = attribute?;
@@ -9402,7 +9947,8 @@ fn write_field_text_with_source<W: std::io::Write>(
                 element.push_attribute(attribute);
             }
         }
-    } else if canonical_word_binding {
+    }
+    if canonical_word_binding && source.is_none() {
         element.push_attribute(("xmlns:w", crate::namespace::W_NS));
     }
     if needs_space_preservation(value) {
@@ -9410,7 +9956,7 @@ fn write_field_text_with_source<W: std::io::Write>(
     }
     writer.write_event(Event::Start(element))?;
     writer.write_event(Event::Text(BytesText::new(value)))?;
-    writer.write_event(Event::End(BytesEnd::new("w:t")))?;
+    writer.write_event(Event::End(BytesEnd::new(name.as_str())))?;
     Ok(())
 }
 
@@ -9706,10 +10252,19 @@ fn write_field_result_run<W: std::io::Write>(
         original_cached_result,
         ..
     } = &field.source
-        && field.cached_result == *original_cached_result
+        && (field.cached_result == *original_cached_result
+            || field.nested_cached_projection().as_ref() == Some(&field.cached_result))
     {
         for run in runs {
-            run.to_xml_with_word_override(writer, foreign_word_namespace)?;
+            if run
+                .content
+                .iter()
+                .any(|content| matches!(content, RunContent::Field(_)))
+            {
+                write_mixed_field_run(writer, run, foreign_word_namespace)?;
+            } else {
+                run.to_xml_with_word_override(writer, foreign_word_namespace)?;
+            }
         }
         return Ok(());
     }
@@ -12064,6 +12619,46 @@ mod tests {
         );
         assert_eq!(shape.text.len(), 1);
         assert_eq!(shape.text[0].text(), "boxed");
+
+        // The fragment API supplies canonical w, but explicit foreign rebinding
+        // must override that fallback at either the owner or paragraph boundary.
+        for foreign in [
+            src.replace(
+                "<w:txbxContent>",
+                "<w:txbxContent xmlns:w=\"urn:f279:foreign\">",
+            ),
+            src.replace(
+                "<w:p><w:r><w:t>boxed",
+                "<w:p xmlns:w=\"urn:f279:foreign\"><w:r><w:t>boxed",
+            ),
+        ] {
+            let foreign_paragraph = parse_paragraph(&foreign);
+            let shape = foreign_paragraph.runs[0].alt_drawings[0]
+                .anchor
+                .as_ref()
+                .unwrap()
+                .shape
+                .as_ref()
+                .unwrap();
+            assert!(
+                shape.text.is_empty(),
+                "explicit foreign Word prefix is not admitted"
+            );
+            assert!(shape.text_body.as_ref().is_none_or(|body| {
+                body.content
+                    .iter()
+                    .all(|content| !matches!(content, crate::document::BodyContent::Paragraph(_)))
+            }));
+            let mut preserved = Vec::new();
+            foreign_paragraph
+                .to_xml(&mut Writer::new(&mut preserved))
+                .unwrap();
+            assert!(
+                String::from_utf8(preserved)
+                    .unwrap()
+                    .contains("urn:f279:foreign")
+            );
+        }
 
         // Preserved verbatim, exactly once.
         let mut output = Vec::new();
@@ -15602,5 +16197,117 @@ mod tests {
             cached.extra_xml.push(raw.to_vec());
             assert!(Field::from_raw("UNKNOWN", FieldForm::Simple, vec![cached]).is_err());
         }
+    }
+    #[test]
+    fn nested_cached_fields_preserve_both_wire_forms() {
+        for outer_form in [FieldForm::Simple, FieldForm::Complex] {
+            for child_form in [FieldForm::Simple, FieldForm::Complex] {
+                let mut result = CT_R::new("OLD");
+                result.properties = Some(CT_RPr {
+                    italic: Some(true),
+                    ..CT_RPr::default()
+                });
+                let child = Field::from_raw("PAGE", child_form, vec![result]).unwrap();
+                let nested = field_run(child, None);
+                let outer = Field::from_raw(
+                    "UNKNOWN",
+                    outer_form,
+                    vec![CT_R::new("prefix "), nested, CT_R::new(" suffix")],
+                )
+                .unwrap();
+                let mut authored = CT_P::new();
+                authored.runs.push(field_run(outer, None));
+                let original = serialized_paragraph(&authored);
+                let mut reopened =
+                    parse_paragraph(&original.replace("<w:p>", "").replace("</w:p>", ""));
+                assert_eq!(serialized_paragraph(&reopened), original);
+                let RunContent::Field(outer) = &mut reopened.runs[0].content[0] else {
+                    panic!("outer");
+                };
+                assert_eq!(outer.form(), outer_form);
+                assert_eq!(
+                    outer.cached_result, "prefix OLD suffix",
+                    "{outer_form:?}/{child_form:?} {original}"
+                );
+                assert_eq!(
+                    outer.cached_fields_in_source_order().len(),
+                    1,
+                    "{outer_form:?}/{child_form:?}"
+                );
+                let display = outer.cached_display_segments();
+                assert_eq!(
+                    display.iter().map(|(text, _)| *text).collect::<String>(),
+                    "prefix OLD suffix"
+                );
+                assert!(display.iter().any(|(text, properties)| *text == "OLD"
+                    && properties.is_some_and(|properties| properties.italic == Some(true))));
+                let child = outer.cached_field_mut(0).unwrap();
+                assert_eq!(child.form(), child_form);
+                child.cached_result = "2".into();
+                outer.refresh_cached_field_projection();
+                let display = outer.cached_display_segments();
+                assert_eq!(
+                    display.iter().map(|(text, _)| *text).collect::<String>(),
+                    "prefix 2 suffix"
+                );
+                assert!(display.iter().any(|(text, properties)| *text == "2"
+                    && properties.is_some_and(|properties| properties.italic == Some(true))));
+                let edited = serialized_paragraph(&reopened);
+                assert!(edited.contains("<w:i"));
+                let final_model =
+                    parse_paragraph(&edited.replace("<w:p>", "").replace("</w:p>", ""));
+                let field = parsed_field(&final_model, 0);
+                assert_eq!(field.cached_result, "prefix 2 suffix");
+                let children = field.cached_fields_in_source_order();
+                assert_eq!(children.len(), 1);
+                assert_eq!(children[0].form(), child_form);
+                assert_eq!(children[0].cached_result, "2");
+                assert_eq!(
+                    children[0].cached_display_segments()[0].1.unwrap().italic,
+                    Some(true)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cached_result_fields_retain_typed_identity_and_producer_bytes() {
+        let raw = r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>UNKNOWN</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r data="cache"><w:rPr><w:b/></w:rPr><w:t>prefix </w:t></w:r><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>PAGE</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:rPr><w:i/></w:rPr><w:t>OLD</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r><w:r><w:t> suffix</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#;
+        let mut paragraph = parse_paragraph(raw);
+        assert!(serialized_paragraph(&paragraph).contains(raw));
+        let RunContent::Field(field) = &mut paragraph.runs[0].content[0] else {
+            panic!("outer");
+        };
+        assert_eq!(field.cached_fields_in_source_order().len(), 1);
+        let child = field.cached_field_mut(0).unwrap();
+        child.cached_result = "2".into();
+        child.dirty = Some(false);
+        field.refresh_cached_field_projection();
+        assert_eq!(field.cached_result, "prefix 2 suffix");
+        let output = serialized_paragraph(&paragraph);
+        assert!(
+            output.contains(r#"<w:r data="cache"><w:rPr><w:b/></w:rPr><w:t>prefix </w:t></w:r>"#)
+        );
+        assert_eq!(output.matches("fldCharType=\"begin\"").count(), 2);
+        let reopened = parse_paragraph(&output.replace("<w:p>", "").replace("</w:p>", ""));
+        let field = parsed_field(&reopened, 0);
+        assert_eq!(field.cached_result, "prefix 2 suffix");
+        assert_eq!(field.cached_fields_in_source_order()[0].cached_result, "2");
+        assert_eq!(
+            field.cached_fields_in_source_order()[0].cached_display_segments()[0]
+                .1
+                .unwrap()
+                .italic,
+            Some(true)
+        );
+    }
+    #[test]
+    fn replacement_child_cannot_silently_discard_a_parsed_simple_cache() {
+        let raw = br#"<w:fldSimple xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:instr="UNKNOWN"><w:fldSimple w:instr="PAGE"><w:r><w:t>OLD</w:t></w:r></w:fldSimple></w:fldSimple>"#;
+        let mut field = parse_simple_field(raw, &[]).unwrap().unwrap();
+        *field.cached_field_mut(0).unwrap() = Field::new("PAGE", "replacement");
+        let mut writer = Writer::new(Vec::new());
+        let error = write_field(&mut writer, &field, None).unwrap_err();
+        assert!(error.to_string().contains("source identity"));
     }
 }

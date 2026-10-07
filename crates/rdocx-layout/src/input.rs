@@ -10,7 +10,7 @@ use oxml_layout::Diagnostic;
 pub use oxml_layout::FontFile;
 use oxml_layout::MediaId;
 use rdocx_oxml::core_properties::CoreProperties;
-use rdocx_oxml::document::{CT_Document, CT_NoteProperties};
+use rdocx_oxml::document::{CT_Body, CT_Document, CT_NoteProperties};
 use rdocx_oxml::footnotes::CT_Footnotes;
 use rdocx_oxml::header_footer::CT_HdrFtr;
 use rdocx_oxml::math::MathProperties;
@@ -165,6 +165,10 @@ pub struct LayoutInput {
     /// Whether the document's `w:compatibilityMode` is 15 or later, where Word
     /// moves a tab stop past the right margin to the end of its line.
     pub clamp_tabs_past_margin: bool,
+    /// Modern continuous-section footnote flow selected by compatibility mode 15.
+    pub modern_footnote_layout: bool,
+    /// Explicit `w:compat/w:footnoteLayoutLikeWW8` legacy flow override.
+    pub footnote_layout_like_word8: bool,
     /// Whether `w:mirrorMargins` makes even displayed pages swap their inside
     /// and outside margins.
     pub mirror_margins: bool,
@@ -185,6 +189,15 @@ pub struct LayoutInput {
     pub styles: CT_Styles,
     /// Numbering definitions (optional).
     pub numbering: Option<CT_Numbering>,
+    /// Physical OPC part names keyed by their modeled story identity.
+    ///
+    /// An absent mapping disables text-box provenance for that story.
+    pub story_part_names: HashMap<crate::WordStory, String>,
+    /// Rich block content keyed by physical story identity.
+    ///
+    /// A present entry replaces the paragraph-only header, footer or note
+    /// projection during layout. An absent entry retains the legacy projection.
+    pub story_bodies: HashMap<crate::WordStory, CT_Body>,
     /// Header parts keyed by relationship ID.
     pub headers: HashMap<String, CT_HdrFtr>,
     /// Footer parts keyed by relationship ID.

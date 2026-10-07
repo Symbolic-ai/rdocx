@@ -5635,6 +5635,13 @@ struct StorySource<'a> {
     xml: Cow<'a, [u8]>,
 }
 
+pub(crate) struct TextBoxCacheParagraph {
+    pub(crate) location: ContentLocation,
+    pub(crate) xml: Vec<u8>,
+    pub(crate) owner_index: usize,
+    pub(crate) paragraph_index: usize,
+}
+
 #[derive(Clone)]
 struct StoryOwnerSpan {
     kind: StoryKind,
@@ -5786,7 +5793,7 @@ fn modeled_word_child(parent: &[u8], child: &[u8]) -> bool {
         }
         b"ins" | b"del" | b"moveFrom" | b"moveTo" => matches!(
             child,
-            b"r" | b"hyperlink" | b"ins" | b"del" | b"moveFrom" | b"moveTo"
+            b"r" | b"sdt" | b"hyperlink" | b"ins" | b"del" | b"moveFrom" | b"moveTo"
         ),
         b"fldSimple" => child == b"r",
         _ => false,
@@ -8235,6 +8242,412 @@ fn paired_story_owners(
             Some((scanned.full.clone(), story(unpaired.remove(position))))
         })
         .collect())
+}
+
+// Anchor capture uses trim_text(true). Apply precisely that parser projection
+// to the original span, while retaining element names, attributes and order.
+fn drawing_capture_key(xml: &[u8]) -> Result<Vec<u8>> {
+    let mut reader = quick_xml::Reader::from_reader(xml);
+    reader.config_mut().trim_text(true);
+    let mut writer = quick_xml::Writer::new(Vec::new());
+    let mut buffer = Vec::new();
+    loop {
+        let event = reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("drawing capture scan failed: {error}")))?;
+        if matches!(event, Event::Eof) {
+            break;
+        }
+        writer
+            .write_event(event)
+            .map_err(|error| Error::Other(error.to_string()))?;
+        buffer.clear();
+    }
+    Ok(writer.into_inner())
+}
+
+/// Bind modeled selected anchors to actual physical story owners before shaping.
+fn bind_text_box_source_owners(
+    body: &mut rdocx_oxml::document::CT_Body,
+    xml: &[u8],
+    root_kind: StoryKind,
+    scope: Range<usize>,
+) -> Result<()> {
+    let owners = scan_story_owners(xml, root_kind)?;
+    let mut anchors = Vec::new();
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("text-box owner scan failed: {error}")))?;
+        if let Event::Start(element) = event {
+            if story_namespace(&namespace) == StoryNamespace::WordDrawing
+                && element.local_name().as_ref() == b"anchor"
+                && scope.contains(&before)
+            {
+                let end = story_element_end(xml, before)?;
+                let contained = owners
+                    .iter()
+                    .filter(|owner| {
+                        owner.kind == StoryKind::TextBox
+                            && before <= owner.full.start
+                            && owner.full.end <= end
+                    })
+                    .collect::<Vec<_>>();
+                // Nested anchors own their own boxes. This anchor's direct box
+                // is the first selected owner in its captured source span.
+                anchors.push((
+                    drawing_capture_key(&xml[before..end])?,
+                    contained.first().map(|owner| owner.owner_index),
+                    false,
+                ));
+            }
+        } else if matches!(event, Event::Eof) {
+            break;
+        }
+        buffer.clear();
+    }
+    fn consume_raw(raw: &[u8], anchors: &mut [(Vec<u8>, Option<usize>, bool)]) -> Result<()> {
+        let captured = drawing_capture_key(raw)?;
+        let mut reader = quick_xml::Reader::from_reader(captured.as_slice());
+        let mut buffer = Vec::new();
+        loop {
+            let before = reader.buffer_position() as usize;
+            let event = reader
+                .read_event_into(&mut buffer)
+                .map_err(|error| Error::Other(error.to_string()))?;
+            if let Event::Start(element) = &event
+                && element.local_name().as_ref() == b"anchor"
+            {
+                let end = story_element_end(&captured, before)?;
+                let key = &captured[before..end];
+                if let Some((_, _, used)) = anchors
+                    .iter_mut()
+                    .find(|(source, _, used)| !*used && source == key)
+                {
+                    *used = true;
+                }
+            }
+            if matches!(event, Event::Eof) {
+                break;
+            }
+            buffer.clear();
+        }
+        Ok(())
+    }
+    fn drawing(
+        value: &mut rdocx_oxml::drawing::CT_Drawing,
+        anchors: &mut [(Vec<u8>, Option<usize>, bool)],
+    ) -> Result<()> {
+        let Some(anchor) = value.anchor.as_mut() else {
+            return Ok(());
+        };
+        let Some(shape) = anchor.shape.as_mut() else {
+            return Ok(());
+        };
+        shape.source_text_box_owner = if let Some(raw) = &anchor.raw_xml {
+            let key = drawing_capture_key(raw)?;
+            anchors
+                .iter_mut()
+                .find(|(source, _, used)| !*used && *source == key)
+                .and_then(|(_, owner, used)| {
+                    *used = true;
+                    *owner
+                })
+        } else {
+            None
+        };
+        shape_content(shape, anchors)
+    }
+    fn shape_content(
+        shape: &mut rdocx_oxml::drawing::CT_Shape,
+        anchors: &mut [(Vec<u8>, Option<usize>, bool)],
+    ) -> Result<()> {
+        if let Some(body) = &mut shape.text_body {
+            body_content(&mut body.content, anchors)?;
+        } else {
+            for p in &mut shape.text {
+                paragraph(p, anchors)?;
+            }
+        }
+        Ok(())
+    }
+    fn selected_raw(
+        raw: &[u8],
+        selected: &mut rdocx_oxml::drawing::CT_Drawing,
+        anchors: &mut [(Vec<u8>, Option<usize>, bool)],
+    ) -> Result<()> {
+        let selected_key = selected
+            .anchor
+            .as_ref()
+            .and_then(|anchor| anchor.raw_xml.as_deref())
+            .map(drawing_capture_key)
+            .transpose()?;
+        let captured = drawing_capture_key(raw)?;
+        let mut reader = quick_xml::Reader::from_reader(captured.as_slice());
+        let mut buffer = Vec::new();
+        let mut bound = false;
+        loop {
+            let before = reader.buffer_position() as usize;
+            let event = reader
+                .read_event_into(&mut buffer)
+                .map_err(|error| Error::Other(error.to_string()))?;
+            if let Event::Start(element) = &event
+                && element.local_name().as_ref() == b"anchor"
+            {
+                let end = story_element_end(&captured, before)?;
+                let key = &captured[before..end];
+                let owner = anchors
+                    .iter_mut()
+                    .find(|(source, _, used)| !*used && source == key)
+                    .and_then(|(_, owner, used)| {
+                        *used = true;
+                        *owner
+                    });
+                if !bound && owner.is_some() && selected_key.as_deref() == Some(key) {
+                    if let Some(shape) = selected
+                        .anchor
+                        .as_mut()
+                        .and_then(|anchor| anchor.shape.as_mut())
+                    {
+                        shape.source_text_box_owner = owner;
+                        shape_content(shape, anchors)?;
+                    }
+                    bound = true;
+                    let name = element.name().as_ref().to_vec();
+                    reader
+                        .read_to_end_into(quick_xml::name::QName(&name), &mut Vec::new())
+                        .map_err(|error| Error::Other(error.to_string()))?;
+                }
+            }
+            if matches!(event, Event::Eof) {
+                break;
+            }
+            buffer.clear();
+        }
+        if !bound
+            && let Some(shape) = selected
+                .anchor
+                .as_mut()
+                .and_then(|anchor| anchor.shape.as_mut())
+        {
+            shape.source_text_box_owner = None;
+        }
+        Ok(())
+    }
+    fn run(value: &mut CT_R, anchors: &mut [(Vec<u8>, Option<usize>, bool)]) -> Result<()> {
+        let properties = usize::from(value.properties.is_some());
+        let mut selected_index = 0;
+        let mut children = value
+            .extra_xml
+            .iter()
+            .enumerate()
+            .filter_map(|(index, _)| {
+                let encoded = value.extra_xml_positions.get(index).copied();
+                if encoded.is_some_and(CT_R::raw_child_is_root_attributes) {
+                    return None;
+                }
+                let selected = if encoded.is_some_and(CT_R::raw_child_has_alternate_content_drawing)
+                {
+                    let index = selected_index;
+                    selected_index += 1;
+                    Some(index)
+                } else {
+                    None
+                };
+                Some((
+                    encoded.map_or(properties + value.content.len(), CT_R::raw_child_position),
+                    0u8,
+                    index,
+                    selected,
+                ))
+            })
+            .chain(
+                value
+                    .content
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, content)| {
+                        matches!(content, RunContent::Drawing(_)).then_some((
+                            properties + index,
+                            1u8,
+                            index,
+                            None,
+                        ))
+                    }),
+            )
+            .collect::<Vec<_>>();
+        children.sort_unstable();
+        for (_, kind, index, selected) in children {
+            if kind == 1 {
+                if let RunContent::Drawing(value) = &mut value.content[index] {
+                    drawing(value, anchors)?;
+                }
+            } else if let Some(selected) =
+                selected.and_then(|index| value.alt_drawings.get_mut(index))
+            {
+                selected_raw(&value.extra_xml[index], selected, anchors)?;
+            } else {
+                consume_raw(&value.extra_xml[index], anchors)?;
+            }
+        }
+        Ok(())
+    }
+    fn paragraph(value: &mut CT_P, anchors: &mut [(Vec<u8>, Option<usize>, bool)]) -> Result<()> {
+        // Consume every physical revision owner before selecting accepted runs.
+        // Projection metadata is installed in place, never serialized/reparsed.
+        for boundary in 0..=value.runs.len() {
+            let mut owners = value
+                .content_controls
+                .iter()
+                .enumerate()
+                .filter(|(_, (at, _, _, _))| *at == boundary)
+                .map(|(index, (_, slot, _, _))| (1u8, *slot, 0u8, index))
+                .chain(
+                    value
+                        .revisions
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, (at, _, _))| *at == boundary)
+                        .map(|(index, (_, slot, _))| {
+                            let (order, slot) = if let Some(link_index) =
+                                rdocx_oxml::text::hyperlink_revision_index(*slot)
+                            {
+                                match value.hyperlinks.get(link_index) {
+                                    Some(link) if link.preserved_raw_before.is_some() => {
+                                        (1, link.preserved_raw_before.unwrap())
+                                    }
+                                    Some(link) if boundary == link.run_end => (0, 0),
+                                    _ => (2, 0),
+                                }
+                            } else {
+                                (1, *slot)
+                            };
+                            (order, slot, 1u8, index)
+                        }),
+                )
+                .collect::<Vec<_>>();
+            for (raw_slot, (index, (at, _))) in value
+                .extra_xml
+                .iter()
+                .enumerate()
+                .filter(|(_, (at, _))| *at == boundary)
+                .enumerate()
+            {
+                let projected = value
+                    .revisions
+                    .iter()
+                    .any(|(position, slot, _)| position == at && *slot == raw_slot)
+                    || value.hyperlinks.iter().any(|link| {
+                        link.run_start == boundary && link.preserved_raw_before == Some(raw_slot)
+                    });
+                if !projected {
+                    owners.push((1, raw_slot, 2, index));
+                }
+            }
+            owners.sort_unstable();
+            for (_, _, kind, index) in owners {
+                if kind == 1 {
+                    if let Some(p) = value.revisions[index].2.physical_content_paragraph_mut()? {
+                        paragraph(p, anchors)?;
+                    }
+                } else if kind == 0 {
+                    control(&mut value.content_controls[index].3, anchors)?;
+                } else {
+                    consume_raw(&value.extra_xml[index].1, anchors)?;
+                }
+            }
+            if let Some(value) = value.runs.get_mut(boundary) {
+                run(value, anchors)?;
+            }
+        }
+        Ok(())
+    }
+    fn control(value: &mut CT_Sdt, anchors: &mut [(Vec<u8>, Option<usize>, bool)]) -> Result<()> {
+        for boundary in 0..=value.content.len() {
+            for (_, revision) in value
+                .physical_revisions_mut()
+                .iter_mut()
+                .filter(|(at, _)| *at == boundary)
+            {
+                if let Some(p) = revision.physical_content_paragraph_mut()? {
+                    paragraph(p, anchors)?;
+                }
+            }
+            if let Some(content) = value.content.get_mut(boundary) {
+                match content {
+                    SdtContent::Paragraph(p) => paragraph(p, anchors)?,
+                    SdtContent::Run(value) => run(value, anchors)?,
+                    SdtContent::Table(value) => table(value, anchors)?,
+                    SdtContent::Row(value) => row(value, anchors)?,
+                    SdtContent::Cell(value) => cell(value, anchors)?,
+                    SdtContent::ContentControl(value) => control(value, anchors)?,
+                    SdtContent::RawXml(raw) => consume_raw(raw, anchors)?,
+                }
+            }
+        }
+        Ok(())
+    }
+    fn table(value: &mut CT_Tbl, anchors: &mut [(Vec<u8>, Option<usize>, bool)]) -> Result<()> {
+        for boundary in 0..=value.rows.len() {
+            for (_, _, value) in value
+                .content_controls
+                .iter_mut()
+                .filter(|(at, _, _)| *at == boundary)
+            {
+                control(value, anchors)?;
+            }
+            if let Some(value) = value.rows.get_mut(boundary) {
+                row(value, anchors)?;
+            }
+        }
+        Ok(())
+    }
+    fn row(value: &mut CT_Row, anchors: &mut [(Vec<u8>, Option<usize>, bool)]) -> Result<()> {
+        for boundary in 0..=value.cells.len() {
+            for (_, _, value) in value
+                .content_controls
+                .iter_mut()
+                .filter(|(at, _, _)| *at == boundary)
+            {
+                control(value, anchors)?;
+            }
+            if let Some(value) = value.cells.get_mut(boundary) {
+                cell(value, anchors)?;
+            }
+        }
+        Ok(())
+    }
+    fn cell(value: &mut CT_Tc, anchors: &mut [(Vec<u8>, Option<usize>, bool)]) -> Result<()> {
+        for content in &mut value.content {
+            match content {
+                CellContent::Paragraph(value) => paragraph(value, anchors)?,
+                CellContent::Table(value) => table(value, anchors)?,
+                CellContent::ContentControl(value) => control(value, anchors)?,
+            }
+        }
+        Ok(())
+    }
+    fn body_content(
+        values: &mut [BodyContent],
+        anchors: &mut [(Vec<u8>, Option<usize>, bool)],
+    ) -> Result<()> {
+        for value in values {
+            match value {
+                BodyContent::Paragraph(value) => paragraph(value, anchors)?,
+                BodyContent::Table(value) => table(value, anchors)?,
+                BodyContent::ContentControl(value) => control(value, anchors)?,
+                BodyContent::RawXml(raw) => consume_raw(raw, anchors)?,
+            }
+        }
+        Ok(())
+    }
+    let mut candidate = body.clone();
+    body_content(&mut candidate.content, &mut anchors)?;
+    *body = candidate;
+    Ok(())
 }
 
 fn structural_fingerprint(xml: &[u8]) -> Result<u64> {
@@ -15528,6 +15941,116 @@ impl Document {
                 },
             })
             .collect())
+    }
+
+    pub(crate) fn patch_story_paragraph_field_sources(
+        &mut self,
+        location: &ContentLocation,
+        replacements: &[(Vec<u8>, Vec<u8>)],
+    ) -> Result<()> {
+        // Earlier writes may have changed the owning story's fingerprint.
+        // Refresh only that fingerprint, keeping its physical part and ordinal.
+        let mut location = location.clone();
+        location.story = self
+            .stories()?
+            .into_iter()
+            .find(|story| {
+                story.kind == location.story.kind
+                    && story.part_name == location.story.part_name
+                    && story.owner_index == location.story.owner_index
+            })
+            .ok_or_else(|| {
+                Error::Other("field cache owner disappeared during staging".to_owned())
+            })?;
+        let (source, paragraph) = self.story_range_paragraph_source(&location)?;
+        let part_name = source.part_name.clone();
+        let mut xml = source.xml.into_owned();
+        let mut edits = Vec::new();
+        let mut cursor = 0;
+        for (original, replacement) in replacements {
+            if original.is_empty() {
+                return Err(Error::Other("empty field source identity".to_owned()));
+            }
+            let offset = crate::field::find_typed_field_source(
+                &xml,
+                paragraph.full.start,
+                paragraph.full.end,
+                original,
+                cursor,
+            )?
+            .ok_or_else(|| {
+                Error::Other("field source no longer belongs to its checked paragraph".to_owned())
+            })?;
+            let start = paragraph.full.start + offset;
+            cursor = offset + original.len();
+            edits.push((start..(start + original.len()), replacement));
+        }
+        for (range, replacement) in edits.into_iter().rev() {
+            xml.splice(range, replacement.iter().copied());
+        }
+        set_story_source_xml(self, &part_name, xml)?;
+        self.invalidate_layout();
+        Ok(())
+    }
+
+    pub(crate) fn text_box_cache_paragraphs(&self) -> Result<Vec<TextBoxCacheParagraph>> {
+        let mut result = Vec::new();
+        let mut seen = HashSet::new();
+        for (location, xml) in self.story_range_paragraphs()? {
+            if !matches!(
+                location.story.kind,
+                StoryKind::TextBox | StoryKind::TableCell
+            ) {
+                continue;
+            }
+            let (source, paragraph) = self.story_range_paragraph_source(&location)?;
+            let text_box = scan_story_owners(source.xml.as_ref(), source.root_kind)?
+                .into_iter()
+                .filter(|owner| {
+                    owner.kind == StoryKind::TextBox
+                        && owner.full.start <= paragraph.full.start
+                        && owner.full.end >= paragraph.full.end
+                })
+                .min_by_key(|owner| owner.full.len());
+            if let Some(text_box) = text_box
+                && seen.insert((
+                    source.part_name.clone(),
+                    paragraph.full.start,
+                    paragraph.full.end,
+                ))
+            {
+                result.push(TextBoxCacheParagraph {
+                    location,
+                    xml,
+                    owner_index: text_box.owner_index,
+                    paragraph_index: paragraph.full.start,
+                });
+            }
+        }
+        result.sort_by(|left, right| {
+            (
+                left.location.story.part_name.as_str(),
+                left.owner_index,
+                left.paragraph_index,
+            )
+                .cmp(&(
+                    right.location.story.part_name.as_str(),
+                    right.owner_index,
+                    right.paragraph_index,
+                ))
+        });
+        let mut ordinals = HashMap::<(String, usize), usize>::new();
+        for paragraph in &mut result {
+            let ordinal = ordinals
+                .entry((
+                    paragraph.location.story.part_name.clone(),
+                    paragraph.owner_index,
+                ))
+                .or_default();
+            paragraph.paragraph_index = *ordinal;
+            *ordinal += 1;
+        }
+        Ok(result)
     }
 
     pub(crate) fn story_range_paragraphs(&self) -> Result<Vec<(ContentLocation, Vec<u8>)>> {
@@ -24932,21 +25455,7 @@ impl Document {
     fn header_footer_rel_ids_for_layout(&self) -> HashSet<String> {
         let even_headers_enabled = self.even_headers_enabled();
         let mut rel_ids = HashSet::new();
-        let sections = self
-            .document
-            .body
-            .content
-            .iter()
-            .filter_map(|content| match content {
-                BodyContent::Paragraph(paragraph) => paragraph
-                    .properties
-                    .as_ref()
-                    .and_then(|properties| properties.sect_pr.as_ref()),
-                BodyContent::Table(_) | BodyContent::ContentControl(_) | BodyContent::RawXml(_) => {
-                    None
-                }
-            })
-            .chain(self.document.body.sect_pr.iter());
+        let sections = rdocx_layout::engine::document_sections(&self.document);
         for section in sections {
             for reference in section.header_refs.iter().chain(&section.footer_refs) {
                 if reference.hdr_ftr_type != HdrFtrType::Even || even_headers_enabled {
@@ -25927,11 +26436,38 @@ impl Document {
     }
 
     /// Build a LayoutInput from the document's current state.
-    fn build_layout_input(&self) -> rdocx_layout::LayoutInput {
+    fn layout_story_body(&self, story: &StoryId) -> Result<rdocx_oxml::document::CT_Body> {
+        let (source, owner) = self.story_source_and_owner(story)?;
+        let xml = source.xml.as_ref();
+        let mut projected = br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>"#.to_vec();
+        for item in direct_story_content_items(xml, &owner)? {
+            let scope = story_namespace_scope_at(xml, item.full.start)?;
+            projected.extend(close_content_fragment_namespaces(&xml[item.full], &scope)?);
+        }
+        projected.extend(b"</w:body></w:document>");
+        Ok(rdocx_oxml::document::CT_Document::from_xml(&projected)?.body)
+    }
+
+    pub(crate) fn build_layout_input(&self) -> rdocx_layout::LayoutInput {
+        let modern_compatibility = self.settings.as_ref().is_some_and(|settings| {
+            settings.compatibility_settings().iter().any(|setting| {
+                setting.name == "compatibilityMode"
+                    && setting.uri == "http://schemas.microsoft.com/office/word"
+                    && setting
+                        .value
+                        .trim()
+                        .parse::<u32>()
+                        .is_ok_and(|mode| mode >= 15)
+            })
+        });
         use oxml_opc::relationship::rel_types;
         use rdocx_layout::{ImageData, LayoutInput};
         use std::collections::HashMap;
 
+        let mut story_part_names = HashMap::from([(
+            rdocx_layout::WordStory::Document,
+            self.doc_part_name.clone(),
+        )]);
         let mut headers: HashMap<String, CT_HdrFtr> = HashMap::new();
         let mut footers: HashMap<String, CT_HdrFtr> = HashMap::new();
         let mut images: HashMap<String, ImageData> = HashMap::new();
@@ -25983,6 +26519,12 @@ impl Document {
                         if let Some(xml) = self.package.get_part(&part_name)
                             && let Ok(hf) = CT_HdrFtr::from_xml(xml)
                         {
+                            story_part_names.insert(
+                                rdocx_layout::WordStory::Header {
+                                    relationship_id: rel.id.clone(),
+                                },
+                                part_name.clone(),
+                            );
                             headers.insert(rel.id.clone(), hf);
                         }
                         insert_part_images(&mut images, &rel.id, &part_name);
@@ -25998,6 +26540,12 @@ impl Document {
                         if let Some(xml) = self.package.get_part(&part_name)
                             && let Ok(hf) = CT_HdrFtr::from_xml(xml)
                         {
+                            story_part_names.insert(
+                                rdocx_layout::WordStory::Footer {
+                                    relationship_id: rel.id.clone(),
+                                },
+                                part_name.clone(),
+                            );
                             footers.insert(rel.id.clone(), hf);
                         }
                         insert_part_images(&mut images, &rel.id, &part_name);
@@ -26051,6 +26599,14 @@ impl Document {
                             OpcPackage::resolve_rel_target(&self.doc_part_name, &rel.target);
                         if let Some(xml) = self.package.get_part(&part_name) {
                             footnotes = rdocx_oxml::footnotes::CT_Footnotes::from_xml(xml).ok();
+                            if let Some(stream) = &footnotes {
+                                for note in &stream.footnotes {
+                                    story_part_names.insert(
+                                        rdocx_layout::WordStory::Footnote { id: note.id },
+                                        part_name.clone(),
+                                    );
+                                }
+                            }
                         }
                     }
                     t if t == rel_types::ENDNOTES => {
@@ -26061,6 +26617,14 @@ impl Document {
                             OpcPackage::resolve_rel_target(&self.doc_part_name, &rel.target);
                         if let Some(xml) = self.package.get_part(&part_name) {
                             endnotes = rdocx_oxml::footnotes::CT_Footnotes::from_xml(xml).ok();
+                            if let Some(stream) = &endnotes {
+                                for note in &stream.footnotes {
+                                    story_part_names.insert(
+                                        rdocx_layout::WordStory::Endnote { id: note.id },
+                                        part_name.clone(),
+                                    );
+                                }
+                            }
                         }
                     }
                     _ => {}
@@ -26123,6 +26687,63 @@ impl Document {
             &footers.keys().cloned().collect(),
         );
 
+        if let Some(story) = self.stories().ok().and_then(|stories| {
+            stories
+                .into_iter()
+                .find(|story| story.kind == StoryKind::Body)
+        }) && let Ok((source, owner)) = self.story_source_and_owner(&story)
+            && bind_text_box_source_owners(
+                &mut document.body,
+                source.xml.as_ref(),
+                source.root_kind,
+                owner.full,
+            )
+            .is_err()
+        {
+            // Binding is atomic. Unresolved physical owners retain their caches.
+        }
+
+        let mut story_bodies = HashMap::new();
+        if let Ok(stories) = self.stories() {
+            for (identity, part_name) in &story_part_names {
+                let kind = match identity {
+                    rdocx_layout::WordStory::Header { .. } => StoryKind::Header,
+                    rdocx_layout::WordStory::Footer { .. } => StoryKind::Footer,
+                    rdocx_layout::WordStory::Footnote { .. } => StoryKind::Footnote,
+                    rdocx_layout::WordStory::Endnote { .. } => StoryKind::Endnote,
+                    _ => continue,
+                };
+                let story = match identity {
+                    rdocx_layout::WordStory::Footnote { id } => {
+                        self.footnote_story(*id).ok().flatten()
+                    }
+                    rdocx_layout::WordStory::Endnote { id } => {
+                        self.endnote_story(*id).ok().flatten()
+                    }
+                    _ => stories
+                        .iter()
+                        .find(|story| story.kind == kind && &story.part_name == part_name)
+                        .cloned(),
+                };
+                if let Some(story) = story
+                    && let Ok(mut body) = self.layout_story_body(&story)
+                {
+                    if let Ok((source, owner)) = self.story_source_and_owner(&story)
+                        && bind_text_box_source_owners(
+                            &mut body,
+                            source.xml.as_ref(),
+                            source.root_kind,
+                            owner.full,
+                        )
+                        .is_err()
+                    {
+                        // The unbound authoritative projection remains renderable.
+                    }
+                    story_bodies.insert(identity.clone(), body);
+                }
+            }
+        }
+
         LayoutInput {
             revision_view: rdocx_layout::RevisionView::Accepted,
             document,
@@ -26134,17 +26755,17 @@ impl Document {
                 .settings
                 .as_ref()
                 .and_then(CT_Settings::default_tab_stop),
-            clamp_tabs_past_margin: self.settings.as_ref().is_some_and(|settings| {
-                settings.compatibility_settings().iter().any(|setting| {
-                    setting.name == "compatibilityMode"
-                        && setting.uri == "http://schemas.microsoft.com/office/word"
-                        && setting
-                            .value
-                            .trim()
-                            .parse::<u32>()
-                            .is_ok_and(|mode| mode >= 15)
+            clamp_tabs_past_margin: modern_compatibility,
+            modern_footnote_layout: modern_compatibility,
+            footnote_layout_like_word8: self
+                .settings
+                .as_ref()
+                .and_then(|settings| {
+                    settings.compatibility_option(
+                        rdocx_oxml::settings::CompatibilityOption::FootnoteLayoutLikeWW8,
+                    )
                 })
-            }),
+                .unwrap_or(false),
             mirror_margins: self
                 .settings
                 .as_ref()
@@ -26180,6 +26801,8 @@ impl Document {
             ],
             styles: self.styles.clone(),
             numbering: self.numbering.clone(),
+            story_part_names,
+            story_bodies,
             headers,
             footers,
             images,
@@ -26685,28 +27308,7 @@ fn materialize_header_footer_inheritance(
             }
         }
     };
-    for content in &mut document.body.content {
-        if let BodyContent::Paragraph(paragraph) = content
-            && let Some(section) = paragraph
-                .properties
-                .as_mut()
-                .and_then(|properties| properties.sect_pr.as_mut())
-        {
-            inherit(
-                &mut section.header_refs,
-                &mut effective_headers,
-                available_headers,
-                even_headers_enabled,
-            );
-            inherit(
-                &mut section.footer_refs,
-                &mut effective_footers,
-                available_footers,
-                false,
-            );
-        }
-    }
-    if let Some(section) = document.body.sect_pr.as_mut() {
+    let mut apply = |section: &mut CT_SectPr| {
         inherit(
             &mut section.header_refs,
             &mut effective_headers,
@@ -26719,6 +27321,49 @@ fn materialize_header_footer_inheritance(
             available_footers,
             false,
         );
+    };
+    // Match document_sections: only main-story paragraphs and block controls
+    // end sections. A paragraph in a table cell does not end a body section.
+    fn control_sections(control: &mut CT_Sdt) -> Vec<&mut CT_SectPr> {
+        let mut sections = Vec::new();
+        for content in &mut control.content {
+            match content {
+                SdtContent::Paragraph(paragraph) => {
+                    if let Some(section) = paragraph
+                        .properties
+                        .as_mut()
+                        .and_then(|properties| properties.sect_pr.as_mut())
+                    {
+                        sections.push(section);
+                    }
+                }
+                SdtContent::ContentControl(control) => sections.extend(control_sections(control)),
+                _ => {}
+            }
+        }
+        sections
+    }
+    for content in &mut document.body.content {
+        match content {
+            BodyContent::Paragraph(paragraph) => {
+                if let Some(section) = paragraph
+                    .properties
+                    .as_mut()
+                    .and_then(|properties| properties.sect_pr.as_mut())
+                {
+                    apply(section);
+                }
+            }
+            BodyContent::ContentControl(control) => {
+                for section in control_sections(control) {
+                    apply(section);
+                }
+            }
+            BodyContent::Table(_) | BodyContent::RawXml(_) => {}
+        }
+    }
+    if let Some(section) = document.body.sect_pr.as_mut() {
+        apply(section);
     }
 }
 
@@ -28366,6 +29011,30 @@ mod tests {
     const FX087_PAGES_BUILD: &str = "7044.0.273";
     const FX087_CANDIDATE_SHA256: &str =
         "ab67b50393fc5258f7a3e9719344639d665feccc2615b13cab1915ea9a84566b";
+
+    #[test]
+    fn pagination_update_publishes_one_atomic_candidate() {
+        let mut document = Document::new();
+        for name in ["PAGE", "NUMPAGES", "SECTION", "SECTIONPAGES"] {
+            document
+                .add_paragraph("")
+                .add_run("")
+                .add_field(name, "OLD")
+                .unwrap();
+        }
+        document.set_header("physical header");
+        document.to_bytes().unwrap();
+        LAYOUT_INVOCATIONS.set(0);
+        let report = document.update_layout_backed_fields().unwrap();
+        assert_eq!(report.updated_count(), 4);
+        assert_eq!(LAYOUT_INVOCATIONS.get(), 1);
+        let saved = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&saved).unwrap();
+        let evaluations = reopened
+            .evaluate_fields(&crate::field::FieldEvaluationContext::default())
+            .unwrap();
+        assert!(evaluations.iter().all(|field| field.cached_result == "1"));
+    }
 
     #[test]
     fn python_story_inventory_scales_linearly() {

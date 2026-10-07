@@ -382,6 +382,8 @@ pub struct PyLayoutBackedFieldUpdateReport {
     page_fields: usize,
     num_pages_fields: usize,
     page_reference_fields: usize,
+    section_fields: usize,
+    section_pages_fields: usize,
     diagnostics: Vec<String>,
 }
 
@@ -1078,17 +1080,21 @@ impl PyTocRebuildReport {
 #[pymethods]
 impl PyLayoutBackedFieldUpdateReport {
     #[new]
-    #[pyo3(signature = (*, page_fields, num_pages_fields, page_reference_fields, diagnostics))]
+    #[pyo3(signature = (*, page_fields, num_pages_fields, page_reference_fields, diagnostics, section_fields=0, section_pages_fields=0))]
     fn new(
         page_fields: usize,
         num_pages_fields: usize,
         page_reference_fields: usize,
         diagnostics: Vec<String>,
+        section_fields: usize,
+        section_pages_fields: usize,
     ) -> Self {
         Self {
             page_fields,
             num_pages_fields,
             page_reference_fields,
+            section_fields,
+            section_pages_fields,
             diagnostics,
         }
     }
@@ -1109,8 +1115,22 @@ impl PyLayoutBackedFieldUpdateReport {
     }
 
     #[getter]
+    fn section_fields(&self) -> usize {
+        self.section_fields
+    }
+
+    #[getter]
+    fn section_pages_fields(&self) -> usize {
+        self.section_pages_fields
+    }
+
+    #[getter]
     fn updated_count(&self) -> usize {
-        self.page_fields + self.num_pages_fields + self.page_reference_fields
+        self.page_fields
+            + self.num_pages_fields
+            + self.page_reference_fields
+            + self.section_fields
+            + self.section_pages_fields
     }
 
     #[getter]
@@ -3527,6 +3547,8 @@ impl PyDocument {
             page_fields: report.page_fields,
             num_pages_fields: report.num_pages_fields,
             page_reference_fields: report.page_reference_fields,
+            section_fields: report.section_fields,
+            section_pages_fields: report.section_pages_fields,
             diagnostics: report.diagnostics,
         })
     }

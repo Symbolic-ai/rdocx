@@ -660,6 +660,10 @@ typed XML controls rather than literal XML-invalid display characters. A nested
 field replacement invalidates the unchanged-source shortcut even when its
 display text stays equal. Lock edits rewrite only the physical simple owner or
 complex begin marker, retaining opaque subtrees and namespace bindings.
+Nested simple-cache projection reuses the producer's effective Word alias without
+replacing an occupied prefix. Cache writes retain aliased owner bindings and source text aliases. Only
+source-less generated result elements receive a local canonical binding. Foreign cached subtrees keep
+their original bytes and never become typed pagination identities.
  Tracked insertion projection retains inline paragraph
 structure and nested revision boundaries, with a fixed depth ceiling checked
 before recursive projection.
@@ -735,15 +739,38 @@ or malformed producer value stays unmodelled and byte-preserved, and an
 explicit mutation rejects that ambiguous ownership before publication. The two
 methods are additive pre-1.0 `rdocx` API.
 
-`Document::update_layout_backed_fields` is the separate pagination-aware entry
-point for PAGE, NUMPAGES, and resolved PAGEREF caches. It lays out one staged
-candidate deterministically, reads each placed field through its layout field
-identity, and writes only those caches through the same traversal and
-validated story patching. The owned report separates the three updated counts
-and retains ordered layout diagnostics. `Document::update_page_fields` is the
-count-only compatibility wrapper over that operation. Every unsupported or
-unplaced field keeps its cache and dirty spelling, and `update_fields` still
-defers every layout-backed field kind.
+`Document::update_layout_backed_fields` materializes PAGE, NUMPAGES, SECTION,
+SECTIONPAGES and resolved PAGEREF through one staged deterministic layout.
+Its immutable snapshot retains physical pages, displayed numbering, every section
+occupying a continuous page, bookmark target ownership and recursive field
+placements. Field indices follow preorder through instructions and cached results.
+Cached children have their own display placement. Instruction operands inherit
+only their owning field's placement. Locks propagate to descendants.
+
+Physical source identity covers modeled paragraphs, tables, controls, headers,
+footers, notes and selected typed text boxes. Actual OPC names remain distinct
+from logical source paths. Rich related-story and text-box bodies replace their
+paragraph-only projections when present. Text-box source owner ordinals bind
+from actual namespace-qualified anchor occurrences before shaping, including
+identical anchors and earlier unregistered owners. Original DrawingML and opaque
+fallbacks remain serialization authorities. Cache staging validates the exact
+field source inside the matched physical owner before publishing atomically.
+Physical binding traverses all revision and raw owner slots before accepted
+selection. Opaque occurrences consume identity without becoming editable stories.
+Accepted revision projection metadata survives without serialization and reparsing.
+Authoritative rich story bodies and actual part names participate in reusable
+context and header/footer cache identity, including note-only invalidation.
+
+
+The report separates five counts and retains ordered diagnostics. The count-only
+`update_page_fields` wrapper uses the same operation. PAGE follows its field's
+section format and PAGEREF follows the target's format. A unique placed target
+permits unlocked PAGEREF updates in unused source stories. Other unplaced fields,
+missing or ambiguous targets, unsupported switches and locked fields retain their
+caches. Saved header and footer PAGE and NUMPAGES caches remain unchanged under
+the pinned Word policy, while dynamic rendering uses per-page values. Note PAGE
+and SECTION follow the unique body reference owner even when document-end note
+text is printed on a later physical page. No second layout resolves these facts.
 
 The native facade also rebuilds supported existing main-story table of
 contents fields. It reparses each owned instruction through the same recursive

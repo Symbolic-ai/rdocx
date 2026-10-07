@@ -1997,6 +1997,58 @@ followed by `pageBreakBefore`. Single-break controls remain two pages. Focused
 paginator controls retain separate transitions across intervening content,
 visible continuation formatting, line breaks, and column breaks.
 
+The all-story pagination-field differential gate pins fresh Microsoft Word for
+Mac 16.113.2 build 16.113.26092012 source, saved DOCX and offline PDF captures.
+Source-built cases retain exact normalized labels, instructions, wire forms,
+geometry, section references and bookmark ownership. Saved fields join by source
+owner and label, accommodating Word's normal note-ID renumbering without guessing.
+Shared, complex, continuous, restart, first/even/default furniture and note/text-box
+cases assert literal cache policy. The mixed-format matrix compares 252 actual
+saved fields across six pages and three numbering formats. Continuous furniture
+and restart cases compare 70 saved fields. Two reference-owner note cases compare
+90 fields and distinguish printed endnote pages from their semantic PAGE owner.
+
+Compatibility minimal pairs alter only mode 12 versus 15, the direct WW8 flag or
+the second-section footnote-reference run location. Their body-only update procedure
+gates pagination and body caches, with no full-update note PAGEREF claim. Immediate
+true and false controls both advance. The delayed true control shares early body
+content and advances at the later footnote-bearing paragraph. Exact source and
+artifact hashes authenticate these records. No older capture is relabeled.
+
+Aliased nested caches retain inherited foreign prefix bindings, opaque cache bytes
+and only genuine field identities through update, save and reopen. Three-level
+simple and complex caches cover a locked middle owner, rendered literal retention
+and original dirty/lock flags, alongside unlocked dynamic descendants. A unique
+control-owned first header and footer activates on its section and is inherited
+by a following section whose references are absent, with per-section live values.
+
+Actual no-F9 saved-output reopens cover all 18 cases and retain all 957 fields,
+with zero cache, dirty or lock changes and 180 successful source-contract checks.
+The same pinned Word build opens offline, exports Best printing PDF, saves and
+closes. Exact initial and reopened artifact hashes retain the provenance chain.
+Partial initial update scopes remain explicit. This Word stability rider is
+separate from native update, save and reopen cache comparisons.
+
+Source-built review regressions retain exact generated-text provenance, separate
+structural note-reference rebinding, default and explicit document-end bounded
+restart, unused note-part eligibility, fitting and multi-page note flow, accepted
+insertion and move-destination owners, inline controls inside revisions, identical
+deleted and moved-away predecessors and identical opaque predecessors. Direct
+and selected MC drawings in one run retain physical child order. Foreign Word
+prefix rebinding stays opaque despite canonical fragment fallback. Public warm
+and fresh layout comparisons cover authoritative rich body and part-name edits
+for all related story families.
+
+
+Focused regressions cover all four nested cache wire-form pairs across page and
+column breaks, invisible children, direct formatting, parent locks, atomic failure,
+control-owned section formats, rich related tables and controls, distinct physical
+identical text boxes, earlier unregistered owners, once-only section-end boundaries,
+wrapped multirow note tables and physical continuation with reference-owned values.
+Preservation checks retain unknown producer XML, relationships and opaque selected
+story boundaries. Deterministic bundled fonts remain mandatory for rendering and
+the normal hash harness still gates the integrated result.
+
 The contributor reader-fact regression combines strict document and body
 boundaries, first section properties, missing revision authors, empty simple
 fields, bounded nested tables, marker child-content facts, effective complex

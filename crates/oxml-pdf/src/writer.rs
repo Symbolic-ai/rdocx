@@ -2111,6 +2111,7 @@ mod tests {
             field_kind: None,
             field_source: None,
             note: None,
+            note_reference_source: None,
         }
     }
 
@@ -2868,6 +2869,7 @@ mod tests {
             field_kind: None,
             field_source: None,
             note: None,
+            note_reference_source: None,
             tab_aligned: None,
         });
         let pdf = tagged_pdf(
@@ -2966,6 +2968,7 @@ mod tests {
                         field_kind: None,
                         field_source: None,
                         note: None,
+                        note_reference_source: None,
                         tab_aligned: None,
                     })],
                 }])
@@ -3297,6 +3300,7 @@ mod tests {
             field_kind: None,
             field_source: None,
             note: None,
+            note_reference_source: None,
             tab_aligned: None,
         });
         let layout = LayoutResult::new(
@@ -3599,6 +3603,7 @@ mod tests {
                 field_kind: None,
                 field_source: None,
                 note: None,
+                note_reference_source: None,
                 tab_aligned: None,
             }),
             PositionedElement::Image {

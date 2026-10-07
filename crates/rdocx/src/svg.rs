@@ -1102,6 +1102,7 @@ mod tests {
             field_kind: None,
             field_source: None,
             note: None,
+            note_reference_source: None,
             tab_aligned: None,
         })
     }
@@ -1169,6 +1170,7 @@ mod tests {
             field_kind: None,
             field_source: None,
             note: None,
+            note_reference_source: None,
         });
 
         let result = render_page(&layout(vec![rich]), 0).unwrap();
@@ -1221,6 +1223,7 @@ mod tests {
             field_kind: None,
             field_source: None,
             note: None,
+            note_reference_source: None,
         });
 
         let result = render_page(&layout(vec![rich]), 0).unwrap();
@@ -2164,6 +2167,7 @@ mod tests {
                 field_kind: None,
                 field_source: None,
                 note: None,
+                note_reference_source: None,
                 tab_aligned: None,
             }),
             font,

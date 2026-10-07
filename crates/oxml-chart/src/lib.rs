@@ -1417,6 +1417,7 @@ fn shape_label_with_properties(
         field_kind: None,
         field_source: None,
         note: None,
+        note_reference_source: None,
         tab_aligned: None,
     })
 }

@@ -1680,7 +1680,7 @@ fn layout_cell_content(
         match item {
             CellContent::Paragraph(para) => {
                 let source = sources.and_then(|sources| sources.id(story, &source_path));
-                let (block, reflow_direction) = engine::layout_paragraph_with_source_in_table(
+                let (mut block, reflow_direction) = engine::layout_paragraph_with_source_in_table(
                     para,
                     available_width,
                     styles,
@@ -1694,6 +1694,9 @@ fn layout_cell_content(
                     table_style_rpr,
                     doc_grid,
                 )?;
+                if let Some(registry) = sources {
+                    registry.bind_text_boxes(&mut block, source)?;
+                }
                 blocks.push(CellBlock::Paragraph(block));
                 semantics.push(CellBlockSemantics::Paragraph(ParagraphSemantics {
                     source_node: source,
@@ -1786,7 +1789,7 @@ fn layout_control_cell_content(
         match content {
             SdtContent::Paragraph(paragraph) => {
                 let source = sources.and_then(|sources| sources.id(story, &source_path));
-                let (block, reflow_direction) = engine::layout_paragraph_with_source_in_table(
+                let (mut block, reflow_direction) = engine::layout_paragraph_with_source_in_table(
                     paragraph,
                     available_width,
                     styles,
@@ -1800,6 +1803,9 @@ fn layout_control_cell_content(
                     table_style_rpr,
                     doc_grid,
                 )?;
+                if let Some(registry) = sources {
+                    registry.bind_text_boxes(&mut block, source)?;
+                }
                 blocks.push(CellBlock::Paragraph(block));
                 semantics.push(CellBlockSemantics::Paragraph(ParagraphSemantics {
                     source_node: source,
@@ -2199,6 +2205,8 @@ mod tests {
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
+            modern_footnote_layout: false,
+            footnote_layout_like_word8: false,
             math_properties: None,
             note_defaults: [None, None],
             document: rdocx_oxml::document::CT_Document {
@@ -2213,6 +2221,8 @@ mod tests {
             },
             styles: styles.clone(),
             numbering: None,
+            story_part_names: Default::default(),
+            story_bodies: Default::default(),
             headers: std::collections::HashMap::new(),
             footers: std::collections::HashMap::new(),
             images: std::collections::HashMap::new(),
@@ -2393,6 +2403,8 @@ mod tests {
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
+            modern_footnote_layout: false,
+            footnote_layout_like_word8: false,
             math_properties: None,
             note_defaults: [None, None],
             document: rdocx_oxml::document::CT_Document {
@@ -2407,6 +2419,8 @@ mod tests {
             },
             styles: styles.clone(),
             numbering: None,
+            story_part_names: Default::default(),
+            story_bodies: Default::default(),
             headers: std::collections::HashMap::new(),
             footers: std::collections::HashMap::new(),
             images: std::collections::HashMap::new(),

@@ -2185,6 +2185,7 @@ mod tests {
             field_kind: None,
             field_source: None,
             note: None,
+            note_reference_source: None,
         }
     }
 
@@ -2787,6 +2788,7 @@ mod tests {
                     field_kind: None,
                     field_source: None,
                     note: None,
+                    note_reference_source: None,
                 },
                 None,
                 TextDirection::LeftToRight,

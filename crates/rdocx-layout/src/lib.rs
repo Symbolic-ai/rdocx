@@ -24,10 +24,22 @@ use rdocx_oxml::document::BodyContent;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum WordStory {
     Document,
-    Header { relationship_id: String },
-    Footer { relationship_id: String },
-    Footnote { id: i32 },
-    Endnote { id: i32 },
+    Header {
+        relationship_id: String,
+    },
+    Footer {
+        relationship_id: String,
+    },
+    Footnote {
+        id: i32,
+    },
+    Endnote {
+        id: i32,
+    },
+    TextBox {
+        part_name: String,
+        owner_children: Vec<usize>,
+    },
 }
 
 /// Modeled path to one paragraph in a Word story.
@@ -54,6 +66,26 @@ pub struct WordBodyLayoutFragment {
     pub height: f64,
 }
 
+/// One physical page occupied by a section in this immutable layout snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WordPageSection {
+    pub physical_page: usize,
+    pub displayed_page: usize,
+    pub section_index: usize,
+}
+
+/// One occurrence of a field in this immutable layout snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WordFieldPlacement {
+    pub source: oxml_layout::FieldSource,
+    /// Physical page on which this field display is painted.
+    pub physical_page: usize,
+    /// Word's semantic PAGE value. Note fields use their unique reference page.
+    pub displayed_page: usize,
+    /// Owning section, following the unique reference for note fields.
+    pub section_index: usize,
+}
+
 /// Complete layout output plus its result-local Word source map.
 #[derive(Debug)]
 pub struct WordLayoutResult {
@@ -63,9 +95,67 @@ pub struct WordLayoutResult {
     body_fragments: Vec<Vec<WordBodyLayoutFragment>>,
     numbering_by_source: Vec<Option<style_resolver::ResolvedNumbering>>,
     page_reference_names: Vec<String>,
+    page_sections: Vec<WordPageSection>,
+    field_placements: Vec<WordFieldPlacement>,
+    bookmark_pages: std::collections::HashMap<usize, WordPageSection>,
+    field_source_xml: std::collections::HashMap<oxml_layout::FieldSource, Vec<u8>>,
+    text_box_owner_indices: std::collections::HashMap<WordStory, usize>,
 }
 
 impl WordLayoutResult {
+    /// Physical and displayed section placement from the same pagination pass.
+    pub fn page_sections(&self) -> &[WordPageSection] {
+        &self.page_sections
+    }
+
+    /// Exact parsed text-box field source used to bind a physical story paragraph.
+    #[doc(hidden)]
+    pub fn source_field_xml(&self, source: oxml_layout::FieldSource) -> Option<&[u8]> {
+        self.field_source_xml.get(&source).map(Vec::as_slice)
+    }
+
+    /// Physical selected text-box owner identity in its actual OPC part.
+    #[doc(hidden)]
+    pub fn text_box_owner_index(&self, story: &WordStory) -> Option<usize> {
+        self.text_box_owner_indices.get(story).copied()
+    }
+
+    /// Physical paragraph preorder within one selected text-box owner.
+    #[doc(hidden)]
+    pub fn text_box_paragraph_index(&self, node: SourceNodeId) -> Option<usize> {
+        let index = node.get() as usize - 1;
+        let path = self.source_node(node)?;
+        if !matches!(path.story, WordStory::TextBox { .. }) {
+            return None;
+        }
+        Some(
+            self.source_nodes[..index]
+                .iter()
+                .filter(|other| other.story == path.story)
+                .count(),
+        )
+    }
+
+    /// Every placed field occurrence, including shared story repetitions.
+    pub fn field_placements(&self) -> &[WordFieldPlacement] {
+        &self.field_placements
+    }
+
+    /// Displayed page of a unique, placed bookmark target.
+    pub fn bookmark_page(&self, name: &str) -> Option<usize> {
+        self.bookmark_page_section(name)
+            .map(|record| record.displayed_page)
+    }
+
+    /// Physical page, displayed number and owning section of a unique placed target.
+    pub fn bookmark_page_section(&self, name: &str) -> Option<WordPageSection> {
+        let index = self
+            .page_reference_names
+            .iter()
+            .position(|value| value == name)?;
+        self.bookmark_pages.get(&index).copied()
+    }
+
     /// Return placed fragments for one direct body item by its source index.
     ///
     /// Modeled items return one fragment per occupied page. Preserved content
@@ -144,12 +234,18 @@ pub fn layout_document_with_provenance(input: &LayoutInput) -> Result<WordLayout
     let mut engine = engine::Engine::new();
     let (layout, source_nodes) = engine.layout_with_provenance(input)?;
     let body_fragments = engine.take_body_fragments();
+    let (page_sections, field_placements, bookmark_pages) = engine.take_field_snapshot();
     let numbering_by_source = engine.numbering_by_source(source_nodes.len());
     Ok(WordLayoutResult {
         layout,
         revision_view: input.revision_view,
         source_nodes,
         body_fragments,
+        page_sections,
+        field_placements,
+        bookmark_pages,
+        field_source_xml: engine.take_field_source_xml(),
+        text_box_owner_indices: engine.take_text_box_owner_indices(),
         numbering_by_source,
         page_reference_names: engine::page_reference_names(input),
     })
@@ -166,12 +262,18 @@ pub fn layout_document_with_reusable_engine(
 ) -> Result<WordLayoutResult> {
     let (layout, source_nodes) = engine.layout_with_provenance(input)?;
     let body_fragments = engine.take_body_fragments();
+    let (page_sections, field_placements, bookmark_pages) = engine.take_field_snapshot();
     let numbering_by_source = engine.numbering_by_source(source_nodes.len());
     Ok(WordLayoutResult {
         layout,
         revision_view: input.revision_view,
         source_nodes,
         body_fragments,
+        page_sections,
+        field_placements,
+        bookmark_pages,
+        field_source_xml: engine.take_field_source_xml(),
+        text_box_owner_indices: engine.take_text_box_owner_indices(),
         numbering_by_source,
         page_reference_names: engine::page_reference_names(input),
     })
@@ -185,12 +287,18 @@ pub fn layout_document_with_caller_fonts_and_provenance(
     let mut engine = engine::Engine::new_with_caller_fonts();
     let (layout, source_nodes) = engine.layout_with_provenance(input)?;
     let body_fragments = engine.take_body_fragments();
+    let (page_sections, field_placements, bookmark_pages) = engine.take_field_snapshot();
     let numbering_by_source = engine.numbering_by_source(source_nodes.len());
     Ok(WordLayoutResult {
         layout,
         revision_view: input.revision_view,
         source_nodes,
         body_fragments,
+        page_sections,
+        field_placements,
+        bookmark_pages,
+        field_source_xml: engine.take_field_source_xml(),
+        text_box_owner_indices: engine.take_text_box_owner_indices(),
         numbering_by_source,
         page_reference_names: engine::page_reference_names(input),
     })
@@ -227,12 +335,18 @@ pub fn layout_document_deterministic_with_provenance(
     let mut engine = engine::Engine::new_deterministic()?;
     let (layout, source_nodes) = engine.layout_with_provenance(input)?;
     let body_fragments = engine.take_body_fragments();
+    let (page_sections, field_placements, bookmark_pages) = engine.take_field_snapshot();
     let numbering_by_source = engine.numbering_by_source(source_nodes.len());
     Ok(WordLayoutResult {
         layout,
         revision_view: input.revision_view,
         source_nodes,
         body_fragments,
+        page_sections,
+        field_placements,
+        bookmark_pages,
+        field_source_xml: engine.take_field_source_xml(),
+        text_box_owner_indices: engine.take_text_box_owner_indices(),
         numbering_by_source,
         page_reference_names: engine::page_reference_names(input),
     })

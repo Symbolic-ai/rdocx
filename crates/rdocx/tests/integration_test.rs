@@ -19541,11 +19541,15 @@ mod advanced_table_authoring_and_geometry {
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
+            modern_footnote_layout: false,
+            footnote_layout_like_word8: false,
             math_properties: None,
             note_defaults: [None, None],
             document,
             styles: rdocx_oxml::styles::CT_Styles::new_default(),
             numbering: None,
+            story_part_names: Default::default(),
+            story_bodies: Default::default(),
             headers: std::collections::HashMap::new(),
             footers: std::collections::HashMap::new(),
             images: std::collections::HashMap::new(),
@@ -22534,8 +22538,9 @@ fn mixed_rich_notes_match_word_at_section_and_document_end_boundaries() {
     const WORD_ORACLE_VERSION: &str = "Microsoft Word 16.113.2 build 16.113.26092012";
     // Word's AX view of this generated DOCX has two pages. Body markers are
     // 1/i and 2/ii, and both endnotes follow the final body text on page two.
-    // HLD 08 currently appends a fresh endnote page and uses decimal labels.
-    // F-274 owns placement and number-format policy.
+    // F-279 now retains that measured document-end flow on page two.
+    // The authored native default decimal marker policy remains independent
+    // of this bounded physical placement regression.
     const WORD_PAGE_COUNT: usize = 2;
     let mut document = Document::new();
     document.add_paragraph("First section body");
@@ -22590,7 +22595,7 @@ fn mixed_rich_notes_match_word_at_section_and_document_end_boundaries() {
         .collect::<Vec<_>>();
     assert_eq!(
         pages.len(),
-        WORD_PAGE_COUNT + 1,
+        WORD_PAGE_COUNT,
         "{WORD_ORACLE_VERSION}: {text}"
     );
     assert!(pages[0].contains("First section body11"), "{text}");
@@ -22599,9 +22604,8 @@ fn mixed_rich_notes_match_word_at_section_and_document_end_boundaries() {
     assert!(pages[1].contains("Second section body22"), "{text}");
     assert!(!pages[1].contains("Second section body2ii"), "{text}");
     assert!(pages[1].contains("second footnote body"), "{text}");
-    assert!(!pages[1].contains("first endnote body"), "{text}");
-    assert!(pages[2].contains("first endnote body"), "{text}");
-    assert!(pages[2].contains("second endnote body"), "{text}");
+    assert!(pages[1].contains("first endnote body"), "{text}");
+    assert!(pages[1].contains("second endnote body"), "{text}");
 }
 
 #[test]

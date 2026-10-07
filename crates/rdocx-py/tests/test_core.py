@@ -1894,6 +1894,7 @@ def test_update_layout_backed_fields_returns_owned_report():
         source,
         """
         <w:p><w:fldSimple w:instr="PAGE"><w:r><w:t>stale page</w:t></w:r></w:fldSimple><w:fldSimple w:instr="NUMPAGES"><w:r><w:t>stale count</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:fldSimple w:instr="SECTION"><w:r><w:t>stale section</w:t></w:r></w:fldSimple><w:fldSimple w:instr="SECTIONPAGES"><w:r><w:t>stale section count</w:t></w:r></w:fldSimple></w:p>
         <w:p><w:fldSimple w:instr="PAGEREF destination"><w:r><w:t>stale target</w:t></w:r></w:fldSimple></w:p>
         <w:p><w:pPr><w:pageBreakBefore/></w:pPr><w:bookmarkStart w:id="7" w:name="destination"/><w:r><w:t>Target</w:t></w:r><w:bookmarkEnd w:id="7"/></w:p>
         """,
@@ -1905,8 +1906,10 @@ def test_update_layout_backed_fields_returns_owned_report():
         num_pages_fields=1,
         page_reference_fields=1,
         diagnostics=report.diagnostics,
+        section_fields=1,
+        section_pages_fields=1,
     )
-    assert report.updated_count == 3
+    assert report.updated_count == 5
     assert report.diagnostic_count == len(report.diagnostics)
     with pytest.raises(AttributeError):
         report.page_fields = 0
@@ -1914,6 +1917,12 @@ def test_update_layout_backed_fields_returns_owned_report():
     assert b"stale page" not in xml
     assert b"stale count" not in xml
     assert b"stale target" not in xml
+    assert b"stale section" not in xml
+    legacy = rdocx.LayoutBackedFieldUpdateReport(page_fields=0, num_pages_fields=0, page_reference_fields=0, diagnostics=())
+    assert legacy.section_fields == legacy.section_pages_fields == 0
+    assert legacy.updated_count == 0
+    with pytest.raises(AttributeError):
+        report.section_fields = 0
 
 
 def test_pageref_to_a_bookmarked_run_range_is_filled_from_the_layout():
@@ -2546,14 +2555,14 @@ def test_footer_with_text_tab_and_page_fields_is_built_for_one_section():
     assert _story_paragraph_texts(document, "footer") == ["ConfidentialPage 1 of 1"]
 
     report = document.update_layout_backed_fields()
-    assert (report.page_fields, report.num_pages_fields) == (1, 1)
+    assert (report.page_fields, report.num_pages_fields) == (0, 0)
     xml = _story_part(document, footer)
     assert re.search(rb"<w:t>Confidential</w:t>\s*<w:tab/>", xml)
     for instruction in (b"PAGE", b"NUMPAGES"):
         field = re.search(
             rb'w:instr="' + instruction + rb'"[^>]*>\s*<w:r>\s*<w:t>([^<]*)</w:t>', xml
         )
-        assert field is not None and field.group(1) == b"2"
+        assert field is not None and field.group(1) == b"1"
     body = _document_xml(document)
     first_section = body[: body.index(b"First section.")]
     assert b"footerReference" not in first_section
@@ -3504,7 +3513,7 @@ def test_issue_168_complete_edit_save_reopen_layout_and_render(tmp_path):
     assert _anchored_texts(document, comment_id) == ["Target phrase"]
     report = document.update_layout_backed_fields()
     assert (report.page_fields, report.num_pages_fields, report.page_reference_fields) == (
-        1, 1, 1
+        0, 0, 1
     )
 
     path = tmp_path / "issue-168.docx"

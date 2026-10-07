@@ -190,6 +190,29 @@ impl CT_Revision {
         self.content_paragraph.as_deref()
     }
 
+    /// Mutate physical read-projection metadata without rewriting revision XML.
+    /// Used on layout-only clones before selecting the accepted revision view.
+    /// The original raw XML remains the serializer's authority.
+    #[doc(hidden)]
+    pub fn physical_content_paragraph_mut(&mut self) -> crate::Result<Option<&mut CT_P>> {
+        if !matches!(
+            self.kind,
+            RevisionKind::Insertion
+                | RevisionKind::Deletion
+                | RevisionKind::MoveFrom
+                | RevisionKind::MoveTo
+        ) {
+            return Ok(None);
+        }
+        if self.content_paragraph.is_none() {
+            self.content_paragraph = Some(Box::new(parse_accepted_revision_content(
+                &self.raw_xml,
+                &self.parse_word_prefixes,
+            )?));
+        }
+        Ok(self.content_paragraph.as_deref_mut())
+    }
+
     /// Return nested revision wrappers at their direct-run boundaries.
     #[doc(hidden)]
     pub fn nested_revisions(&self) -> &[(usize, CT_Revision)] {
