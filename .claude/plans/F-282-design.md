@@ -21,7 +21,7 @@ Primary source model references are [Microsoft's Source documentation](https://l
 
 ## Approach
 
-F-278 completion is a start barrier. Reuse its recursive FieldInstruction grammar, simple and complex Field constructors, ordered Vec<CT_R> caches and staged attachment transaction. Bibliography results are block paragraphs inside a complex field owner, not newline text in one run.
+F-278 completion is a start barrier. Reuse its recursive FieldInstruction grammar, simple and complex Field constructors, ordered Vec<CT_R> caches and staged attachment transaction. Bibliography results are ordered story blocks inside a complex field owner. Preserve paragraph and table results through existing BodyContent::Paragraph and BodyContent::Table variants, with their actual begin, separate and end boundaries. Do not flatten block results into newline text or inline runs.
 
 The user explicitly selected the full Word catalogue and approved bibliography.rs and the workflow records. Implement the complete source schema, all twelve bibliography styles installed in the pinned Word build, and every bibliography locale Word accepts. Do not reduce this to four source kinds, two styles or en-US. Installed resources provide this metadata inventory, not formatting implementation or parity evidence:
 
@@ -101,7 +101,6 @@ pub enum BibliographyStyle {
 }
 pub struct CitationSourceOptions {
     pub tag: String,
-    pub locale: Option<u32>,
     pub pages: Option<String>,
     pub volume: Option<String>,
     pub prefix: Option<String>,
@@ -112,6 +111,7 @@ pub struct CitationSourceOptions {
 }
 pub struct CitationOptions {
     pub sources: Vec<CitationSourceOptions>,
+    pub locale: Option<u32>,
 }
 pub struct BibliographyOptions {
     pub style: BibliographyStyle,
@@ -174,13 +174,13 @@ Authored tags and GUIDs are validated and unique in the collection. Caller GUIDs
 
 An owned existing source mutation replaces only selected modeled property spans. Retain original unknown root attributes, namespace declarations, style settings, locale data, nonstandard source types, producer contributor extensions, unknown child subtrees and unrelated custom XML bytes. Metadata inside a replaced standard simple-text property is not silently discarded, such input is rejected as an ambiguous owned property. A no-op operation preserves package bytes.
 
-Implement independent concrete Rust formatting for all twelve styles. Use exhaustive BibliographyStyle and BibliographySourceKind matches that select concrete source-member assembly rules. Locale records supply observed names, dates, labels, separators, punctuation and collation policy. Assemble directly into CT_R and CT_P result structures with emphasis and paragraph properties, avoiding a second rendering tree or a forwarding wrapper. Name-list and citation disambiguation state is computed once per source collection. Numeric styles use the observed global citation/source order, while name/title styles use their recorded collation and tie-break rules. Do not sort all locales by Unicode scalar values or approximate full sorting with ASCII lowercase.
+Implement independent concrete Rust formatting for all twelve styles. Use exhaustive BibliographyStyle and BibliographySourceKind matches that select concrete source-member assembly rules. Locale records supply observed names, dates, labels, separators, punctuation and collation policy. Assemble directly into existing CT_R, CT_P and CT_Tbl result structures with run, paragraph, table, grid and cell properties, avoiding a second rendering tree or a forwarding wrapper. Reuse the existing ordered story-block representation and atomic mutation transaction for fields spanning sibling paragraphs and tables. Name-list and citation disambiguation state is computed once per source collection. Numeric styles use the observed global citation/source order, while name/title styles use their recorded collation and tie-break rules. Do not sort all locales by Unicode scalar values or approximate full sorting with ASCII lowercase.
 
 Share actual repeated operations such as name selection, date presentation, citation grouping and source ordering through concrete functions, not a speculative formatting trait. Freeze each style's full source-specific grammar from primary public style references and independently captured Word updates. Include all contributor roles, personal and corporate authors, no-author and multiple-author cases, missing properties, long-name abbreviation, author/year disambiguation, grouped citations, page locators, prefix and suffix, suppression switches, numeric citation assignment, localized dates/labels/punctuation, locale-specific collation, bibliography sort, character/run formatting, hanging-indent layout and source mutation. Preserve exact rich result structure, not just its concatenated text. The user asked for Word's catalogue, so do not substitute a newer edition of a style for the pinned Word edition. Validate public options through F-278's exact instruction grammar. Do not infer switch spellings or style identifiers from public enum names. Any collation dependency need discovered during implementation is a plan revision with dependency-direction and packaging riders, not an excuse to approximate locale semantics.
 
 Every standard source kind, installed catalogue style and Word-accepted locale is supported for authoring and native materialization. An imported nonstandard source discriminator, custom user-provided style, invalid LCID or genuinely unsupported producer extension remains inspectable and unchanged with a stable diagnostic. This fallback boundary must not include any catalogue member. Match Word's observed aliases and fallback choices where Word itself applies them, without an agent-invented en-US fallback. BibliographyStyleInfo preserves imported style identity and reports supported_style=None only for a noncatalogue style. The outer Option is None only when style metadata is absent.
 
-Ordered CitationSourceOptions retain per-source switch association. This is required because Word applies switches to the initial tag or the latest m-tag, not uniformly to every grouped source. BibliographyOptions retains repeated m-source selection and both l-formatting and f-filter locale semantics. Follow [Microsoft's CITATION implementation notes](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/bd78b823-ebd8-432b-89a3-aac7f3de99b4) and [BIBLIOGRAPHY implementation notes](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/1aed887d-2615-4119-b901-ce3ec798cccf). Capture the pinned build's observed behavior when locale switches differ, including Word's documented f/l precedence, and assert it explicitly. Empty tags means unfiltered bibliography selection, while an empty CitationOptions source list is invalid. Citation volume, pages, prefix, suffix and suppression remain separately representable for each source. Other standard field formatting switches remain available through F-278's typed/raw instruction surface and are preserved by this updater.
+Ordered CitationSourceOptions retain per-source pages, volume, prefix, suffix and suppression switches. Captured Word updates visibly apply these switches to the initial tag or the latest m-tag. CitationOptions.locale is the field-wide formatting selector. The captured repeated-l Patent controls use the final locale for both cited sources, so locale must not be modeled as a per-source override. Imported repeated switches keep their original ordered instruction spelling while evaluation follows the captured last-l behavior and explicit source-locale precedence. BibliographyOptions retains repeated m-source selection and both l-formatting and f-filter locale semantics. Follow [Microsoft's CITATION implementation notes](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/bd78b823-ebd8-432b-89a3-aac7f3de99b4) and [BIBLIOGRAPHY implementation notes](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/1aed887d-2615-4119-b901-ce3ec798cccf). Capture the pinned build's observed behavior when locale switches differ, including Word's documented f/l precedence, and assert it explicitly. Empty tags means unfiltered bibliography selection, while an empty CitationOptions source list is invalid. Citation volume, pages, prefix, suffix and suppression remain separately representable for each source. Other standard field formatting switches remain available through F-278's typed/raw instruction surface and are preserved by this updater.
 
 Citation order is document-wide and deterministic, with physical-story ownership used for patches. Discover all sources and result owners before changing a candidate. Compute citations and structured bibliography entries, patch caches and parts, serialize and reparse, then commit once and invalidate layout caches once. Stale positions, duplicate identity, ambiguous ownership and dangling relationships leave complete bytes unchanged. Normal save remains leave alone. Referenced source deletion is rejected across supported physical stories and safely classified preserved CITATION instructions. Ambiguous preserved references make deletion fail closed.
 
@@ -191,6 +191,53 @@ Source LCID 0 denotes runtime selection. Probe the union of this catalogue,
 installed candidates and any additional engine-discovered values. Published
 membership is candidate evidence, not observed acceptance by the pinned build.
 
+
+## Captured block and switch contract clarification
+
+The pinned IEEE matched ordering captures contain fourteen inline CITATION
+owners and fifteen BIBLIOGRAPHY owners per document. Word converts the source
+simple bibliography fields to complex fields. Each bibliography result spans
+a paragraph containing begin and separate, a sibling table, a trailing
+paragraph and a final paragraph containing end. Selected results have one
+row and two cells. The full result has fourteen rows and two cells. Numeric
+labels occupy the left column and rich reference text the right column.
+Preserve actual grid widths, table and cell properties, including the measured
+width difference between one-digit and two-digit labels. Existing CT_Tbl and
+BodyContent supply the concrete representation, with no new rendering tree,
+module or trait.
+
+Source-only reversal preserves all twenty-nine IEEE display results and their
+rich structure apart from explicitly recorded editing and divId metadata.
+Citation-only reversal changes all twenty-nine results, reverses global
+reference numbers and full bibliography rows, and keeps selected references'
+global numeric labels. APA6's matching triple preserves display text for both
+deltas while citation-only reversal changes producer RefOrder values. These
+bounded records discriminate source order from citation encounter order.
+They do not prove a universal collation algorithm or identify indistinguishable
+Smith Title A ties.
+
+APA6 switch pairs discriminate pages, volume, prefix, suffix and author/year
+suppression. Equal title, locale and empty-page results in that pair do not
+prove those branches. The separate Patent locale controls discriminate the
+final repeated field locale and explicit source overrides. Bibliography
+locale-filter controls select source language independently of the contrasting
+formatting locale. Source LCID 0 removal, numeric-to-name LCID normalization,
+and existing RefOrder rewrites are genuine Word source changes and stay
+separate from cache and source-preservation assertions. Preserve imported
+locale spelling, omitted and zero XML under the approved facade contract.
+Do not infer application-default context from proofing language or equal
+display text. Test reference-order metadata against the captured document
+encounter order and preserve all unrelated source members during owned writes.
+
+Embed the authenticated block, association, ordering and locale records in
+the existing regression entrypoint. The IEEE baseline saved DOCX fingerprint
+is be57dd054ef87289aafdea76783d6f275bae2cf3aa260af7d64a760cee23a1dc.
+The source-only and citation-only variants are
+4522d4e1095b25c37f4727ef405495a66ecadd79a3b97913c73100d9649e6c84 and
+9d908b27a8d899ed640f85f007e7845457c3aa76696229adb010910e590db9ec.
+All captures use Word 16.113.2 build 16.113.26092012 and Poppler 26.01.0.
+They are actual update/save captures, with no reopened stability or native
+formatter parity claim yet. Full catalogue scope remains unchanged.
 
 ## Rejected alternatives
 
@@ -214,6 +261,7 @@ the pinned Word identifiers, ordering, display text, and round-trip package.
 | regression | bibliography_invalid_mutations_are_atomic | Duplicate identities, ambiguous collection, wrong graph edge, stale location and referenced deletion preserve complete bytes |
 | regression | noncatalogue_bibliography_keeps_saved_cache | Nonstandard kind, custom style, invalid locale and unknown producer switch retain display with diagnostics, no standard catalogue member takes this path |
 | differential | bibliography_locale_precedence_matches_word | All accepted LCIDs, omitted locale, source/citation/bibliography overrides, regional aliases, collation and Word-native fallback are exact |
+| differential | bibliography_block_and_switch_ownership_matches_word | IEEE table results retain complex block boundaries and global labels, source-only and citation-only ordering differ as captured, per-source switches and field-wide final locale remain distinct |
 | regression | bibliography_catalogue_coverage_is_complete | Installed style keys, schema kind set and captured accepted-locale manifest are fully represented, no skip or unimplemented row |
 | unit | bibliography_schema_particles_and_namespace | Authored child order, prefix aliasing, namespace shadowing and foreign lookalikes |
 
