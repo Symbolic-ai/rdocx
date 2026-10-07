@@ -388,6 +388,22 @@ same-paragraph AFTER discriminator has an ordinary literal run after its target
 before the REF field. Do not claim an end-boundary insert is outside the target
 or change marker attachment to make that test pass.
 
+Share numbered REF selection and validated delimiter formatting through the
+existing concrete ResolvedNumbering implementation in
+`crates/rdocx-layout/src/style_resolver.rs`. Add the hidden method
+`numbered_reference_text(&self, instruction: &FieldInstruction, source: Option<&Self>) -> std::result::Result<String, String>`.
+The facade numbered REF evaluator and layout numbered_ref_text are its two
+actual consumers. Keep caller-owned position and hyperlink handling separate.
+Use the registered numbering context, preserving source delimiters and current
+level literal text. Do not replace every full stop or duplicate formatter rules
+in the facade. The existing authenticated full-context delimiter control has
+`1.1.-Clause 1` before insertion and `2.1.-Clause 1` after insertion. Capture
+level, relative, text-omission, empty-context and embedded-ancestor delimiter
+controls before generalizing beyond that observation. Unsupported or malformed
+operands retain their complete caches with precise diagnostics. Extend existing
+API documentation, all-target checks and affected published archive consumers.
+No new type, trait, generic or file is introduced.
+
 Map reference choices to REF text, level, relative and full-context switches.
 Position, hyperlink and text-omission choices retain their instruction
 semantics. Add validated delimiter and referenced-note copying through the
@@ -599,6 +615,7 @@ pass before completion and may not be replaced by guessed expectations.
 - `crates/rdocx/tests/regression_test.rs`
 - `crates/rdocx/src/document.rs`, if checked story insertion needs an existing-owner helper
 - `crates/rdocx/src/comments.rs`, if paired-target publication needs an existing-owner helper
+- `crates/rdocx-layout/src/style_resolver.rs`, shared concrete numbered REF formatting for facade and layout consumers
 - `crates/rdocx-layout/src/engine.rs`, shared sequence event evaluation and per-page reference display
 - `crates/rdocx-layout/src/lib.rs`, concrete sequence snapshot and event records
 - `crates/rdocx-layout/src/input.rs`, immutable derived snapshot propagation
