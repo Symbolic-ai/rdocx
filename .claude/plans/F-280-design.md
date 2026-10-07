@@ -773,3 +773,35 @@ selected text boxes with no SEQ, controls, uniquely paired ordinary related
 text, duplicate physical name refusal and unchanged main-table numbering.
 Cross-story relative position remains unavailable with complete cache retention
 and a diagnostic, including combined number and position requests.
+
+## Shared physical relative-position projection rider
+
+The existing `WordSequenceSnapshot` may expose hidden concrete
+`bookmark_relative_position(&self, target: &str, source: FieldSource)` returning
+`Result<&'static str, String>`. Reuse the same accepted physical collector to
+retain exact field run boundaries and uniquely paired bookmark endpoints.
+Compare accepted owner-local paragraph order and run boundaries only within
+the same physical story owner. Normalize related header/footer relationship
+aliases to their actual part and preserve note ID and selected text-box owner
+identity. Do not reconstruct source paths from facade indexes, transient
+paragraph addresses or displayed instruction text.
+
+The facade and renderer are two existing consumers of this projection. Replace
+their main-only position special cases with this one qualified comparison.
+Before-target, after-target and same-paragraph cases use exact boundaries.
+Containment, duplicate or malformed target ranges, generated cache membership,
+missing bindings and cross-owner requests retain the complete saved cache
+with the established diagnostic. Validate inherited locks before resolving
+position. Add the private position bindings to snapshot semantic equality and
+retain source-only registration for REF documents with no SEQ events.
+
+This is an additive hidden pre-1.0 layout API in the existing approved files,
+with no new module, file, dependency, trait or interpreter. Include all-target
+consumers, warnings-denied docs, affected verified archives, README archive
+measurements and the ten MiB gate, using the approved HLD impact list. Capture
+bounded native same-owner header, footer, footnote, endnote and selected
+text-box controls without deriving expectations from the implementation.
+Preserve raw cache and provenance when native updates do not reach an owner.
+Do not infer position from an unchanged OLD sentinel. The resulting readable
+regressions must prove pure evaluation, update, saved reopen and deterministic
+painting, while retaining cross-owner fallback and ordinary discovery policy.
