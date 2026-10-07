@@ -6,7 +6,8 @@
 field results across stories, then compose captions, cross-references, indexes,
 citations, and numbering-aware navigation. Build on S89's note and range
 contracts while preserving producer XML and saved field caches.
-Include Issue 264's clearable run formatting setters for declarative wrappers.
+Issue 264 and F-X178 are excluded and carried for separate work. F-282 covers
+the full pinned Word bibliography source, style and locale catalogue.
 
 ## Spec references
 
@@ -38,8 +39,8 @@ consumes S89 range markers. Both depend on F-278. F-281 follows F-278 through
 F-280, while F-282 needs only F-278. F-283 follows F-279 through F-282 and the
 completed numbering foundation. Shared source and test files determine which
 otherwise independent stories can run together after design.
-F-X178 has no feature dependency. It shares `crates/rdocx/src/run.rs` with
-the field builder, so its wave follows F-278's design claims on that file.
+F-X178 remains pending in the backlog and carried in the S90 run state.
+It has no implementation wave in this sprint, honoring the Issue 264 exclusion.
 
 F-X179 adopts PR 271 against all of Issue 270, including multiline text and
 last-paragraph thread metadata. It has no feature dependency. Issue 264 and
@@ -53,5 +54,4 @@ F-X178 remain outside this intake. GitHub closure waits for sprint close.
 - Index, figure and authority tables retain the ordered entries and page targets produced by a pinned Word update.
 - Citation and bibliography identifiers, ordering, display text and package round trips match the pinned Word oracle.
 - One source-built multilevel numbered document stays consistent across visible markers, navigation, references and saved caches.
-- Every direct run property has a `_value` setter that sets, writes explicit false and clears, and the values survive save and reopen.
 - The integrated full verification and sprint review pass, including the source-built document's field caches, page targets and numbering checks. Any intentional hash delta is declared and reviewed.

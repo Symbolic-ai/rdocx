@@ -2002,9 +2002,9 @@ S89 range markers. F-281 follows the field, pagination, and caption work.
 F-282 can proceed after F-278. F-283 closes the composed numbering and
 navigation result. The sprint gate checks one source-built document's field
 caches, page targets, and numbering against the pinned Word oracle.
-The user added F-X178 during S90 after the Issue 264 follow-up. It has no
-feature dependency and shares `run.rs` with F-278, so its wave follows that
-design.
+F-X178 is carried out of the S90 execution at the user's instruction to leave
+Issue 264 alone. Its backlog row remains pending for separate work. F-282
+covers the full pinned Word bibliography source, style and locale catalogue.
 
 F-X179 integrates PR 271 only after every Issue 270 criterion passes. It has
 no dependency and preserves Issue 264 and F-X178 for separate work.
