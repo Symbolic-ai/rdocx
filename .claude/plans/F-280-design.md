@@ -201,6 +201,24 @@ operation explicitly selects a context. The measured normal-close value 16 and
 reopened value 14 are separate lifecycle evidence, not a universal final-context
 cache policy. Library save/reopen does not simulate Word's later recomputation.
 
+Propagate the immutable snapshot through one hidden public
+LayoutInput::sequence_snapshot field of type Option<Arc<WordSequenceSnapshot>>.
+Existing constructors initialize it to None. Complete layout entry points
+regenerate the snapshot against their current SourceRegistry before shaping or
+cache lookup and ignore caller-supplied snapshots. Source-less standalone
+paragraph and content measurement retains stored SEQ results and cannot consume
+unvalidated snapshot identities. Internal source-qualified shapers consume only
+the current derived snapshot. Do not hash the whole model per paragraph.
+
+Retained paragraph, table, furniture and restart work must account for changed
+sequence outcomes and structural event identities. Semantic equality or explicit
+invalidation, rather than Arc allocation identity, governs reuse. Test a changed
+earlier restart with an unchanged later SEQ paragraph, table and header, source
+reindexing, stale supplied snapshots and deterministic warm versus fresh output.
+The additive pre-1.0 LayoutInput field requires existing struct-literal consumers,
+public documentation and verified archive consumers to be updated. No new file,
+trait or generic is introduced.
+
 Accepted run insertion retains the existing boundary marker attachment. At an
 end boundary the inserted run can remain inside an existing bookmark end. Test
 that paired ownership and atomic behavior explicitly. The authenticated
@@ -364,6 +382,8 @@ pass before completion and may not be replaced by guessed expectations.
 - `crates/rdocx/src/comments.rs`, if paired-target publication needs an existing-owner helper
 - `crates/rdocx-layout/src/engine.rs`, shared sequence event evaluation and per-page reference display
 - `crates/rdocx-layout/src/lib.rs`, concrete sequence snapshot and event records
+- `crates/rdocx-layout/src/input.rs`, immutable derived snapshot propagation
+- Existing LayoutInput constructors, only for initialization of the additive field
 - `crates/oxml-layout/src/output.rs`, neutral structural context and repeat classifications
 - Existing neutral and render consumers, only for required exhaustive classification or structural-marker propagation
 - The named HLD sections in the impact list
