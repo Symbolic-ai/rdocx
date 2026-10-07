@@ -291,7 +291,14 @@ read-only WordSequenceSnapshot::source_field_context(FieldSource) getter
 returning Option<(&str, bool, bool)> for the concrete facade selected-owner
 binder. Include these projections in semantic snapshot equality and public
 consumer and verified archive riders. No new field tree clone or source
-interpreter is introduced.
+interpreter is introduced. A hidden Field::effective_instruction_text() -> String
+getter in existing text.rs uses the identical raw versus changed-structured
+instruction decision as effective_instruction, but formats its borrowed
+instruction without cloning nested Field trees. SourceRegistry compact-context
+registration and facade selected-child context comparison are its two current
+consumers. Include this additive hidden getter in low-level public documentation,
+all-target and verified archive checks. Prove raw instruction spelling, changed
+structured instructions, nested fields and effective-instruction parity.
 
 The enclosing raw field, physical story, paragraph, preorder ordinal and
 matching nested instruction, inherited lock and generated status are jointly
