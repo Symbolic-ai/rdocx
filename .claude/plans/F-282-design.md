@@ -166,6 +166,27 @@ invalid context rejection, preserved XML and atomic cache retention.
 
 Use existing ContentLocation and StoryRunPosition. No new trait, generic, builder wrapper, runtime XSLT engine or dependency is proposed. Private source parsing and result formatting live together in bibliography.rs so a reader can identify the executing logic locally. All sixteen schema contributor roles are modeled. Source author data follows the Sources/Source tree, contributor-role Author structure, NameList/Person records and Corporate choices permitted by the schema. Repeated name/property members retain their sequence. The explicit property enum avoids ambiguous publication mappings and covers every standard source text property. Tag, Guid, SourceType, LCID and Author are modeled separately. Validate every property's schema cardinality, simple-type bound and role choice before authoring. Unknown producer extensions remain preserved outside these modeled members.
 
+The normative transitional schema in the [official ECMA-376 Part 4 archive](https://ecma-international.org/wp-content/uploads/ECMA-376-4_5th_edition_december_2016.zip)
+clarifies the actual particles. Source members and outer Author contributor
+roles are repeated choices, so legal repetition and interleaving must survive.
+Person has ordered Last*, First*, Middle* members. NameList requires at least
+one Person. Fourteen contributor roles require exactly one NameList. Author
+and Performer alone admit an optional NameList or Corporate choice. Imported
+empty optional roles stay in their original raw shape, without an invented
+person. Typed authoring validates the concrete role/value choice.
+
+The same normative shared types define source ST_String and LCID ST_Lang as
+unrestricted XML strings. Do not describe the SDK metadata's String255 check
+as a normative schema limit, truncate longer imported values, or impose a
+blanket 255-character authoring rejection without separately pinned Word
+requirements. API tag, GUID and supported kind validation remains distinct
+from XSD cardinality. Repeated identity members are inspectable but an ambiguous
+owned identity fails checked mutation rather than selecting a guessed first
+or last value. The typed view does not replace the original ordered source
+spans, especially multiple outer Author elements interleaved with properties.
+The extracted normative bibliography/common schema hashes and exact lines are
+retained in /private/tmp/S90-F282-block-cache-integration-map.md.
+
 Select the bibliography Sources root by expanded namespace name through the actual main document's internal customXml relationships. Canonical authoring uses the OOXML bibliography namespace. Preserve producer namespace spelling and declarations on imported owners. Any legacy namespace support must be explicitly established by source and capture evidence, not local-name matching.
 
 A bibliography part has application/xml content type and an internal customXml source relationship. Resolve its existing item-properties relationship when present and preserve its ds:itemID, schema references and extensions. Creation allocates collision-free item and properties names, relationship IDs, and store identity. Add all necessary content-type and relationship edges transactionally. Reject multiple candidate bibliography collections, malformed targets, unexpected edge types, external datastore edges or conflicting identities before publication. Do not fetch external targets or assume customXml/item1.xml.
