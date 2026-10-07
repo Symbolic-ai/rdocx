@@ -165,6 +165,41 @@ rich caches, locks, alternate prefixes and malformed-cache failure atomicity in
 the existing low-level entrypoint. Include this additive hidden mutation in the
 low-level documentation, all-target consumers and verified archive riders.
 
+Annotation REF-f copying also needs paragraph-level comment range markers.
+Add a hidden concrete Field::set_cached_runs_with_comment_ranges operation in
+existing text.rs, taking Vec<CT_R> and the existing Vec<CommentRangeMarker>.
+Clone first, reuse checked typed-run replacement, and validate paired unique
+range IDs, ordered run-boundary positions and matching typed references before
+publishing. Write commentRangeStart and commentRangeEnd as cache siblings
+between runs, never inside CT_R::extra_xml. Retain the marker projection in the
+private typed override and source-aware simple/complex writers, including
+same-run controls, nested caches and no-op serialization. The current concrete
+consumer is captured annotation REF-f copy materialization. No new type, file,
+trait or generic is introduced.
+
+The existing no-marker setter remains the ordinary typed-run operation.
+The marker operation owns validation and sibling serialization rather than
+only forwarding. Prove empty and literal ranges, exact outer instructions and
+controls, schema-valid marker placement, locks, nested cache propagation and
+complete failure atomicity in the existing low-level test entrypoint. Copied
+annotation owners require fresh comment IDs, paragraph IDs and durable graph
+identities with relationship closure, validated through prepare and reopen.
+Do not borrow source comment IDs or substitute the full comment-thread importer
+for the independently measured field-copy contract. Include this hidden API in
+the existing low-level documentation, all-target and verified archive riders.
+
+The native physical-owner probe separately measures main-body, selected body
+text-box and ordinary default-header references to one bookmarked footnote.
+Main-body references allocate four typed note copies. The measured body box and
+ordinary header keep bookmarked literal text and allocate no notes. These
+partial stages are retained in /private/tmp/S90-F280-ref-owner-controls with
+source fingerprint 850f3e823b02dc1c20aed0cb684a90f2be150b1e4f6b7a9d06b45e6e6b2b2758.
+Word moves default furniture to different package parts during header save.
+Follow section relationships rather than treating emptied former parts as lost
+fields. Header boxes, footer owners and footer boxes remain unmeasured here,
+as do reopening and rendering. An explicit retention diagnostic for those
+unmeasured cases remains a checkpoint rather than completion evidence.
+
 Use the existing sequence traversal with explicit story ownership. Main-body
 and selected anchored text-box fields participate in the captured document
 sequence context. Alternate fallback representations must not increment it
