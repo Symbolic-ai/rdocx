@@ -151,6 +151,14 @@ nested w:r. Preserve instruction operands and propagate a modified nested cache
 through its owning field. A private typed override participates in unchanged,
 child projection and display checks only while its scalar projection agrees.
 The current consumers are typed footnote, endnote and annotation REF-f copies.
+Retain parsed complex cached CT_R runs as private source projections without
+marking the field changed. A hidden cached_result_runs read-only slice getter
+serves facade target extraction and layout note-reference discovery and shaping.
+Empty scalar text must remain distinguishable from typed note or comment
+references after reopening. Keep unchanged complex source bytes verbatim and
+exclude cached generated fields from physical source interpretation. Prove
+no-op byte preservation, typed parse/update/reopen, nested cache boundaries and
+actual note discovery and rendering, not just serialized reference presence.
 Facade mutation remains staged and validates prepare/reopen before publication.
 Cover empty results, simple and complex forms, same-run prefix/suffix, nested
 rich caches, locks, alternate prefixes and malformed-cache failure atomicity in
