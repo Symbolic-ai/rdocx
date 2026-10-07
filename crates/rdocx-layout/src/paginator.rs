@@ -2523,6 +2523,9 @@ impl<'a> Pager<'a> {
 
         // behindDoc drawings render underneath everything else on the page.
         all_elements.append(&mut self.behind_elements);
+        let furniture_behind_index = all_elements.len();
+        let mut furniture_behind = Vec::new();
+        let mut furniture_front = Vec::new();
 
         if let Some(hf) = self.header_footer {
             // Choose header blocks: first-page or default
@@ -2550,7 +2553,11 @@ impl<'a> Pager<'a> {
                     &self.page_geometry,
                     header_y,
                     self.page_number,
-                    &mut all_elements,
+                    (
+                        &mut all_elements,
+                        &mut furniture_behind,
+                        &mut furniture_front,
+                    ),
                     self.media,
                 );
             }
@@ -2588,12 +2595,21 @@ impl<'a> Pager<'a> {
                     &self.page_geometry,
                     footer_y,
                     self.page_number,
-                    &mut all_elements,
+                    (
+                        &mut all_elements,
+                        &mut furniture_behind,
+                        &mut furniture_front,
+                    ),
                     self.media,
                 );
             }
         }
 
+        all_elements.splice(
+            furniture_behind_index..furniture_behind_index,
+            furniture_behind,
+        );
+        all_elements.append(&mut furniture_front);
         all_elements.append(&mut page_borders);
 
         let mut page = PageFrame::new(
@@ -5167,11 +5183,26 @@ fn render_hf_blocks(
     geometry: &PageGeometry,
     start_y: f64,
     page_number: usize,
-    elements: &mut Vec<PositionedElement>,
+    layers: (
+        &mut Vec<PositionedElement>,
+        &mut Vec<PositionedElement>,
+        &mut Vec<PositionedElement>,
+    ),
     media: &HashMap<MediaId, ImageData>,
 ) {
+    let (elements, behind, front) = layers;
     let mut y = start_y - geometry.margin_top; // Convert to relative
     for (index, para) in blocks.iter().enumerate() {
+        place_cell_anchored(
+            &para.anchored,
+            geometry,
+            geometry,
+            y,
+            para.indent_left,
+            front,
+            behind,
+            media,
+        );
         render_paragraph_lines(
             &para.lines,
             ParagraphView {
@@ -6495,6 +6526,160 @@ mod tests {
                     })
                 )]
             );
+        }
+    }
+
+    #[test]
+    fn furniture_anchors_keep_variant_coordinates_and_background_text_layers() {
+        for (horizontal, vertical) in [
+            (ST_RelativeFromH::Page, ST_RelativeFromV::Page),
+            (ST_RelativeFromH::Margin, ST_RelativeFromV::Margin),
+            (ST_RelativeFromH::Column, ST_RelativeFromV::Paragraph),
+            (ST_RelativeFromH::Character, ST_RelativeFromV::Paragraph),
+        ] {
+            for border_in_front in [false, true] {
+                let story = |id: u64| {
+                    let mut para = make_para(1, 14.0);
+                    para.indent_left = 13.0;
+                    para.lines[0].items = vec![LineItem::Text(directional_test_segment(
+                        "FURNITURE",
+                        TextDirection::Auto,
+                        None,
+                        None,
+                    ))];
+                    for behind in [true, false] {
+                        let mut anchor = wrapping_drawing(vertical);
+                        anchor.rel_h = horizontal;
+                        anchor.off_h = 7.0;
+                        anchor.off_v = 5.0;
+                        anchor.height = 200.0;
+                        anchor.wrap = WrapType::None;
+                        anchor.behind_doc = behind;
+                        anchor.content = AnchoredContent::Image {
+                            media_id: MediaId(id + u64::from(!behind)),
+                        };
+                        para.anchored.push(anchor);
+                    }
+                    let mut neighbor = make_para(1, 14.0);
+                    neighbor.lines[0].items = vec![LineItem::Text(directional_test_segment(
+                        "NEIGHBOR",
+                        TextDirection::Auto,
+                        None,
+                        None,
+                    ))];
+                    vec![para, neighbor]
+                };
+                let watermark = GroupElement {
+                    transform: Transform::IDENTITY,
+                    clip: None,
+                    opacity: 0.75,
+                    effects: Vec::new(),
+                    children: Vec::new(),
+                };
+                let hf = HeaderFooterContent {
+                    header_blocks: story(10),
+                    footer_blocks: story(20),
+                    first_header_blocks: story(30),
+                    first_footer_blocks: story(40),
+                    even_header_blocks: story(50),
+                    even_footer_blocks: story(60),
+                    even_headers_active: true,
+                    watermark: Some(watermark.clone()),
+                    first_watermark: Some(watermark.clone()),
+                    even_watermark: Some(watermark),
+                };
+                let mut geometry = PageGeometry::default();
+                let mut edge = CT_BorderEdge::new(ST_Border::Single);
+                edge.color = Some("123456".into());
+                edge.sz = Some(8);
+                geometry.page_borders = Some(PageBorderFrame {
+                    display: ST_PageBorderDisplay::AllPages,
+                    offset_from: ST_PageBorderOffset::Page,
+                    in_front: border_in_front,
+                    edges: CT_PBdr {
+                        top: Some(edge),
+                        ..Default::default()
+                    },
+                });
+                let mut blocks = Vec::new();
+                for page in 0..3 {
+                    let mut para = make_para(1, 14.0);
+                    para.page_break_before = page > 0;
+                    para.lines[0].items = vec![LineItem::Text(directional_test_segment(
+                        "BODY",
+                        TextDirection::Auto,
+                        None,
+                        None,
+                    ))];
+                    blocks.push(LayoutBlock::Paragraph(para));
+                }
+                let (pages, _) = paginate(
+                    &blocks,
+                    geometry.clone(),
+                    Some(&hf),
+                    true,
+                    &FontManager::new(),
+                    &empty_media(),
+                    &NoteRegistry::default(),
+                );
+                assert_eq!(pages.len(), 3);
+                for (page_index, page) in pages.iter().enumerate() {
+                    let (header, footer) = match page_index {
+                        0 => (30, 40),
+                        1 => (50, 60),
+                        _ => (10, 20),
+                    };
+                    let mut images = Vec::new();
+                    let mut text = Vec::new();
+                    for (index, element) in page.elements.iter().enumerate() {
+                        oxml_layout::walk(std::slice::from_ref(element), &mut |element, _| {
+                            match element {
+                                PositionedElement::Image { media_id, rect, .. } => {
+                                    images.push((index, media_id.0, *rect))
+                                }
+                                PositionedElement::Text(_)
+                                | PositionedElement::MultilingualText(_) => text.push(index),
+                                _ => {}
+                            }
+                        });
+                    }
+                    assert_eq!(
+                        images.iter().map(|(_, id, _)| *id).collect::<Vec<_>>(),
+                        [header, footer, header + 1, footer + 1]
+                    );
+                    let watermark=page.elements.iter().position(|element| matches!(element,PositionedElement::Group(group) if group.opacity==0.75)).unwrap();
+                    assert!(watermark < images[0].0);
+                    assert!(images[1].0 < *text.iter().min().unwrap());
+                    assert!(*text.iter().max().unwrap() < images[2].0);
+                    let border=page.elements.iter().position(|element| matches!(element,PositionedElement::Line {color,..} if *color == Color::from_hex("123456"))).unwrap();
+                    if border_in_front {
+                        assert!(images[3].0 < border);
+                    } else {
+                        assert!(border < watermark);
+                    }
+                    for (_, id, rect) in &images {
+                        let story_top = if *id == header || *id == header + 1 {
+                            geometry.header_distance
+                        } else {
+                            geometry.page_height - geometry.footer_distance - 28.0
+                        };
+                        let x = match horizontal {
+                            ST_RelativeFromH::Page => 7.0,
+                            ST_RelativeFromH::Margin | ST_RelativeFromH::Column => {
+                                geometry.margin_left + 7.0
+                            }
+                            _ => geometry.margin_left + 13.0 + 7.0,
+                        };
+                        let y = match vertical {
+                            ST_RelativeFromV::Page => 5.0,
+                            ST_RelativeFromV::Margin => geometry.margin_top + 5.0,
+                            _ => story_top + 5.0,
+                        };
+                        assert_eq!(rect.x, x);
+                        assert_eq!(rect.y, y);
+                    }
+                }
+            }
         }
     }
 

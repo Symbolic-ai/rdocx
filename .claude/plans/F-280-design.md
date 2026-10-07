@@ -1,6 +1,6 @@
 # F-280, Captions, sequences, and complete cross-references
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S90
 **Size**: M
 **Depends on**: F-248, F-275, F-278
@@ -626,16 +626,16 @@ record an unexplained baseline change.
 
 ## Implementation checklist
 
-- [ ] Complete F-278 and confirm F-248 and F-275 remain done.
-- [ ] Add checked option types and existing-module exports.
-- [ ] Implement atomic checked story insertion for sequence and REF fields.
-- [ ] Compose caption paragraphs and three uniquely allocated bookmark targets.
-- [ ] Extend REF evaluation and rendering without flattening dynamic fields.
-- [ ] Cover same-paragraph position and physical story ownership.
-- [ ] Capture and pin fresh Word semantic evidence.
-- [ ] Run focused tests, risk riders and scoped verification.
-- [ ] Obtain a zero-defect, zero-smell microscope review.
-- [ ] Prepare the structured worker handoff.
+- [x] Complete F-278 and confirm F-248 and F-275 remain done.
+- [x] Add checked option types and existing-module exports.
+- [x] Implement atomic checked story insertion for sequence and REF fields.
+- [x] Compose caption paragraphs and three uniquely allocated bookmark targets.
+- [x] Extend REF evaluation and rendering without flattening dynamic fields.
+- [x] Cover same-paragraph position and physical story ownership.
+- [x] Capture and pin fresh Word semantic evidence.
+- [x] Run focused tests, risk riders and scoped verification.
+- [x] Obtain a zero-defect, zero-smell microscope review.
+- [x] Prepare the structured worker handoff.
 
 ## Open questions
 
@@ -805,3 +805,16 @@ Preserve raw cache and provenance when native updates do not reach an owner.
 Do not infer position from an unchanged OLD sentinel. The resulting readable
 regressions must prove pure evaluation, update, saved reopen and deterministic
 painting, while retaining cross-owner fallback and ordinary discovery policy.
+
+The bounded same-owner native capture pins36 fields across body, header, footer,
+normal footnote, normal endnote and selected body text box. Exact instructions,
+12 paired selected bookmarks and all literal targets survive nine stages. Each
+owner-specific update changes only its six caches. Successful paragraph and run
+positions resolve below before the target and above after it. Containment
+produces Word's self-reference error, while this implementation deliberately
+retains the saved cache with a diagnostic under the conservative policy above.
+The prepared direct paragraph drawing is invalid and is not admitted by the
+parser. Tests use a cache-only derivative of the genuine schema-valid native
+normalized package, with its selected Choice and opaque Fallback preserved
+separately. Actual close and no-F9 reopen preserve36 rich caches. Equal page text
+and the measured439-pixel native PDF difference do not imply pixel parity.

@@ -350,7 +350,7 @@ pub struct CT_Shape {
 /// here must not be serialised again or the element ends up duplicated.
 pub fn parse_alternate_content(raw: &[u8], inherited_prefixes: &[String]) -> Option<CT_Drawing> {
     let mut reader = Reader::from_reader(raw);
-    reader.config_mut().trim_text(true);
+    reader.config_mut().trim_text(false);
     let mut buf = Vec::new();
     let mut in_choice = false;
     let mut prefixes = inherited_prefixes.to_vec();
@@ -1613,7 +1613,7 @@ impl CT_Drawing {
                         let raw = capture_element(reader, e)?;
                         let scoped_raw = crate::text::raw_with_external_bindings(&raw, &bindings)?;
                         let mut re_reader = NsReader::from_reader(scoped_raw.as_slice());
-                        re_reader.config_mut().trim_text(true);
+                        re_reader.config_mut().trim_text(false);
                         // Skip to the <wp:inline> start
                         let mut rbuf = Vec::new();
                         loop {
@@ -1641,7 +1641,7 @@ impl CT_Drawing {
                         let raw = capture_element(reader, e)?;
                         let scoped_raw = crate::text::raw_with_external_bindings(&raw, &bindings)?;
                         let mut re_reader = NsReader::from_reader(scoped_raw.as_slice());
-                        re_reader.config_mut().trim_text(true);
+                        re_reader.config_mut().trim_text(false);
                         let mut rbuf = Vec::new();
                         loop {
                             match re_reader.read_event_into(&mut rbuf) {
@@ -2109,6 +2109,74 @@ mod tests {
         assert!(anchor.shape.is_some());
         assert!(anchor.embed_id.is_empty());
         assert!(anchor.link_id.is_none());
+    }
+
+    #[test]
+    fn direct_and_selected_drawing_sources_preserve_field_and_literal_whitespace() {
+        let body = concat!(
+            r#"<wps:wsp><wps:spPr><a:prstGeom prst="rect"/></wps:spPr><wps:txbx><w:txbxContent><w:p>"#,
+            r#"<w:r><w:t xml:space="preserve">  leading  internal  trailing  </w:t></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="begin" w:fldLock="1"/></w:r>"#,
+            r#"<w:r><w:instrText xml:space="preserve">  SEQ  Figure  </w:instrText></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t xml:space="preserve">  cached  result  </w:t></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p></w:txbxContent></wps:txbx></wps:wsp>"#,
+        );
+        for owner in ["inline", "anchor"] {
+            let raw = format!(
+                r#"<w:drawing xmlns:w="{}" xmlns:wp="{}" xmlns:a="{}" xmlns:wps="{}"><wp:{owner}><wp:extent cx="10" cy="20"/><wp:docPr id="9"/>{body}</wp:{owner}></w:drawing>"#,
+                crate::namespace::W_NS,
+                drawing_ns::WP,
+                drawing_ns::A,
+                "http://schemas.microsoft.com/office/word/2010/wordprocessingShape"
+            );
+            let mut reader = Reader::from_str(&raw);
+            let mut buffer = Vec::new();
+            let Event::Start(root) = reader.read_event_into(&mut buffer).unwrap() else {
+                unreachable!()
+            };
+            let prefixes = crate::numbering::word_prefixes_at(&root, &[]).unwrap();
+            let direct = CT_Drawing::from_xml_with_prefixes(&mut reader, &prefixes).unwrap();
+            let alternate = format!(
+                r#"<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice Requires="wps">{raw}</mc:Choice><mc:Fallback><w:r xmlns:w="{}"><w:t>UNSELECTED</w:t></w:r></mc:Fallback></mc:AlternateContent>"#,
+                crate::namespace::W_NS
+            );
+            let selected = parse_alternate_content(alternate.as_bytes(), &[]).unwrap();
+            assert_eq!(direct, selected);
+            for drawing in [direct, selected] {
+                let mut writer = Writer::new(Vec::new());
+                drawing.to_xml(&mut writer).unwrap();
+                let saved = String::from_utf8(writer.into_inner()).unwrap();
+                assert!(saved.contains(body), "{saved}");
+                assert!(!saved.contains("UNSELECTED"));
+                if let Some(anchor) = drawing.anchor {
+                    assert_eq!((anchor.extent_cx, anchor.extent_cy), (Emu(10), Emu(20)));
+                    let shape = anchor.shape.unwrap();
+                    assert_eq!(shape.preset.as_deref(), Some("rect"));
+                    let paragraph = &shape.text[0];
+                    assert_eq!(
+                        paragraph.text(),
+                        "  leading  internal  trailing    cached  result  "
+                    );
+                    let field = paragraph
+                        .runs()
+                        .into_iter()
+                        .flat_map(|run| &run.content)
+                        .find_map(|content| match content {
+                            crate::text::RunContent::Field(field) => Some(field),
+                            _ => None,
+                        })
+                        .unwrap();
+                    assert_eq!(field.instruction.raw, "SEQ  Figure");
+                    assert_eq!(field.cached_result, "  cached  result  ");
+                    assert_eq!(field.locked(), Some(true));
+                    assert!(
+                        std::str::from_utf8(field.source_replacement().unwrap().unwrap().0)
+                            .unwrap()
+                            .contains("  SEQ  Figure  ")
+                    );
+                }
+            }
+        }
     }
 
     #[test]

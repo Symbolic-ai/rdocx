@@ -413,6 +413,7 @@ mod tests {
         );
 
         LayoutInput {
+            sequence_snapshot: None,
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
             mirror_margins: false,

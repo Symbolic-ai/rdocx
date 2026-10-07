@@ -693,8 +693,15 @@ comment. Moving a comment range moves its reference run with the pair.
 field kinds.
 
 The `rdocx` facade owns pure field evaluation over that recursive grammar. It
-walks every typed paragraph in main text, tables, content controls, distinct
-header and footer parts, footnotes, and endnotes. Package-backed inputs come
+registers physical typed field owners in main text, tables, content controls,
+distinct header and footer parts, notes, original annotations and selected
+text boxes. SEQ and REF use this expanded source scope. Other field kinds keep
+their established discovery scope, including direct related-story paragraphs.
+Hidden ordinary owners retain cache and dirty attributes. Public result indices
+number only visible evaluation records and are distinct from physical source
+IDs. Accepted revision selection uses the same initialized borrowed physical
+projection as layout, retaining deleted source IDs without evaluating them.
+Package-backed inputs come
 from unique bookmarks, styles, core and custom properties, and settings
 document variables. Date-time, filename, merge, and included-text values come
 only from an explicit caller context. Evaluation reports resolved text,
@@ -717,11 +724,54 @@ operand uses the shared recursive field grammar, including quoted escapes and
 nested fields. Barcode requests carry validated data, symbology, dimensions,
 correction, colour, and typed symbology-specific display options without
 generating renderer content. `CASE` retains its public spelling while using
-the same payload and case-style rules as `ITF14`. Sequence counters and
-mail-merge record state remain
-isolated by story. Mail-merge record and output sequence numbers come only from
-the explicit caller context. Raw text boxes and other untyped XML remain
-outside this evaluation boundary.
+the same payload and case-style rules as `ITF14`. Mail-merge record state remains isolated by story. Its record and output
+sequence numbers come only from the explicit caller context. SEQ uses one
+font-independent accepted-source snapshot owned by `rdocx-layout`. The facade
+and renderer consume its indexed counter events, field values and physical
+source identities. Selected text boxes participate in main-document order.
+Related-story increments produce the measured main-document-only error.
+Source-qualified note repeats use their document context, while shared
+furniture repeats resolve against actual page event boundaries. Pure evaluation
+retains caches when physical context is unavailable. Tracked views retain SEQ
+caches with diagnostics rather than joining accepted indices to tracked runs.
+Opaque fallback XML does not manufacture sequence sources. Producer instructions with unclosed
+quoting retain their cache and contribute no sequence event. The shared XML
+instruction quote validator honors quoted escapes before snapshot mutation.
+
+Snapshot equality includes retained field XML, effective instructions, inherited
+locks and selected owner projections before layout cache reuse. Rich selected
+text boxes bind exact physical source paths before shaping and restore local
+indices through the same injective map for the existing outer binding. Generated
+cache descendants cannot increment counters. Instruction descendants emit
+zero-width structural events at their owning accepted run. REF number and
+position projections also use the same source-only registration when no SEQ
+exists, so selected owners cannot alias local body indices.
+
+Ordinary REF target text and numbering use uniquely paired physical bookmark
+owners in the main story, headers, footers, notes and selected text boxes.
+The layout result exposes the existing resolved numbering for a uniquely paired
+bookmark, including nested table and control owners, without facade source-path
+reconstruction. Duplicate physical names and malformed ranges have no projection.
+Relative position uses the same registered physical owner, accepted paragraph
+path and actual run boundary in the shared source-only snapshot. Header and
+footer aliases share a physical part identity, while notes and selected boxes
+retain their actual owner identity. A field inside its target, an ambiguous range or an unavailable
+cross-story comparison retains the complete cache with a diagnostic, including
+combined numbering and position requests.
+
+The native facade authors checked captions, sequence fields and REF fields at
+accepted story boundaries. Caption insertion allocates separate whole-caption,
+label-and-number and number bookmark ranges atomically. REF numbering shares
+one resolved-numbering formatter with layout, including current-level, relative,
+full-context, text omission and current-leaf delimiter behavior.
+
+REF note and annotation copies freeze original source ownership before staged
+allocation. Typed cache runs and paragraph-sibling comment endpoints preserve
+rich payload and schema order. Unique cached copy owners may refresh from the
+original source without accumulating note, comment or companion graph entries.
+Ambiguous ownership or unsupported companion edges retain source caches and
+ordered diagnostics. Optional comment metadata parts remain absent when absent.
+Unmodelled XML and existing relationship scope remain authoritative.
 
 The facade also owns explicit field cache updates across that same typed story
 scope. It evaluates the complete field set before changing cloned document and

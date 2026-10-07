@@ -69,6 +69,81 @@ pub struct ResolvedNumbering {
 }
 
 impl ResolvedNumbering {
+    /// Format REF paragraph-number context and its current-level delimiter.
+    /// Position suffixes and hyperlinks remain the caller's responsibility.
+    #[doc(hidden)]
+    pub fn numbered_reference_text(
+        &self,
+        instruction: &rdocx_oxml::text::FieldInstruction,
+        source: Option<&Self>,
+    ) -> std::result::Result<String, String> {
+        use rdocx_oxml::text::FieldArgument;
+        if instruction.name != "REF" {
+            return Err("paragraph-number reference formatting requires REF".into());
+        }
+        let has = |name| {
+            instruction
+                .switches
+                .iter()
+                .any(|switch| switch.name == name)
+        };
+        let omit_text = has("t");
+        let value = if has("w") {
+            if omit_text {
+                self.number_full_without_text.clone()
+            } else {
+                self.number_full.clone()
+            }
+        } else if has("r") {
+            self.relative_to(source, omit_text)
+        } else if has("n") {
+            if omit_text {
+                self.number_level_without_text.clone()
+            } else {
+                self.number_level.clone()
+            }
+        } else {
+            return Err("REF paragraph-number formatting requires n, r or w".into());
+        };
+        let mut delimiters = instruction
+            .switches
+            .iter()
+            .filter(|switch| switch.name == "d");
+        let Some(delimiter) = delimiters.next() else {
+            return Ok(value);
+        };
+        if delimiters.next().is_some() {
+            return Err("REF delimiter switches are ambiguous".into());
+        }
+        let Some(FieldArgument::Text(delimiter)) = &delimiter.argument else {
+            return Err("REF delimiter requires a text operand".into());
+        };
+        let current = if omit_text {
+            &self.number_level_without_text
+        } else {
+            &self.number_level
+        };
+        if current.is_empty() {
+            return if value.is_empty() {
+                Ok(value)
+            } else {
+                Err("REF delimiter lacks a qualified current-level boundary".into())
+            };
+        }
+        let prefix = value
+            .strip_suffix(current)
+            .ok_or_else(|| "REF delimiter lacks a qualified current-level boundary".to_owned())?;
+        if prefix.is_empty() {
+            return Ok(value);
+        }
+        // Actual Word controls preserve the ancestor stops and insert only at
+        // this current-level boundary. An explicit empty operand inserts space.
+        Ok(format!(
+            "{prefix}{}{current}",
+            if delimiter.is_empty() { " " } else { delimiter }
+        ))
+    }
+
     /// Format this paragraph number relative to a source paragraph.
     #[doc(hidden)]
     pub fn relative_to(&self, source: Option<&Self>, omit_text: bool) -> String {
@@ -250,6 +325,14 @@ impl NumberingState {
             .extend(other.resolved_by_bookmark.clone());
         self.main_story_sources
             .extend(other.main_story_sources.iter().copied());
+    }
+
+    pub(crate) fn bookmark_numbering(
+        &self,
+    ) -> impl Iterator<Item = (&str, SourceNodeId, &ResolvedNumbering)> {
+        self.resolved_by_bookmark
+            .iter()
+            .map(|(name, (source, numbering))| (name.as_str(), *source, numbering))
     }
 
     pub(crate) fn take_resolved(&mut self) -> HashMap<SourceNodeId, ResolvedNumbering> {

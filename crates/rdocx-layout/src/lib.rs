@@ -86,6 +86,195 @@ pub struct WordFieldPlacement {
     pub section_index: usize,
 }
 
+/// One successful main-document sequence counter delta.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WordSequenceEvent {
+    pub source: oxml_layout::FieldSource,
+    pub accepted_run: usize,
+    pub identifier: String,
+    pub value: i64,
+}
+
+/// Immutable source-qualified sequence decisions without shaping or pagination.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct WordSequenceSnapshot {
+    source_nodes: Vec<WordSourcePath>,
+    source_ids: std::collections::HashMap<WordSourcePath, SourceNodeId>,
+    field_source_xml: std::collections::HashMap<oxml_layout::FieldSource, Vec<u8>>,
+    field_source_contexts:
+        std::collections::HashMap<oxml_layout::FieldSource, (String, bool, bool)>,
+    text_box_owner_indices: std::collections::HashMap<WordStory, usize>,
+    physical_story_owners: std::collections::HashMap<WordStory, (String, WordStory)>,
+    field_run_positions: std::collections::HashMap<oxml_layout::FieldSource, usize>,
+    position_bookmark_starts: Vec<(i32, String, SourceNodeId, usize, usize)>,
+    position_bookmark_ends: Vec<(i32, SourceNodeId, usize, usize)>,
+    field_values:
+        std::collections::HashMap<oxml_layout::FieldSource, std::result::Result<String, String>>,
+    main_events: Vec<WordSequenceEvent>,
+    event_sources: std::collections::HashMap<oxml_layout::FieldSource, usize>,
+    identifier_events: std::collections::HashMap<String, Vec<usize>>,
+    repeat_requests: std::collections::HashMap<
+        oxml_layout::FieldSource,
+        (rdocx_oxml::text::FieldInstruction, String),
+    >,
+}
+
+impl WordSequenceSnapshot {
+    /// Successful counter changes in physical accepted source order.
+    pub fn main_events(&self) -> &[WordSequenceEvent] {
+        &self.main_events
+    }
+
+    /// The shared physical path registered for one source node.
+    pub fn source_node(&self, id: SourceNodeId) -> Option<&WordSourcePath> {
+        self.source_nodes.get(id.get() as usize - 1)
+    }
+
+    /// The result-local source identity of one registered physical path.
+    pub fn source_id(&self, path: &WordSourcePath) -> Option<SourceNodeId> {
+        self.source_ids.get(path).copied()
+    }
+
+    /// Exact original parsed field XML in the current physical inventory.
+    #[doc(hidden)]
+    pub fn source_field_xml(&self, source: oxml_layout::FieldSource) -> Option<&[u8]> {
+        self.field_source_xml.get(&source).map(Vec::as_slice)
+    }
+
+    /// Effective instruction, inherited lock and generated cache membership for a physical field.
+    #[doc(hidden)]
+    pub fn source_field_context(
+        &self,
+        source: oxml_layout::FieldSource,
+    ) -> Option<(&str, bool, bool)> {
+        self.field_source_contexts
+            .get(&source)
+            .map(|(instruction, locked, cached)| (instruction.as_str(), *locked, *cached))
+    }
+
+    /// Relative position within one qualified accepted physical bookmark owner.
+    #[doc(hidden)]
+    pub fn bookmark_relative_position(
+        &self,
+        target: &str,
+        source: oxml_layout::FieldSource,
+    ) -> std::result::Result<&'static str, String> {
+        let (_, locked, cached) = self
+            .source_field_context(source)
+            .ok_or("REF relative source has no registered field context")?;
+        if locked {
+            return Err("locked field retains its stored display".into());
+        }
+        if cached {
+            return Err("REF relative source is generated cache content".into());
+        }
+        let run = self
+            .field_run_positions
+            .get(&source)
+            .ok_or("REF relative source lacks an accepted run boundary")?;
+        let position = |node, run| {
+            let path = self.source_node(node)?;
+            let owner = self.physical_story_owners.get(&path.story)?;
+            Some((owner, path.children.as_slice(), run))
+        };
+        let (owner, children, run) = position(source.node, *run)
+            .ok_or("REF relative source physical owner is unavailable")?;
+        let mut starts = Vec::new();
+        for (id, name, node, run, order) in &self.position_bookmark_starts {
+            if name != target {
+                continue;
+            }
+            let Some((owner, children, run)) = position(*node, *run) else {
+                return Err("REF relative target physical owner is unavailable".into());
+            };
+            let value = (*id, owner, children, run, *order);
+            if !starts.contains(&value) {
+                starts.push(value);
+            }
+        }
+        let [(id, target_owner, start_children, start_run, start_order)] = starts.as_slice() else {
+            return Err("REF relative target has no unique paired physical range".into());
+        };
+        let mut ends = Vec::new();
+        for (end_id, node, run, order) in &self.position_bookmark_ends {
+            if end_id != id {
+                continue;
+            }
+            if let Some((end_owner, children, run)) = position(*node, *run)
+                && end_owner == *target_owner
+            {
+                let value = (children, run, *order);
+                if !ends.contains(&value) {
+                    ends.push(value);
+                }
+            }
+        }
+        let [(end_children, end_run, end_order)] = ends.as_slice() else {
+            return Err("REF relative target has no unique paired physical range".into());
+        };
+        let mut ids = Vec::new();
+        for (other_id, name, node, run, order) in &self.position_bookmark_starts {
+            if other_id != id {
+                continue;
+            }
+            if let Some((other_owner, children, run)) = position(*node, *run)
+                && other_owner == *target_owner
+            {
+                let value = (name, children, run, order);
+                if !ids.contains(&value) {
+                    ids.push(value);
+                }
+            }
+        }
+        let start = (*start_children, *start_run);
+        let end = (*end_children, *end_run);
+        if ids.len() != 1
+            || start > end
+            || (start_children == end_children && start_order > end_order)
+        {
+            return Err("REF relative target has no unique forward paired physical range".into());
+        }
+        if owner != *target_owner {
+            return Err("REF relative position is unavailable across story owners".into());
+        }
+        let source = (children, run);
+        if source < start {
+            Ok("below")
+        } else if source >= end {
+            Ok("above")
+        } else {
+            Err("REF relative target contains the field".into())
+        }
+    }
+
+    /// Physical selected text-box owner identity within its actual OPC part.
+    #[doc(hidden)]
+    pub fn text_box_owner_index(&self, story: &WordStory) -> Option<usize> {
+        self.text_box_owner_indices.get(story).copied()
+    }
+
+    /// Resolved display or preservation diagnostic for a source-qualified SEQ.
+    pub fn field_value(
+        &self,
+        source: oxml_layout::FieldSource,
+    ) -> Option<std::result::Result<&str, &str>> {
+        self.field_values
+            .get(&source)
+            .map(|value| value.as_deref().map_err(String::as_str))
+    }
+
+    /// Counter state immediately before an event boundary, without map replay.
+    pub fn context_value(&self, before_event: usize, identifier: &str) -> Option<i64> {
+        let indexes = self
+            .identifier_events
+            .get(&identifier.to_ascii_lowercase())?;
+        let position = indexes.partition_point(|index| *index < before_event);
+        position
+            .checked_sub(1)
+            .map(|previous| self.main_events[indexes[previous]].value)
+    }
+}
+
 /// Complete layout output plus its result-local Word source map.
 #[derive(Debug)]
 pub struct WordLayoutResult {
@@ -94,6 +283,7 @@ pub struct WordLayoutResult {
     source_nodes: Vec<WordSourcePath>,
     body_fragments: Vec<Vec<WordBodyLayoutFragment>>,
     numbering_by_source: Vec<Option<style_resolver::ResolvedNumbering>>,
+    bookmark_numbering: std::collections::HashMap<String, style_resolver::ResolvedNumbering>,
     page_reference_names: Vec<String>,
     page_sections: Vec<WordPageSection>,
     field_placements: Vec<WordFieldPlacement>,
@@ -180,6 +370,12 @@ impl WordLayoutResult {
             .and_then(Option::as_ref)
     }
 
+    /// Visible numbering for one uniquely paired accepted physical bookmark owner.
+    #[doc(hidden)]
+    pub fn bookmark_numbering(&self, name: &str) -> Option<&style_resolver::ResolvedNumbering> {
+        self.bookmark_numbering.get(name)
+    }
+
     /// Resolve numbering by flattened main-story paragraph order.
     #[doc(hidden)]
     pub fn document_paragraph_numbering(
@@ -247,6 +443,7 @@ pub fn layout_document_with_provenance(input: &LayoutInput) -> Result<WordLayout
         field_source_xml: engine.take_field_source_xml(),
         text_box_owner_indices: engine.take_text_box_owner_indices(),
         numbering_by_source,
+        bookmark_numbering: engine.take_bookmark_numbering(),
         page_reference_names: engine::page_reference_names(input),
     })
 }
@@ -275,6 +472,7 @@ pub fn layout_document_with_reusable_engine(
         field_source_xml: engine.take_field_source_xml(),
         text_box_owner_indices: engine.take_text_box_owner_indices(),
         numbering_by_source,
+        bookmark_numbering: engine.take_bookmark_numbering(),
         page_reference_names: engine::page_reference_names(input),
     })
 }
@@ -300,6 +498,7 @@ pub fn layout_document_with_caller_fonts_and_provenance(
         field_source_xml: engine.take_field_source_xml(),
         text_box_owner_indices: engine.take_text_box_owner_indices(),
         numbering_by_source,
+        bookmark_numbering: engine.take_bookmark_numbering(),
         page_reference_names: engine::page_reference_names(input),
     })
 }
@@ -348,6 +547,7 @@ pub fn layout_document_deterministic_with_provenance(
         field_source_xml: engine.take_field_source_xml(),
         text_box_owner_indices: engine.take_text_box_owner_indices(),
         numbering_by_source,
+        bookmark_numbering: engine.take_bookmark_numbering(),
         page_reference_names: engine::page_reference_names(input),
     })
 }

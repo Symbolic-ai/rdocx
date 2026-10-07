@@ -19535,6 +19535,7 @@ mod advanced_table_authoring_and_geometry {
 
     fn layout_input(document: rdocx_oxml::document::CT_Document) -> rdocx_layout::LayoutInput {
         rdocx_layout::LayoutInput {
+            sequence_snapshot: None,
             automatic_hyphenation: false,
             mirror_margins: false,
             gutter_at_top: false,

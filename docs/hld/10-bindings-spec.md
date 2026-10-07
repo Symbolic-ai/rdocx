@@ -1698,12 +1698,21 @@ numeric id. Removing a comment pair retains its reference and definition as
 a point comment. Moving the pair relocates the reference with it. Existing
 Python, WASM and CLI APIs remain source compatible and preserve these markers.
 
+Native Word callers author captions with `CaptionOptions` and `CaptionTarget`,
+sequence fields with `SequenceOptions`, and REF fields with
+`CrossReferenceOptions` and `CrossReferenceNumber`. `insert_sequence` and
+`insert_cross_reference` take checked accepted `StoryRunPosition` boundaries.
+Caption targets expose the actual allocated whole-caption, label-and-number
+and number bookmark names. Invalid instructions, ambiguous physical ownership
+and rejected ranges publish no partial change. These additive pre-1.0 native
+APIs add no Python, WASM or CLI methods.
+
 Native Word callers evaluate fields with `Document::evaluate_fields` and an
 explicit `FieldEvaluationContext`. `FieldDateTime` supplies deterministic civil
 time. Caller maps supply merge values and included text, including
 `source#bookmark` keys for bookmark-scoped includes. Each `FieldEvaluation`
-records a snapshot-local document-order index, original instruction, stored
-display, and a `FieldOutcome` that is resolved text, pagination deferral, a
+records a snapshot-local visible document-order index, original instruction,
+stored display, and a `FieldOutcome` that is resolved text, pagination deferral, a
 structured `TocField`, `TcField`, `MailMergeControl`, or `BarcodeField`, or a
 stable stored-display fallback. The explicit context optionally supplies
 one-based merge record and output sequence numbers. Formula results remain
@@ -1717,7 +1726,11 @@ types are additive. The new public `FieldEvaluationContext` fields are a
 pre-1.0 source break for native callers that construct the context with a
 struct literal. The new `FieldOutcome` variants are also a pre-1.0 source break
 for exhaustive native matches. Python, WASM, and CLI surfaces gain no evaluator
-methods and continue to preserve the same package content. Python exposes
+methods and continue to preserve the same package content. SEQ and REF include
+qualified physical related and selected text-box owners. Other fields preserve
+their established discovery boundary. Hidden ordinary fields keep their stored
+cache and raw attributes. Public evaluation indices do not identify physical
+layout source fields. Python exposes
 `Document.update_layout_backed_fields() -> LayoutBackedFieldUpdateReport` and
 the count-only `Document.update_page_fields() -> int` wrapper. The frozen owned
 report carries separate PAGE, NUMPAGES, PAGEREF, SECTION and SECTIONPAGES counts
@@ -1740,7 +1753,11 @@ Format-neutral TextSegment, GlyphRun and MultilingualGlyphRun add optional
 note_reference_source for structural ownership independently of exact text spans.
 Hidden physical revision/control metadata accessors and the existing CT_R
 selected-MC raw-slot predicate support layout-only binding without changing
-producer serialization. Absent projections retain legacy callers. These pre-1.0 public struct and enum
+producer serialization. CT_P.source_runs borrows initialized physical revision
+projections while the existing runs reader keeps its prior scope. Field readers
+expose effective instruction text, typed cached result runs and owned comment
+range markers. Cache setters validate their typed result on a staged clone and
+preserve source form, instructions, lock controls and unrelated XML. Absent projections retain legacy callers. These pre-1.0 public struct and enum
 additions require exhaustive constructor updates and package consumer checks.
 Python gains the two report count getters. WASM and CLI gain no update methods.
 

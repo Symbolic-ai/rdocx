@@ -1867,9 +1867,30 @@ The native facade exposes a separate read-only field evaluator for automation
 callers. `PAGE` and `NUMPAGES` always report pagination deferral. A valid
 `PAGEREF` also reports deferral, while a missing or ambiguous target keeps its
 stored display with a stable diagnostic. The evaluator does not replace the
-single post-pagination substitution pass and does not trigger layout. `REF`
-resolves the same unique typed bookmark text used by layout, so pure
-evaluation and rendering share the same target-validity boundary.
+single post-pagination substitution pass. SEQ evaluation is font independent
+and uses the same accepted physical source snapshot as rendering. Numbered REF
+may consult deterministic layout's existing resolved-numbering context. REF
+resolves unique bookmark text and numbering with the same shared formatter as
+layout. Numeric pictures precede character and general formatting. Missing,
+ambiguous, locked or unqualified sources retain stored display with diagnostics.
+
+SEQ instruction descendants place zero-width counter events before their owning
+visible cache. Generated cache fields place no events. Shared furniture repeats
+are single structural placeholders resolved from each actual page boundary.
+With no preceding value, the exact stored text is retained without formatting
+it again. Related notes retain their source-bound resolved value. Hidden results
+have no glyphs or advances and preserve counter placement independently.
+
+Selected header and footer text-box anchors paint through the existing shape
+renderer. Paragraph-relative coordinates use content-relative story y once.
+Behind-document furniture follows background layers and precedes all text.
+Front furniture follows story text and precedes front page borders. Existing
+page, margin, column and character coordinate policies remain unchanged.
+
+REF typed note caches participate in existing note layout after reopen. Comment
+references remain nonpainting, while copied literal cache text paints normally.
+Measured related-story and selected text-box REF-f contexts retain literal text
+without creating new note owners. Unselected fallback XML stays untouched.
 
 Layout attaches `FieldSource` to PAGE, NUMPAGES, SECTION, SECTIONPAGES and
 PAGEREF display runs. It names the source paragraph node and the field's preorder

@@ -208,6 +208,10 @@ pub enum FieldKind {
     TargetPage(usize),
     /// Zero-width target position retained until page locations are collected.
     Target(usize),
+    /// Zero-width Word sequence event position in the current source snapshot.
+    SequenceContext(usize),
+    /// Word sequence repeat resolved from its physical source and page context.
+    SequenceRepeat,
 }
 
 /// A positioned run of shaped glyphs.

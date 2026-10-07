@@ -1428,6 +1428,7 @@ mod tests {
 
     fn layout_input(document: CT_Document) -> crate::LayoutInput {
         crate::LayoutInput {
+            sequence_snapshot: None,
             document,
             automatic_hyphenation: false,
             mirror_margins: false,

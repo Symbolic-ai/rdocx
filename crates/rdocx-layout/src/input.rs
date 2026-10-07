@@ -154,6 +154,11 @@ impl MediaRegistry {
 /// All inputs needed to lay out a DOCX document.
 #[derive(Debug, Clone)]
 pub struct LayoutInput {
+    /// Result-local sequence decisions supplied only by complete layout entry points.
+    /// Full layout regenerates this member from the current physical model.
+    /// Detached measurement ignores it.
+    #[doc(hidden)]
+    pub sequence_snapshot: Option<Arc<crate::WordSequenceSnapshot>>,
     /// The parsed document content.
     pub document: CT_Document,
     /// Whether document settings enable automatic hyphenation.

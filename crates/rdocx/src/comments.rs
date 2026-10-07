@@ -2216,7 +2216,7 @@ fn occupied_para_ids(
     occupied
 }
 
-fn allocate_para_id_from_occupied(occupied: &mut HashSet<u32>) -> Result<String> {
+pub(crate) fn allocate_para_id_from_occupied(occupied: &mut HashSet<u32>) -> Result<String> {
     if let Some(max) = occupied.iter().copied().max()
         && max < u32::MAX
     {

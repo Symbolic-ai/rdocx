@@ -8309,6 +8309,13 @@ fn bind_text_box_source_owners(
         }
         buffer.clear();
     }
+    prepare_physical_story_projection(body, &mut anchors)
+}
+
+pub(crate) fn prepare_physical_story_projection(
+    body: &mut rdocx_oxml::document::CT_Body,
+    anchors: &mut [(Vec<u8>, Option<usize>, bool)],
+) -> Result<()> {
     fn consume_raw(raw: &[u8], anchors: &mut [(Vec<u8>, Option<usize>, bool)]) -> Result<()> {
         let captured = drawing_capture_key(raw)?;
         let mut reader = quick_xml::Reader::from_reader(captured.as_slice());
@@ -8645,7 +8652,7 @@ fn bind_text_box_source_owners(
         Ok(())
     }
     let mut candidate = body.clone();
-    body_content(&mut candidate.content, &mut anchors)?;
+    body_content(&mut candidate.content, anchors)?;
     *body = candidate;
     Ok(())
 }
@@ -12576,10 +12583,12 @@ impl Document {
             visit_body_paragraphs_mut(&mut self.document.body.content, &mut |paragraph| {
                 let _ = paragraph.remap_authored_bookmark_ids(&remap);
             });
-            for (old, new) in remap {
-                self.identifiers.authored_bookmark_ids.remove(&old);
-                self.identifiers.authored_bookmark_ids.insert(new);
+            for old in remap.keys() {
+                self.identifiers.authored_bookmark_ids.remove(old);
             }
+            self.identifiers
+                .authored_bookmark_ids
+                .extend(remap.values());
         }
         self.canonicalize_toc_bookmark_ids()?;
         Ok(())
@@ -15531,6 +15540,32 @@ impl Document {
         }
     }
 
+    /// Insert a checked run through its physical story paragraph owner.
+    pub(crate) fn insert_story_run_staged(
+        &mut self,
+        position: &crate::StoryRunPosition,
+        run: CT_R,
+    ) -> Result<()> {
+        let (source, item) = self.story_range_paragraph_source(&position.location)?;
+        if item.kind != StoryItemKind::Paragraph {
+            return Err(Error::Other(
+                "field insertion needs a paragraph location".into(),
+            ));
+        }
+        let part_name = source.part_name.clone();
+        let mut xml = source.xml.into_owned();
+        let scope = story_namespace_scope_at(&xml, item.full.start)?;
+        let closed = close_content_fragment_namespaces(&xml[item.full.clone()], &scope)?;
+        let mut paragraph = CT_P::from_xml_fragment(&closed)?;
+        paragraph
+            .insert_accepted_run(position.run_index, run)
+            .map_err(|error| Error::Other(format!("field insertion boundary: {error}")))?;
+        let replacement = serialize_content_fragment(BodyContent::Paragraph(paragraph))?;
+        let replacement = close_content_fragment_namespaces(&replacement, &scope)?;
+        xml.splice(item.full, replacement);
+        set_story_source_xml(self, &part_name, xml)
+    }
+
     pub(crate) fn anchor_story_range(
         &mut self,
         range: &crate::comments::StoryRunRange,
@@ -17946,6 +17981,104 @@ impl Document {
         ))
     }
 
+    pub(crate) fn fragment_comment_dependency(&self, id: i32) -> Result<(String, Vec<u8>)> {
+        let part = self.comments_part_name.as_ref().ok_or_else(|| {
+            Error::Other("REF f annotation has no relationship-owned comments part".into())
+        })?;
+        let comments = self
+            .comments
+            .as_ref()
+            .ok_or_else(|| Error::Other("REF f annotation has no source definitions".into()))?;
+        let matching = comments
+            .comments
+            .iter()
+            .enumerate()
+            .filter(|(_, comment)| comment.id == id)
+            .collect::<Vec<_>>();
+        if matching.len() != 1 {
+            return Err(Error::Other(
+                "REF f annotation source ID is missing or ambiguous".into(),
+            ));
+        }
+        let owners = self
+            .stories()?
+            .into_iter()
+            .filter(|story| story.kind == StoryKind::Comment && story.part_name == *part)
+            .collect::<Vec<_>>();
+        if owners.len() != comments.comments.len() {
+            return Err(Error::Other(
+                "REF f annotation owner inventory differs from its definitions".into(),
+            ));
+        }
+        let (source, owner) = self.story_source_and_owner(&owners[matching[0].0])?;
+        let scope = story_namespace_scope_at(source.xml.as_ref(), owner.full.start)?;
+        Ok((
+            source.part_name,
+            close_content_fragment_namespaces(&source.xml.as_ref()[owner.full], &scope)?,
+        ))
+    }
+
+    pub(crate) fn publish_fragment_comment_staged(
+        &mut self,
+        part: &str,
+        xml: Vec<u8>,
+        replace_id: Option<i32>,
+    ) -> Result<()> {
+        if self.comments_part_name.as_deref() != Some(part) {
+            return Err(Error::Other(
+                "REF f annotation copy has a different relationship owner".into(),
+            ));
+        }
+        let source = self
+            .package
+            .get_part(part)
+            .ok_or_else(|| Error::Other("REF f destination comments part is missing".into()))?;
+        let updated = if let Some(id) = replace_id {
+            let matching = self
+                .comments
+                .as_ref()
+                .ok_or_else(|| {
+                    Error::Other("REF f cached annotation definitions are absent".into())
+                })?
+                .comments
+                .iter()
+                .enumerate()
+                .filter(|(_, comment)| comment.id == id)
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>();
+            if matching.len() != 1 {
+                return Err(Error::Other(
+                    "REF f cached annotation owner is missing or ambiguous".into(),
+                ));
+            }
+            let owners = self
+                .stories()?
+                .into_iter()
+                .filter(|story| story.kind == StoryKind::Comment && story.part_name == part)
+                .collect::<Vec<_>>();
+            if owners.len() != self.comments.as_ref().unwrap().comments.len() {
+                return Err(Error::Other(
+                    "REF f cached annotation physical owners differ from their definitions".into(),
+                ));
+            }
+            let (owner_source, owner) = self.story_source_and_owner(&owners[matching[0]])?;
+            if owner_source.part_name != part {
+                return Err(Error::Other(
+                    "REF f cached annotation has a different relationship owner".into(),
+                ));
+            }
+            let mut updated = source.to_vec();
+            updated.splice(owner.full, xml);
+            updated
+        } else {
+            append_story_fragments_to_root(source, b"comments", b"comment", &[xml])?
+        };
+        self.comments = Some(rdocx_oxml::comments::CT_Comments::from_xml(&updated)?);
+        self.package.set_part(part, updated);
+        self.comments_dirty = false;
+        Ok(())
+    }
+
     pub(crate) fn ensure_fragment_note_part_staged(&mut self, kind: StoryKind) -> Result<String> {
         let (preferred, relationship_type, content_type) = match kind {
             StoryKind::Footnote => (
@@ -17982,11 +18115,12 @@ impl Document {
         Ok(part)
     }
 
-    pub(crate) fn append_fragment_note_staged(
+    pub(crate) fn publish_fragment_note_staged(
         &mut self,
         kind: StoryKind,
         part_name: &str,
         note_xml: Vec<u8>,
+        replace_id: Option<i32>,
     ) -> Result<()> {
         let source = self.package.get_part(part_name).ok_or_else(|| {
             Error::Other(format!(
@@ -17998,7 +18132,23 @@ impl Document {
             StoryKind::Endnote => (b"endnotes".as_slice(), b"endnote".as_slice()),
             _ => return Err(Error::Other("invalid fragment note story kind".to_owned())),
         };
-        let updated = append_story_fragments_to_root(source, root, item, &[note_xml])?;
+        let updated = if let Some(id) = replace_id {
+            let story = self.note_story(kind, id)?.ok_or_else(|| {
+                Error::Other("REF f cached note replacement owner is absent".into())
+            })?;
+            let (owner_source, owner) = self.story_source_and_owner(&story)?;
+            if owner_source.part_name != part_name {
+                return Err(Error::Other(
+                    "REF f cached note replacement has a different relationship owner".into(),
+                ));
+            }
+            let mut updated = source.to_vec();
+            updated.splice(owner.full, note_xml);
+            rdocx_oxml::footnotes::CT_Footnotes::from_xml(&updated)?;
+            updated
+        } else {
+            append_story_fragments_to_root(source, root, item, &[note_xml])?
+        };
         self.package.set_part(part_name, updated);
         Ok(())
     }
@@ -26745,6 +26895,7 @@ impl Document {
         }
 
         LayoutInput {
+            sequence_snapshot: None,
             revision_view: rdocx_layout::RevisionView::Accepted,
             document,
             automatic_hyphenation: self

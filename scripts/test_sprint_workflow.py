@@ -7814,6 +7814,9 @@ Pedro Assumpcao and the rdocx maintainers.
                 # F-279 completes modeled all-story pagination materialization.
                 # Opaque, unsupported and ambiguous source caches stay preserved.
                 279,
+                # F-280 completes source-qualified captions, SEQ and REF.
+                # Unqualified source graphs retain caches with diagnostics.
+                280,
             }
         }
         self.assertEqual(

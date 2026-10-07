@@ -390,11 +390,46 @@ The Word field regression matrix records Microsoft Word 16.104 build
 separator, comma grouping separator, and UTC clock context. Its readable
 in-code `F-161-readable-field-matrix-v1` input covers every supported field
 family and compares normalized document-order outcomes with exact literals.
-Focused tests cover recursive IF operands, story-isolated SEQ state, typed
+Focused tests cover recursive IF operands, source-qualified SEQ state, typed
 paragraph traversal, package properties and variables, explicit external
 inputs, formatting pictures, and stable cached-display fallbacks. The oracle
 is test metadata only. It is not a runtime dependency and adds no binary
 fixture.
+
+The caption, sequence and REF matrix pins Word 16.113.2 build
+16.113.26092012 sanitized source and actual explicit-update captures. Tests cover
+all 55 original and 58 renumbered caption fields, 33 sequence owners, 20 optional
+bookmark sequence controls, 53 numbered REF delimiter fields and 31 REF-f wire
+owners. Pure evaluation preserves source bytes. Explicit updates and reopen
+prove exact instructions, selected caches, fallback preservation and bounded
+typed note or comment graphs. Actual physical-page controls require furniture
+14 and 16, selected boxes15,15,16 and source-bound note14. Nested instruction
+events, generated caches, inherited locks and no-prior-value stored fallback
+have independent discriminators. Same-paragraph before, after and containment
+controls cover pure evaluation, update, reopen and actual painting. Related
+target text and numbered references cover all five rendered owner families,
+with unavailable cross-story position retaining both scalar and numbered caches.
+A separate36-field native matrix covers paragraph and run boundaries within
+body, header, footer, normal footnote, normal endnote and selected body text-box
+owners. Tests use an explicitly cache-reset derivative of the schema-valid
+native normalized package. The original prepared drawing omitted its run parent
+and stays excluded from qualified input. The native selected Choice and opaque
+Fallback remain separate. Successful positions are compared with actual Word
+updates, while containment retains the saved cache with a diagnostic under the
+conservative library policy. Word's measured self-reference error is not claimed
+as library parity. Native close and reopen preserve all36 rich caches, but their
+PDF pixel difference is recorded separately from equal page text.
+Malformed quoted SEQ input followed by a valid increment proves cache retention
+and counter isolation, while escaped quotes and backslashes remain valid.
+
+Native repeated-update and original-owner-only mutation captures qualify copy
+refresh without graph growth. Copied drawing, paragraph and durable identities
+may regenerate, so identity equality is not a payload contract. Tests preserve
+original owners, relationship closure, styles and media, and reject ambiguous
+or malformed optional companion edges atomically. Deterministic source and
+reopened rendering verifies literal painting, anchor coordinates and background
+ordering. Native close/reopen cache and PDF audits remain separate from Rust
+semantic parity and do not imply archive byte equality or cross-renderer pixels.
 
 The extended Word field matrix uses the same pinned Word build and environment.
 Its source-built `F-231-readable-field-matrix-v1` input covers formula, TOC,

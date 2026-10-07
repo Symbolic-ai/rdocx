@@ -414,6 +414,10 @@ pub struct Field {
     nested_order: Vec<NestedFieldPosition>,
     cached_fields: Vec<(std::ops::Range<usize>, Field)>,
     simple_cached_runs: Option<Vec<CT_R>>,
+    typed_cached_runs: Option<Vec<CT_R>>,
+    typed_cached_comment_ranges: Vec<CommentRangeMarker>,
+    parsed_cached_comment_ranges: Vec<CommentRangeMarker>,
+    parsed_cached_runs: Option<Vec<CT_R>>,
     source: FieldSource,
     /// The physical run this field shares with text outside it, if any.
     span: Option<Box<FieldRunSpan>>,
@@ -489,6 +493,10 @@ impl Field {
             nested_order: Vec::new(),
             cached_fields: Vec::new(),
             simple_cached_runs: None,
+            typed_cached_runs: None,
+            typed_cached_comment_ranges: Vec::new(),
+            parsed_cached_comment_ranges: Vec::new(),
+            parsed_cached_runs: None,
             span: None,
         }
     }
@@ -551,6 +559,114 @@ impl Field {
         Ok(field)
     }
 
+    /// Replace a field's result with checked typed runs while retaining its source controls.
+    #[doc(hidden)]
+    pub fn set_cached_runs(&mut self, runs: Vec<CT_R>) -> Result<()> {
+        if self.locked == Some(true) {
+            return Err(OxmlError::InvalidValue(
+                "a locked field cannot replace its cached runs".into(),
+            ));
+        }
+        validate_cached_field_runs(&runs)?;
+        let mut candidate = self.clone();
+        candidate.cached_result = runs.iter().map(cached_run_display).collect();
+        candidate.typed_cached_runs = Some(runs);
+        candidate.typed_cached_comment_ranges.clear();
+        candidate.simple_cached_runs = None;
+        candidate.cached_fields.clear();
+        let mut writer = Writer::new(Vec::new());
+        write_run_field(&mut writer, &candidate, None, None)?;
+        let source = writer.into_inner();
+        let mut paragraph = FIELD_CACHE_VALIDATION_SCOPE.to_vec();
+        paragraph.extend(source);
+        paragraph.extend_from_slice(b"</w:p>");
+        CT_P::from_xml_fragment(&paragraph)?;
+        *self = candidate;
+        Ok(())
+    }
+
+    /// Replace a checked result and its sibling annotation range markers atomically.
+    #[doc(hidden)]
+    pub fn set_cached_runs_with_comment_ranges(
+        &mut self,
+        runs: Vec<CT_R>,
+        ranges: Vec<CommentRangeMarker>,
+    ) -> Result<()> {
+        validate_cached_comment_ranges(&runs, &ranges)?;
+        if ranges.is_empty() {
+            return self.set_cached_runs(runs);
+        }
+        let mut candidate = self.clone();
+        candidate.set_cached_runs(runs)?;
+        candidate.typed_cached_comment_ranges = ranges;
+        let mut writer = Writer::new(Vec::new());
+        write_run_field(&mut writer, &candidate, None, None)?;
+        let mut paragraph = FIELD_CACHE_VALIDATION_SCOPE.to_vec();
+        paragraph.extend(writer.into_inner());
+        paragraph.extend_from_slice(b"</w:p>");
+        let reparsed = CT_P::from_xml_fragment(&paragraph)?;
+        let owner = reparsed
+            .runs()
+            .into_iter()
+            .flat_map(|run| &run.content)
+            .find_map(|content| match content {
+                RunContent::Field(field) => Some(field),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                OxmlError::InvalidValue("annotation result did not reopen as a typed field".into())
+            })?;
+        if owner.effective_instruction() != candidate.effective_instruction()
+            || owner.cached_result != candidate.cached_result
+            || owner.cached_result_comment_ranges().len()
+                != candidate.typed_cached_comment_ranges.len()
+        {
+            return Err(OxmlError::InvalidValue(
+                "annotation result reopened with a different field owner or range graph".into(),
+            ));
+        }
+        if let Some(runs) = owner.cached_result_runs() {
+            validate_cached_comment_ranges(runs, owner.cached_result_comment_ranges())?;
+        } else {
+            return Err(OxmlError::InvalidValue(
+                "annotation result has no typed cache after reopen".into(),
+            ));
+        }
+        *self = candidate;
+        Ok(())
+    }
+
+    /// Return sibling annotation boundaries owned by this field's stored result.
+    #[doc(hidden)]
+    pub fn cached_result_comment_ranges(&self) -> &[CommentRangeMarker] {
+        if self.typed_cache().is_some() {
+            &self.typed_cached_comment_ranges
+        } else {
+            &self.parsed_cached_comment_ranges
+        }
+    }
+
+    /// Return the ordered typed result runs without replaying cached fields.
+    #[doc(hidden)]
+    pub fn cached_result_runs(&self) -> Option<&[CT_R]> {
+        self.typed_cache()
+            .or(self.simple_cached_runs.as_deref())
+            .or(self.parsed_cached_runs.as_deref())
+            .or(match &self.source {
+                FieldSource::New { cached_runs, .. } => cached_runs.as_deref(),
+                _ => None,
+            })
+            .filter(|runs| {
+                runs.iter().map(cached_run_display).collect::<String>() == self.cached_result
+            })
+    }
+
+    fn typed_cache(&self) -> Option<&[CT_R]> {
+        self.typed_cached_runs.as_deref().filter(|runs| {
+            runs.iter().map(cached_run_display).collect::<String>() == self.cached_result
+        })
+    }
+
     /// Return the representation this field writes.
     pub fn form(&self) -> FieldForm {
         if instruction_contains_nested(&self.effective_instruction()) {
@@ -581,6 +697,9 @@ impl Field {
             instruction.arguments,
             instruction.switches,
         )?;
+        if let Some(runs) = self.typed_cache() {
+            validate_cached_field_runs(runs)?;
+        }
         if let FieldSource::New {
             cached_runs: Some(runs),
             ..
@@ -640,6 +759,10 @@ impl Field {
             nested_order: Vec::new(),
             cached_fields: Vec::new(),
             simple_cached_runs: None,
+            typed_cached_runs: None,
+            typed_cached_comment_ranges: Vec::new(),
+            parsed_cached_comment_ranges: Vec::new(),
+            parsed_cached_runs: None,
             span: None,
             source: FieldSource::Parsed {
                 source_id,
@@ -671,7 +794,7 @@ impl Field {
     /// Direct nested fields in the ordered cached result, without flattening it.
     #[doc(hidden)]
     pub fn cached_fields_in_source_order(&self) -> Vec<&Field> {
-        if let Some(runs) = &self.simple_cached_runs {
+        if let Some(runs) = self.typed_cache().or(self.simple_cached_runs.as_deref()) {
             return runs
                 .iter()
                 .flat_map(|run| &run.content)
@@ -710,7 +833,11 @@ impl Field {
     /// replacement without the original simple-cache source span.
     #[doc(hidden)]
     pub fn cached_field_mut(&mut self, index: usize) -> Option<&mut Field> {
-        if let Some(runs) = &mut self.simple_cached_runs {
+        if let Some(runs) = self
+            .typed_cached_runs
+            .as_mut()
+            .or(self.simple_cached_runs.as_mut())
+        {
             return runs
                 .iter_mut()
                 .flat_map(|run| &mut run.content)
@@ -745,7 +872,7 @@ impl Field {
     }
 
     fn nested_cached_projection(&self) -> Option<String> {
-        if let Some(runs) = &self.simple_cached_runs {
+        if let Some(runs) = self.typed_cache().or(self.simple_cached_runs.as_deref()) {
             return Some(runs.iter().map(cached_run_display).collect());
         }
         match &self.source {
@@ -854,6 +981,20 @@ impl Field {
         instruction_for_write(self)
     }
 
+    /// Return the effective instruction spelling without cloning nested field trees.
+    #[doc(hidden)]
+    pub fn effective_instruction_text(&self) -> String {
+        let original = self.original_instruction();
+        let structured_changed = !instruction_structure_eq(&self.instruction, original);
+        if self.instruction.raw != original.raw && !structured_changed {
+            self.instruction.raw.trim().to_owned()
+        } else if structured_changed {
+            canonical_instruction_text(&self.instruction)
+        } else {
+            self.instruction.raw.clone()
+        }
+    }
+
     /// Return nested fields from an effective instruction in evaluation order.
     #[doc(hidden)]
     pub fn effective_nested_fields_in_source_order<'a>(
@@ -919,6 +1060,9 @@ impl Field {
     }
 
     fn is_unchanged(&self) -> bool {
+        if self.typed_cached_runs.is_some() {
+            return false;
+        }
         match &self.source {
             FieldSource::New { .. } => false,
             FieldSource::Parsed {
@@ -1015,13 +1159,16 @@ impl Field {
             } => (original_cached_result, cached_segments),
         };
         if self.nested_cached_projection().as_deref() == Some(self.cached_result.as_str()) {
-            let runs = self.simple_cached_runs.as_deref().or(match &self.source {
-                FieldSource::New {
-                    cached_runs: Some(runs),
-                    ..
-                } => Some(runs.as_slice()),
-                _ => None,
-            });
+            let runs = self
+                .typed_cache()
+                .or(self.simple_cached_runs.as_deref())
+                .or(match &self.source {
+                    FieldSource::New {
+                        cached_runs: Some(runs),
+                        ..
+                    } => Some(runs.as_slice()),
+                    _ => None,
+                });
             if let Some(runs) = runs {
                 return runs
                     .iter()
@@ -1174,6 +1321,8 @@ impl PartialEq for Field {
             && self.locked == other.locked
             && self.legacy_form == other.legacy_form
             && self.legacy_form_parse_error == other.legacy_form_parse_error
+            && self.cached_result_runs() == other.cached_result_runs()
+            && self.cached_result_comment_ranges() == other.cached_result_comment_ranges()
     }
 }
 
@@ -1187,6 +1336,26 @@ pub struct FieldInstruction {
 }
 
 impl FieldInstruction {
+    /// Whether the preserved instruction closes every unescaped quoted operand.
+    #[doc(hidden)]
+    pub fn quotes_are_balanced(&self) -> bool {
+        let mut characters = self.raw.chars().peekable();
+        let mut quoted = false;
+        while let Some(character) = characters.next() {
+            if quoted
+                && character == '\\'
+                && characters
+                    .peek()
+                    .is_some_and(|next| matches!(next, '"' | '\\'))
+            {
+                characters.next();
+            } else if character == '"' {
+                quoted = !quoted;
+            }
+        }
+        !quoted
+    }
+
     /// Build one canonical instruction from operands that cannot inject tokens.
     pub fn new(
         name: &str,
@@ -1392,7 +1561,12 @@ fn validate_raw_cached_field_content(run: &CT_R, raw: &[u8]) -> Result<()> {
                     == ResolveResult::Bound(Namespace(crate::namespace::W_NS.as_bytes()))
                     && matches!(
                         element.local_name().as_ref(),
-                        b"fldChar" | b"fldSimple" | b"instrText" | b"delInstrText"
+                        b"fldChar"
+                            | b"fldSimple"
+                            | b"instrText"
+                            | b"delInstrText"
+                            | b"commentRangeStart"
+                            | b"commentRangeEnd"
                     ) =>
             {
                 return Err(OxmlError::InvalidValue(
@@ -2890,7 +3064,8 @@ fn parse_simple_field(raw: &[u8], word_prefixes: &[String]) -> Result<Option<Fie
     // The typed pass still decides namespace and structure. This cheap absence
     // test avoids reparsing ordinary text-only caches.
     let possible_nested = result_xml.windows(7).any(|bytes| bytes == b"fldChar")
-        || result_xml.windows(9).any(|bytes| bytes == b"fldSimple");
+        || result_xml.windows(9).any(|bytes| bytes == b"fldSimple")
+        || source_has_note_reference_name(result_xml);
     if possible_nested {
         // Reuse a Word prefix from the effective producer scope. Introducing
         // a canonical w declaration here would reclassify foreign w children.
@@ -2918,11 +3093,15 @@ fn parse_simple_field(raw: &[u8], word_prefixes: &[String]) -> Result<Option<Fie
             Some(&cache_root),
         )?;
         let runs = paragraph.runs().into_iter().cloned().collect::<Vec<_>>();
-        if runs
-            .iter()
-            .flat_map(|run| &run.content)
-            .any(|content| matches!(content, RunContent::Field(_)))
-        {
+        if runs.iter().flat_map(|run| &run.content).any(|content| {
+            matches!(
+                content,
+                RunContent::Field(_)
+                    | RunContent::FootnoteRef { .. }
+                    | RunContent::EndnoteRef { .. }
+                    | RunContent::CommentReference { .. }
+            )
+        }) {
             field.cached_result = runs.iter().map(cached_run_display).collect();
             if let FieldSource::Parsed {
                 original_cached_result,
@@ -2931,6 +3110,7 @@ fn parse_simple_field(raw: &[u8], word_prefixes: &[String]) -> Result<Option<Fie
             {
                 *original_cached_result = field.cached_result.clone();
             }
+            field.parsed_cached_comment_ranges = paragraph.comment_ranges.clone();
             field.simple_cached_runs = Some(runs);
         }
     }
@@ -3932,7 +4112,8 @@ struct ComplexFieldProjection<'a> {
     runs: &'a mut Vec<CT_R>,
     run_sources: &'a mut Vec<Option<Vec<u8>>>,
     extra_xml: &'a mut Vec<(usize, Vec<u8>)>,
-    comment_ranges: &'a mut [CommentRangeMarker],
+    comment_ranges: &'a mut Vec<CommentRangeMarker>,
+    comment_sources: &'a [(CommentRangeMarker, Vec<u8>)],
     bookmark_markers: &'a mut [BookmarkMarker],
     content_controls: &'a mut [(usize, usize, usize, CT_Sdt)],
     revisions: &'a mut [(usize, usize, CT_Revision)],
@@ -3947,6 +4128,7 @@ fn project_complex_fields(projection: ComplexFieldProjection<'_>) -> Result<()> 
         run_sources,
         extra_xml,
         comment_ranges,
+        comment_sources,
         bookmark_markers,
         content_controls,
         revisions,
@@ -4081,6 +4263,7 @@ fn project_complex_fields(projection: ComplexFieldProjection<'_>) -> Result<()> 
                         run_sources,
                         extra_xml,
                         hyperlinks,
+                        comment_sources,
                     );
                     let mut parsed = Field::parsed(
                         instruction,
@@ -4093,6 +4276,26 @@ fn project_complex_fields(projection: ComplexFieldProjection<'_>) -> Result<()> 
                     );
                     parsed.nested_order = nested_order;
                     parsed.cached_fields = field.cached_fields;
+                    if field.separate_run.is_some()
+                        && let FieldSource::Parsed { raw_xml, .. } = &parsed.source
+                        && source_has_note_reference_name(raw_xml)
+                        && let Ok((cache_runs, cache_ranges)) =
+                            parsed_complex_cache_runs(raw_xml, word_prefixes)
+                        && cache_runs
+                            .iter()
+                            .flat_map(|run| &run.content)
+                            .any(|content| {
+                                matches!(
+                                    content,
+                                    RunContent::FootnoteRef { .. }
+                                        | RunContent::EndnoteRef { .. }
+                                        | RunContent::CommentReference { .. }
+                                )
+                            })
+                    {
+                        parsed.parsed_cached_runs = Some(cache_runs);
+                        parsed.parsed_cached_comment_ranges = cache_ranges;
+                    }
                     let valid = field.valid
                         && !parsed.instruction.name.is_empty()
                         && run_sources[field.start_run..=run_index]
@@ -4130,10 +4333,45 @@ fn project_complex_fields(projection: ComplexFieldProjection<'_>) -> Result<()> 
         }
     }
     for (start, end, mut fields) in grouped.into_iter().rev() {
+        let mut owned_comment_ids = std::collections::BTreeSet::new();
+        let mut cache_owners = fields.iter().map(|(field, _)| field).collect::<Vec<_>>();
+        while let Some(field) = cache_owners.pop() {
+            cache_owners.extend(field.all_nested_fields_in_source_order());
+            let mut ranges = field.parsed_cached_comment_ranges.clone();
+            for marker in &mut ranges {
+                match marker {
+                    CommentRangeMarker::Start { raw_before, .. }
+                    | CommentRangeMarker::End { raw_before, .. } => *raw_before = 0,
+                }
+            }
+            if !ranges.is_empty()
+                && field
+                    .cached_result_runs()
+                    .is_some_and(|runs| validate_cached_comment_ranges(runs, &ranges).is_ok())
+            {
+                for marker in ranges {
+                    match marker {
+                        CommentRangeMarker::Start { id, .. }
+                        | CommentRangeMarker::End { id, .. } => {
+                            owned_comment_ids.insert(id);
+                        }
+                    }
+                }
+            }
+        }
+        let unrelated_comments = comment_ranges
+            .iter()
+            .filter(|marker| match marker {
+                CommentRangeMarker::Start { id, .. } | CommentRangeMarker::End { id, .. } => {
+                    !owned_comment_ids.contains(id)
+                }
+            })
+            .cloned()
+            .collect::<Vec<_>>();
         if has_typed_boundary_inside(
             start,
             end,
-            comment_ranges,
+            &unrelated_comments,
             bookmark_markers,
             content_controls,
             revisions,
@@ -4141,7 +4379,14 @@ fn project_complex_fields(projection: ComplexFieldProjection<'_>) -> Result<()> 
         ) {
             continue;
         }
-        let raw_xml = complex_field_source(start, end, run_sources, extra_xml, hyperlinks);
+        let raw_xml = complex_field_source(
+            start,
+            end,
+            run_sources,
+            extra_xml,
+            hyperlinks,
+            comment_sources,
+        );
         let owner_id = fields.iter().find_map(|(field, _)| match field.source {
             FieldSource::Parsed { source_id, .. } => Some(source_id),
             FieldSource::New { .. } => None,
@@ -4159,6 +4404,12 @@ fn project_complex_fields(projection: ComplexFieldProjection<'_>) -> Result<()> 
                 }
             }
         }
+        comment_ranges.retain(|marker| match marker {
+            CommentRangeMarker::Start { id, .. } | CommentRangeMarker::End { id, .. } => {
+                !owned_comment_ids.contains(id)
+                    || !(marker.run_index() > start && marker.run_index() <= end)
+            }
+        });
         extra_xml.retain(|(at, _)| !(*at > start && *at <= end));
         for hyperlink in hyperlinks.iter_mut() {
             let hyperlink_start = hyperlink.run_start;
@@ -4221,6 +4472,7 @@ fn complex_field_source(
     run_sources: &[Option<Vec<u8>>],
     extra_xml: &[(usize, Vec<u8>)],
     hyperlinks: &[HyperlinkSpan],
+    comment_sources: &[(CommentRangeMarker, Vec<u8>)],
 ) -> Vec<u8> {
     let mut source = Vec::new();
     for (run_index, raw_source) in run_sources.iter().enumerate().take(end + 1).skip(start) {
@@ -4228,8 +4480,20 @@ fn complex_field_source(
             source.extend_from_slice(raw);
         }
         if run_index < end {
-            for (_, raw) in extra_xml.iter().filter(|(at, _)| *at == run_index + 1) {
-                source.extend_from_slice(raw);
+            let extras = extra_xml
+                .iter()
+                .filter(|(at, _)| *at == run_index + 1)
+                .collect::<Vec<_>>();
+            for slot in 0..=extras.len() {
+                for (marker, raw) in comment_sources.iter().filter(|(marker, _)| {
+                    marker.run_index() == run_index + 1 && marker.raw_before() == slot
+                }) {
+                    let _ = marker;
+                    source.extend_from_slice(raw);
+                }
+                if let Some((_, raw)) = extras.get(slot) {
+                    source.extend_from_slice(raw);
+                }
             }
             for hyperlink in hyperlinks
                 .iter()
@@ -4554,6 +4818,33 @@ fn field_span_runs(
     fields: Vec<(Field, Option<CT_RPr>)>,
     word_prefixes: &[String],
 ) -> Vec<CT_R> {
+    let mut fields = fields;
+    if source_has_note_reference_name(raw)
+        && let Ok(Some(parts)) = field_span_parts(raw, word_prefixes)
+    {
+        for ((field, _), source) in
+            fields
+                .iter_mut()
+                .zip(parts.into_iter().filter_map(|part| match part {
+                    FieldSpanPart::Field(source) => Some(source),
+                    FieldSpanPart::Outside(_) => None,
+                }))
+        {
+            if let Ok((runs, ranges)) = parsed_complex_cache_runs(&source, word_prefixes)
+                && runs.iter().flat_map(|run| &run.content).any(|content| {
+                    matches!(
+                        content,
+                        RunContent::FootnoteRef { .. }
+                            | RunContent::EndnoteRef { .. }
+                            | RunContent::CommentReference { .. }
+                    )
+                })
+            {
+                field.parsed_cached_runs = Some(runs);
+                field.parsed_cached_comment_ranges = ranges;
+            }
+        }
+    }
     let one_run_per_field = |fields: Vec<(Field, Option<CT_RPr>)>| {
         fields
             .into_iter()
@@ -5238,11 +5529,7 @@ fn append_tracked_control_runs<'a>(control: &'a CT_Sdt, output: &mut Vec<&'a CT_
 }
 
 fn append_tracked_revision_runs<'a>(revision: &'a CT_Revision, output: &mut Vec<&'a CT_R>) {
-    if matches!(
-        revision.kind(),
-        RevisionKind::Insertion | RevisionKind::MoveTo
-    ) && let Some(paragraph) = revision.content_paragraph()
-    {
+    if let Some(paragraph) = revision.content_paragraph() {
         output.extend(tracked_paragraph_runs(paragraph));
         return;
     }
@@ -5387,6 +5674,14 @@ impl CT_P {
         let mut runs = Vec::new();
         self.collect_runs(&mut runs);
         runs
+    }
+
+    /// Borrow typed source runs in physical order, including revision owners.
+    /// Deleted runs reserve identity but selection remains the caller's job.
+    /// Opaque wrapper XML does not become a typed source.
+    #[doc(hidden)]
+    pub fn source_runs(&self) -> Vec<&CT_R> {
+        tracked_paragraph_runs(self)
     }
 
     /// Return the text of the accepted view, as `Paragraph::text` reads it:
@@ -6574,6 +6869,30 @@ impl CT_P {
         Ok(())
     }
 
+    /// Insert one run at a checked accepted-view boundary atomically.
+    #[doc(hidden)]
+    pub fn insert_accepted_run(
+        &mut self,
+        boundary: usize,
+        run: CT_R,
+    ) -> std::result::Result<(), RangeAnchorError> {
+        let (site, _) = self.accepted_range_sites(Some(boundary), Some(boundary))?;
+        let mut paragraph = self.clone();
+        let inserted = match site.ok_or(RangeAnchorError::Write)? {
+            MarkerSite::Control { controls, index } => paragraph
+                .control_at_mut(&controls)
+                .is_some_and(|control| control.insert_content(index, vec![SdtContent::Run(run)])),
+            MarkerSite::Paragraph { boundary, position } => {
+                paragraph.insert_run_after_boundary_items(boundary, position, run)
+            }
+        };
+        if !inserted || !paragraph.refresh_bookmark_projection() {
+            return Err(RangeAnchorError::Write);
+        }
+        *self = paragraph;
+        Ok(())
+    }
+
     /// Resolve where the start and end markers of a range go.
     fn accepted_range_sites(
         &self,
@@ -7198,6 +7517,7 @@ impl CT_P {
         let mut properties = None;
         let mut runs = Vec::new();
         let mut run_sources = Vec::new();
+        let mut comment_sources = Vec::new();
         let mut hyperlinks = Vec::new();
         let mut comment_ranges = Vec::new();
         let mut bookmark_markers = Vec::new();
@@ -7357,6 +7677,8 @@ impl CT_P {
                             is_word_element(name.as_ref(), b"commentRangeStart", &prefixes),
                             raw_element_has_child_content(&raw),
                         );
+                        comment_sources
+                            .push((comment_ranges.last().expect("captured marker").clone(), raw));
                     } else if is_word_element(name.as_ref(), b"bookmarkStart", &prefixes)
                         || is_word_element(name.as_ref(), b"bookmarkEnd", &prefixes)
                     {
@@ -7423,6 +7745,10 @@ impl CT_P {
                             is_word_element(name.as_ref(), b"commentRangeStart", &prefixes),
                             false,
                         );
+                        comment_sources.push((
+                            comment_ranges.last().expect("captured marker").clone(),
+                            capture_empty_element(e)?,
+                        ));
                     } else if is_word_element(name.as_ref(), b"bookmarkStart", &prefixes)
                         || is_word_element(name.as_ref(), b"bookmarkEnd", &prefixes)
                     {
@@ -7524,6 +7850,7 @@ impl CT_P {
             run_sources: &mut run_sources,
             extra_xml: &mut extra_xml,
             comment_ranges: &mut comment_ranges,
+            comment_sources: &comment_sources,
             bookmark_markers: &mut bookmark_markers,
             content_controls: &mut content_controls,
             revisions: &mut revisions,
@@ -8244,6 +8571,17 @@ fn write_field_with_result_properties<W: std::io::Write>(
                 }
             }
         };
+        let updated = if let Some(runs) = field.typed_cache() {
+            replace_typed_field_cache(
+                &updated,
+                *form,
+                word_prefixes,
+                runs,
+                &field.typed_cached_comment_ranges,
+            )?
+        } else {
+            updated
+        };
         let updated = if field.locked != *original_locked {
             rewrite_field_lock(&updated, *form, word_prefixes, field.locked)?
         } else {
@@ -8657,8 +8995,9 @@ fn update_nested_field_sources(
         .iter()
         .filter(|(_, child)| child.form() == FieldForm::Simple)
         .collect::<Vec<_>>();
-    if scan.result_nested.len() != complex_children.len()
-        || scan.result_simple.len() != simple_children.len()
+    if field.typed_cache().is_none()
+        && (scan.result_nested.len() != complex_children.len()
+            || scan.result_simple.len() != simple_children.len())
     {
         return Err(OxmlError::MissingElement(
             "nested cached field spans in owning complex field".to_owned(),
@@ -8994,6 +9333,15 @@ fn rewrite_isolated_nested_field(
         && field.nested_cached_projection().as_ref() != Some(&field.cached_result);
     if cached_changed || field.dirty != *original_dirty {
         updated = update_complex_field_source(field, &updated, word_prefixes, cached_changed)?;
+    }
+    if let Some(runs) = field.typed_cache() {
+        updated = replace_typed_field_cache(
+            &updated,
+            FieldForm::Complex,
+            word_prefixes,
+            runs,
+            &field.typed_cached_comment_ranges,
+        )?;
     }
     let updated_scan = scan_complex_source(&updated, word_prefixes)?;
     let (Some(first_run), Some(last_run)) = (updated_scan.runs.first(), updated_scan.runs.last())
@@ -9474,6 +9822,346 @@ fn write_updated_instruction_text<W: std::io::Write>(
     writer.write_event(Event::Text(BytesText::new(value)))?;
     writer.write_event(Event::End(BytesEnd::new("w:instrText")))?;
     Ok(())
+}
+
+/// Replace only the outer result, using its actual namespace and run boundaries.
+/// A result sharing a control run is split into sibling runs with the original
+/// control wrapper and properties retained on both preserved fragments.
+enum CachedFieldSource {
+    EmptySimple(BytesStart<'static>),
+    Simple(std::ops::Range<usize>),
+    Complex {
+        result: std::ops::Range<usize>,
+        first_open: std::ops::Range<usize>,
+        first_close: std::ops::Range<usize>,
+        last_open: std::ops::Range<usize>,
+        last_close: std::ops::Range<usize>,
+    },
+}
+
+fn cached_field_source(
+    raw: &[u8],
+    form: FieldForm,
+    word_prefixes: &[String],
+) -> Result<CachedFieldSource> {
+    let mut reader = Reader::from_reader(raw);
+    reader.config_mut().trim_text(false);
+    let mut contexts = Vec::<FieldRewriteContext>::new();
+    let mut buffer = Vec::new();
+    let mut physical_runs = Vec::<(usize, usize, usize, usize, usize)>::new();
+    let mut current_run = None;
+    let mut separate = None;
+    let mut end = None;
+    let mut depth = 0usize;
+    let mut simple_open = None;
+    let mut simple_close = None;
+    loop {
+        let start = reader.buffer_position() as usize;
+        let event = reader.read_event_into(&mut buffer)?;
+        let event_end = reader.buffer_position() as usize;
+        match event {
+            Event::Start(element) | Event::Empty(element) => {
+                let empty = raw.get(event_end.saturating_sub(2)..event_end) == Some(b"/>");
+                let inherited = contexts
+                    .last()
+                    .map(|context| context.prefixes.as_slice())
+                    .unwrap_or(word_prefixes);
+                let prefixes = word_prefixes_at(&element, inherited)?;
+                let word_run = contexts.is_empty()
+                    && is_word_element(element.name().as_ref(), b"r", &prefixes);
+                if word_run {
+                    current_run = Some(physical_runs.len());
+                    physical_runs.push((start, event_end, event_end, event_end, event_end));
+                }
+                if contexts.is_empty()
+                    && is_word_element(element.name().as_ref(), b"fldSimple", &prefixes)
+                {
+                    if empty {
+                        return Ok(CachedFieldSource::EmptySimple(element.into_owned()));
+                    }
+                    simple_open = Some(event_end);
+                }
+                if contexts.len() == 1
+                    && contexts.last().is_some_and(|context| context.word_run)
+                    && is_word_element(element.name().as_ref(), b"fldChar", &prefixes)
+                {
+                    let kind = optional_word_attribute(&element, b"fldCharType", &prefixes);
+                    let marker_end = if empty {
+                        event_end
+                    } else {
+                        reader.read_to_end_into(element.name(), &mut Vec::new())?;
+                        reader.buffer_position() as usize
+                    };
+                    match kind.as_deref() {
+                        Some("begin") => depth += 1,
+                        Some("separate") if depth == 1 => {
+                            separate = current_run.map(|run| (run, marker_end))
+                        }
+                        Some("end") => {
+                            if depth == 1 {
+                                end = current_run.map(|run| (run, start));
+                            }
+                            depth = depth.saturating_sub(1);
+                        }
+                        _ => {}
+                    }
+                    buffer.clear();
+                    continue;
+                }
+                if empty {
+                    if contexts.len() == 1
+                        && contexts.last().is_some_and(|context| context.word_run)
+                        && is_word_element(element.name().as_ref(), b"rPr", &prefixes)
+                        && let Some(run) = current_run
+                    {
+                        physical_runs[run].2 = event_end;
+                    }
+                } else {
+                    contexts.push(FieldRewriteContext {
+                        prefixes,
+                        word_run,
+                        canonical_end: None,
+                    });
+                }
+            }
+            Event::End(element) => {
+                let context = contexts.pop().ok_or_else(|| {
+                    OxmlError::InvalidValue("unbalanced typed field source".into())
+                })?;
+                if contexts.len() == 1
+                    && contexts.last().is_some_and(|context| context.word_run)
+                    && is_word_element(element.name().as_ref(), b"rPr", &context.prefixes)
+                    && let Some(run) = current_run
+                {
+                    physical_runs[run].2 = event_end;
+                }
+                if context.word_run {
+                    let run = current_run.take().ok_or_else(|| {
+                        OxmlError::MissingElement("typed cache physical run".into())
+                    })?;
+                    physical_runs[run].3 = start;
+                    physical_runs[run].4 = event_end;
+                }
+                if contexts.is_empty()
+                    && is_word_element(element.name().as_ref(), b"fldSimple", &context.prefixes)
+                {
+                    simple_close = Some(start);
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    match form {
+        FieldForm::Simple => {
+            let (start, end) = simple_open
+                .zip(simple_close)
+                .ok_or_else(|| OxmlError::MissingElement("simple typed cache owner".into()))?;
+            Ok(CachedFieldSource::Simple(start..end))
+        }
+        FieldForm::Complex => {
+            let (first, start) = separate
+                .ok_or_else(|| OxmlError::MissingElement("complex typed cache separator".into()))?;
+            let (last, end) =
+                end.ok_or_else(|| OxmlError::MissingElement("complex typed cache end".into()))?;
+            if start > end || first > last {
+                return Err(OxmlError::InvalidValue("inverted typed cache span".into()));
+            }
+            let first = physical_runs[first];
+            let last = physical_runs[last];
+            Ok(CachedFieldSource::Complex {
+                result: start..end,
+                first_open: first.0..first.2,
+                first_close: first.3..first.4,
+                last_open: last.0..last.2,
+                last_close: last.3..last.4,
+            })
+        }
+    }
+}
+
+fn validate_cached_comment_ranges(runs: &[CT_R], ranges: &[CommentRangeMarker]) -> Result<()> {
+    let mut references = std::collections::BTreeMap::<i32, usize>::new();
+    for (index, run) in runs.iter().enumerate() {
+        for content in &run.content {
+            if let RunContent::CommentReference { id, .. } = content
+                && references.insert(*id, index).is_some()
+            {
+                return Err(OxmlError::InvalidValue(
+                    "cached annotation reference IDs must be unique".into(),
+                ));
+            }
+        }
+    }
+    let mut open = std::collections::BTreeMap::<i32, usize>::new();
+    let mut closed = std::collections::BTreeSet::new();
+    let mut last_position = 0;
+    for marker in ranges {
+        let (id, position, raw_before, has_child_content, start) = match marker {
+            CommentRangeMarker::Start {
+                id,
+                run_index,
+                raw_before,
+                has_child_content,
+            } => (*id, *run_index, *raw_before, *has_child_content, true),
+            CommentRangeMarker::End {
+                id,
+                run_index,
+                raw_before,
+                has_child_content,
+            } => (*id, *run_index, *raw_before, *has_child_content, false),
+        };
+        if position > runs.len()
+            || position < last_position
+            || raw_before != 0
+            || has_child_content
+            || !references.contains_key(&id)
+        {
+            return Err(OxmlError::InvalidValue(
+                "cached annotation marker has no checked run boundary or reference".into(),
+            ));
+        }
+        last_position = position;
+        if start {
+            if closed.contains(&id) || open.insert(id, position).is_some() {
+                return Err(OxmlError::InvalidValue(
+                    "cached annotation range has duplicate start".into(),
+                ));
+            }
+        } else {
+            if open.remove(&id).is_none() || !closed.insert(id) || position > references[&id] {
+                return Err(OxmlError::InvalidValue(
+                    "cached annotation range has no paired reference boundary".into(),
+                ));
+            }
+        }
+    }
+    if !open.is_empty() || closed.len() != references.len() {
+        return Err(OxmlError::InvalidValue(
+            "cached annotation ranges and typed references disagree".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn write_typed_cached_runs<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    runs: &[CT_R],
+    ranges: &[CommentRangeMarker],
+    foreign_word_namespace: Option<&str>,
+) -> Result<()> {
+    for index in 0..=runs.len() {
+        for marker in ranges {
+            let (id, position, name) = match marker {
+                CommentRangeMarker::Start { id, run_index, .. } => {
+                    (*id, *run_index, "w:commentRangeStart")
+                }
+                CommentRangeMarker::End { id, run_index, .. } => {
+                    (*id, *run_index, "w:commentRangeEnd")
+                }
+            };
+            if position != index {
+                continue;
+            }
+            let mut element = BytesStart::new(name);
+            element.push_attribute(("w:id", id.to_string().as_str()));
+            if foreign_word_namespace.is_some() {
+                element.push_attribute(("xmlns:w", crate::namespace::W_NS));
+            }
+            writer.write_event(Event::Empty(element))?;
+        }
+        if let Some(run) = runs.get(index) {
+            write_mixed_field_run(writer, run, foreign_word_namespace)?;
+        }
+    }
+    Ok(())
+}
+
+fn replace_typed_field_cache(
+    raw: &[u8],
+    form: FieldForm,
+    word_prefixes: &[String],
+    runs: &[CT_R],
+    ranges: &[CommentRangeMarker],
+) -> Result<Vec<u8>> {
+    let mut writer = Writer::new(Vec::new());
+    write_typed_cached_runs(&mut writer, runs, ranges, Some("typed-cache"))?;
+    let payload = writer.into_inner();
+    let mut output = Vec::new();
+    match cached_field_source(raw, form, word_prefixes)? {
+        CachedFieldSource::EmptySimple(element) => {
+            let mut root = Writer::new(Vec::new());
+            root.write_event(Event::Start(element.clone()))?;
+            output.extend(root.into_inner());
+            output.extend_from_slice(&payload);
+            output.extend_from_slice(b"</");
+            output.extend_from_slice(element.name().as_ref());
+            output.extend_from_slice(b">");
+        }
+        CachedFieldSource::Simple(result) => {
+            output.extend_from_slice(&raw[..result.start]);
+            output.extend_from_slice(&payload);
+            output.extend_from_slice(&raw[result.end..]);
+        }
+        CachedFieldSource::Complex {
+            result,
+            first_close,
+            last_open,
+            ..
+        } => {
+            output.extend_from_slice(&raw[..result.start]);
+            output.extend_from_slice(&raw[first_close]);
+            output.extend_from_slice(&payload);
+            output.extend_from_slice(&raw[last_open]);
+            output.extend_from_slice(&raw[result.end..]);
+        }
+    }
+    Ok(output)
+}
+
+fn source_has_note_reference_name(raw: &[u8]) -> bool {
+    [
+        b"footnoteReference".as_slice(),
+        b"endnoteReference".as_slice(),
+        b"commentReference".as_slice(),
+    ]
+    .iter()
+    .any(|name| raw.windows(name.len()).any(|window| window == *name))
+}
+
+fn parsed_complex_cache_runs(
+    raw: &[u8],
+    word_prefixes: &[String],
+) -> Result<(Vec<CT_R>, Vec<CommentRangeMarker>)> {
+    let CachedFieldSource::Complex {
+        result,
+        first_open,
+        last_close,
+        ..
+    } = cached_field_source(raw, FieldForm::Complex, word_prefixes)?
+    else {
+        unreachable!("complex field cache");
+    };
+    let mut cache = b"<w:p>".to_vec();
+    cache.extend_from_slice(&raw[first_open]);
+    cache.extend_from_slice(&raw[result]);
+    cache.extend_from_slice(&raw[last_close]);
+    cache.extend_from_slice(b"</w:p>");
+    let mut reader = Reader::from_reader(cache.as_slice());
+    let mut buffer = Vec::new();
+    let Event::Start(root) = reader.read_event_into(&mut buffer)? else {
+        unreachable!("cache root");
+    };
+    let mut prefixes = word_prefixes.to_vec();
+    if !prefixes.iter().any(|prefix| prefix == "w") {
+        prefixes.push("w".into());
+    }
+    let paragraph = CT_P::from_xml_with_prefixes_and_root(&mut reader, &prefixes, Some(&root))?;
+    Ok((
+        paragraph.runs().into_iter().cloned().collect(),
+        paragraph.comment_ranges,
+    ))
 }
 
 fn update_complex_field_source(
@@ -10247,6 +10935,14 @@ fn write_field_result_run<W: std::io::Write>(
     foreign_word_namespace: Option<&str>,
     properties: Option<&CT_RPr>,
 ) -> Result<()> {
+    if let Some(runs) = field.typed_cache() {
+        return write_typed_cached_runs(
+            writer,
+            runs,
+            &field.typed_cached_comment_ranges,
+            foreign_word_namespace,
+        );
+    }
     if let FieldSource::New {
         cached_runs: Some(runs),
         original_cached_result,
@@ -12954,6 +13650,30 @@ mod tests {
     }
 
     #[test]
+    fn preserved_instruction_quote_balance_honors_escaped_quotes_and_backslashes() {
+        for instruction in [
+            r#"SEQ Figure \* "ARABIC""#,
+            r#"INCLUDETEXT "\\server\share\file.docx" """#,
+            r#"DOCPROPERTY "a\"b""#,
+        ] {
+            assert!(
+                Field::new(instruction, "stored")
+                    .effective_instruction()
+                    .quotes_are_balanced(),
+                "{instruction}"
+            );
+        }
+        for instruction in [r#"SEQ Figure \* "ARABIC"#, r#"DOCPROPERTY "a\"b"#] {
+            assert!(
+                !Field::new(instruction, "stored")
+                    .effective_instruction()
+                    .quotes_are_balanced(),
+                "{instruction}"
+            );
+        }
+    }
+
+    #[test]
     fn quoted_backslash_and_empty_operands_remain_arguments() {
         let paragraph = parse_paragraph(
             r#"<w:fldSimple w:instr="INCLUDETEXT &quot;\\\\server\\share\\file.docx&quot; &quot;&quot;"><w:r><w:t>cached</w:t></w:r></w:fldSimple>"#,
@@ -14641,6 +15361,52 @@ mod tests {
     }
 
     #[test]
+    fn effective_instruction_text_matches_raw_structured_and_nested_edits() {
+        let paragraph = parse_paragraph(
+            r#"<w:fldSimple w:instr="  MERGEFIELD Name \* MERGEFORMAT  "><w:r><w:t>stored</w:t></w:r></w:fldSimple>"#,
+        );
+        let original_bytes = serialized_paragraph(&paragraph);
+        let original = parsed_field(&paragraph, 0);
+        assert_eq!(
+            original.effective_instruction_text(),
+            original.effective_instruction().raw
+        );
+        assert_eq!(serialized_paragraph(&paragraph), original_bytes);
+        let mut raw = original.clone();
+        raw.instruction.raw = "  AUTHOR  ".into();
+        assert_eq!(
+            raw.effective_instruction_text(),
+            raw.effective_instruction().raw
+        );
+        assert_eq!(raw.effective_instruction_text(), "AUTHOR");
+        let mut structured = original.clone();
+        structured.instruction.name = "REF".into();
+        structured.instruction.arguments = vec![FieldArgument::Text("Other Target".into())];
+        assert_eq!(
+            structured.effective_instruction_text(),
+            structured.effective_instruction().raw
+        );
+        let mut nested = Field::new("IF", "stored");
+        nested.instruction.arguments = vec![FieldArgument::Nested(Box::new(Field::new(
+            "SEQ Figure",
+            "old",
+        )))];
+        assert_eq!(
+            nested.effective_instruction_text(),
+            nested.effective_instruction().raw
+        );
+        let FieldArgument::Nested(child) = &mut nested.instruction.arguments[0] else {
+            unreachable!()
+        };
+        child.instruction.name = "REF".into();
+        child.instruction.arguments = vec![FieldArgument::Text("Target".into())];
+        assert_eq!(
+            nested.effective_instruction_text(),
+            nested.effective_instruction().raw
+        );
+    }
+
+    #[test]
     fn malformed_comment_anchor_id_is_rejected() {
         let full = format!(
             r#"<w:p xmlns:w="{}"><w:commentRangeStart w:id="not-a-number"/></w:p>"#,
@@ -16009,6 +16775,211 @@ mod tests {
     }
 
     #[test]
+    fn typed_cache_replaces_simple_and_complex_results_without_losing_controls() {
+        for xml in [
+            r#"<w:fldSimple w:instr=" REF Target \f " w:dirty="1" xmlns:x="urn:producer" x:flag="kept"><w:r><w:t>OLD</w:t></w:r></w:fldSimple>"#,
+            r#"<w:r xmlns:x="urn:producer"><w:rPr><w:b/></w:rPr><w:fldChar w:fldCharType="begin" x:flag="kept"/></w:r><w:r><w:instrText xml:space="preserve"> REF Target \f </w:instrText></w:r><w:r><w:rPr><w:i/></w:rPr><w:fldChar w:fldCharType="separate"/><w:t>OLD</w:t><w:fldChar w:fldCharType="end"/></w:r>"#,
+        ] {
+            let mut paragraph = parse_paragraph(xml);
+            let RunContent::Field(field) = &mut paragraph.runs[0].content[0] else {
+                panic!("field");
+            };
+            let instruction = field.instruction.clone();
+            let mut reference = CT_R::new("");
+            reference.content = vec![RunContent::FootnoteRef {
+                id: 37,
+                custom_mark: None,
+            }];
+            reference.properties = Some(CT_RPr {
+                bold: Some(true),
+                ..Default::default()
+            });
+            field.set_cached_runs(vec![reference]).unwrap();
+            assert_eq!(field.cached_result, "");
+            assert_eq!(field.instruction, instruction);
+            let output = serialized_paragraph(&paragraph);
+            assert!(output.contains("x:flag=\"kept\""), "{output}");
+            assert!(output.contains("footnoteReference w:id=\"37\""), "{output}");
+            assert!(!output.contains("OLD"), "{output}");
+            let reopened = parse_paragraph(
+                output
+                    .strip_prefix("<w:p>")
+                    .unwrap()
+                    .strip_suffix("</w:p>")
+                    .unwrap(),
+            );
+            assert_eq!(parsed_field(&reopened, 0).cached_result, "");
+            assert_eq!(serialized_paragraph(&reopened), output);
+        }
+    }
+
+    #[test]
+    fn typed_cache_shared_run_keeps_prefix_suffix_and_nested_result() {
+        let mut paragraph = parse_paragraph(
+            r#"<w:r xmlns:x="urn:producer" x:keep="yes"><w:rPr><w:b/></w:rPr><w:t>PRE</w:t><w:fldChar w:fldCharType="begin"/><w:instrText> REF Target \f </w:instrText><w:fldChar w:fldCharType="separate"/><w:t>OLD</w:t><w:fldChar w:fldCharType="end"/><w:t>POST</w:t></w:r>"#,
+        );
+        let field = paragraph
+            .runs
+            .iter_mut()
+            .flat_map(|run| &mut run.content)
+            .find_map(|content| match content {
+                RunContent::Field(field) => Some(field),
+                _ => None,
+            })
+            .unwrap();
+        let child =
+            Field::from_raw("UNKNOWN", FieldForm::Complex, vec![CT_R::new("RICH")]).unwrap();
+        field
+            .set_cached_runs(vec![field_run(
+                child,
+                Some(CT_RPr {
+                    italic: Some(true),
+                    ..Default::default()
+                }),
+            )])
+            .unwrap();
+        let output = serialized_paragraph(&paragraph);
+        assert!(
+            output.contains("PRE") && output.contains("POST") && output.contains("RICH"),
+            "{output}"
+        );
+        assert!(!output.contains("OLD"), "{output}");
+        let reopened = parse_paragraph(
+            output
+                .strip_prefix("<w:p>")
+                .unwrap()
+                .strip_suffix("</w:p>")
+                .unwrap(),
+        );
+        assert_eq!(reopened.text(), "PRERICHPOST");
+        assert_eq!(serialized_paragraph(&reopened), output);
+    }
+
+    #[test]
+    fn typed_cache_nested_child_preserves_parent_and_namespace_bindings() {
+        for outer in [FieldForm::Simple, FieldForm::Complex] {
+            let child =
+                Field::from_raw(r"REF Target \f", FieldForm::Complex, vec![CT_R::new("OLD")])
+                    .unwrap();
+            let root = Field::from_raw("UNKNOWN", outer, vec![field_run(child, None)]).unwrap();
+            let mut paragraph = CT_P::new();
+            paragraph.runs.push(field_run(root, None));
+            let source = serialized_paragraph(&paragraph);
+            let mut parsed = parse_paragraph(
+                source
+                    .strip_prefix("<w:p>")
+                    .unwrap()
+                    .strip_suffix("</w:p>")
+                    .unwrap(),
+            );
+            let RunContent::Field(parent) = &mut parsed.runs[0].content[0] else {
+                panic!("parent");
+            };
+            let child = parent.cached_field_mut(0).unwrap();
+            let mut reference = CT_R::new("kept ");
+            reference.content.push(RunContent::EndnoteRef {
+                id: 41,
+                custom_mark: None,
+            });
+            child.set_cached_runs(vec![reference]).unwrap();
+            parent.refresh_cached_field_projection();
+            let output = serialized_paragraph(&parsed);
+            assert!(output.contains("endnoteReference w:id=\"41\""), "{output}");
+            assert!(!output.contains("OLD"), "{output}");
+            assert!(output.contains("UNKNOWN"), "{output}");
+            let reopened = parse_paragraph(
+                output
+                    .strip_prefix("<w:p>")
+                    .unwrap()
+                    .strip_suffix("</w:p>")
+                    .unwrap(),
+            );
+            assert_eq!(parsed_field(&reopened, 0).cached_result, "kept ");
+        }
+        let mut parsed = CT_P::from_xml_fragment(br#"<q:p xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w="urn:foreign"><q:fldSimple xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w="urn:foreign" q:instr=" REF Target \f " xmlns:x="urn:producer" x:keep="yes"><q:r><q:t>OLD</q:t></q:r></q:fldSimple></q:p>"#).unwrap();
+        let RunContent::Field(field) = &mut parsed.runs[0].content[0] else {
+            panic!("alias field");
+        };
+        let mut reference = CT_R::new("");
+        reference.content = vec![RunContent::CommentReference {
+            id: 43,
+            raw_before: 0,
+        }];
+        field.set_cached_runs(vec![reference]).unwrap();
+        let output = serialized_paragraph(&parsed);
+        assert!(output.contains("xmlns:w=\"urn:foreign\""), "{output}");
+        assert!(output.contains("x:keep=\"yes\""), "{output}");
+        assert!(output.contains("commentReference w:id=\"43\""), "{output}");
+        assert!(!output.contains("OLD"), "{output}");
+    }
+
+    #[test]
+    fn typed_cache_parse_keeps_empty_typed_results_and_original_shared_owner_bytes() {
+        let source = r#"<w:r><w:rPr><w:b/></w:rPr><w:t>PRE</w:t><w:fldChar w:fldCharType="begin"/><w:instrText> REF A \f </w:instrText><w:fldChar w:fldCharType="separate"/><w:footnoteReference w:id="17"/><w:fldChar w:fldCharType="end"/><w:t>MID</w:t><w:fldChar w:fldCharType="begin"/><w:instrText> REF B \f </w:instrText><w:fldChar w:fldCharType="separate"/><w:endnoteReference w:id="19"/><w:fldChar w:fldCharType="end"/><w:t>POST</w:t></w:r>"#;
+        let paragraph = parse_paragraph(source);
+        assert_eq!(
+            serialized_paragraph(&paragraph),
+            format!("<w:p>{source}</w:p>")
+        );
+        let fields = paragraph
+            .runs()
+            .into_iter()
+            .flat_map(|run| &run.content)
+            .filter_map(|content| match content {
+                RunContent::Field(field) => Some(field),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].cached_result, "");
+        assert_eq!(fields[1].cached_result, "");
+        assert!(
+            fields[0]
+                .cached_result_runs()
+                .unwrap()
+                .iter()
+                .flat_map(|run| &run.content)
+                .any(|content| matches!(content, RunContent::FootnoteRef { id: 17, .. }))
+        );
+        assert!(
+            !fields[0]
+                .cached_result_runs()
+                .unwrap()
+                .iter()
+                .flat_map(|run| &run.content)
+                .any(|content| matches!(content, RunContent::EndnoteRef { .. }))
+        );
+        assert!(
+            fields[1]
+                .cached_result_runs()
+                .unwrap()
+                .iter()
+                .flat_map(|run| &run.content)
+                .any(|content| matches!(content, RunContent::EndnoteRef { id: 19, .. }))
+        );
+        assert!(
+            !fields[1]
+                .cached_result_runs()
+                .unwrap()
+                .iter()
+                .flat_map(|run| &run.content)
+                .any(|content| matches!(content, RunContent::FootnoteRef { .. }))
+        );
+    }
+
+    #[test]
+    fn typed_cache_rejection_preserves_source_and_cached_state() {
+        let mut field = Field::new(r"REF Target \f", "OLD");
+        let before = format!("{field:?}");
+        assert!(field.set_cached_runs(vec![CT_R::new("invalid\0")]).is_err());
+        assert_eq!(field.cached_result, "OLD");
+        assert_eq!(format!("{field:?}"), before);
+        field.set_locked(Some(true));
+        assert!(field.set_cached_runs(vec![CT_R::new("fresh")]).is_err());
+        assert_eq!(field.cached_result, "OLD");
+    }
+
+    #[test]
     fn field_property_edits_preserve_unmodelled_xml_verbatim() {
         for xml in [
             r#"<a:fldSimple xmlns:a="http://schemas.openxmlformats.org/wordprocessingml/2006/main" a:instr="UNKNOWN" a:fldLock="1" xmlns:x="urn:producer"><x:keep note='yes'> exact </x:keep><a:r><a:t>cache</a:t></a:r></a:fldSimple>"#,
@@ -16309,5 +17280,288 @@ mod tests {
         let mut writer = Writer::new(Vec::new());
         let error = write_field(&mut writer, &field, None).unwrap_err();
         assert!(error.to_string().contains("source identity"));
+    }
+    #[test]
+    fn typed_annotation_cache_reopens_as_field_with_sibling_range_markers() {
+        for xml in [
+            r#"<w:fldSimple w:instr=" REF Target \f " producer="keep"><w:r><w:t>OLD</w:t></w:r></w:fldSimple>"#,
+            r#"<w:r><w:fldChar w:fldCharType="begin" producer="keep"/></w:r><w:r><w:instrText xml:space="preserve"> REF Target \f </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/><w:t>OLD</w:t><w:fldChar w:fldCharType="end"/></w:r>"#,
+            r#"<w:r producer="keep"><w:rPr><w:b/></w:rPr><w:t>PRE</w:t><w:fldChar w:fldCharType="begin"/><w:instrText xml:space="preserve"> REF Target \f </w:instrText><w:fldChar w:fldCharType="separate"/><w:t>OLD</w:t><w:fldChar w:fldCharType="end"/><w:t>POST</w:t></w:r>"#,
+        ] {
+            let mut paragraph = parse_paragraph(xml);
+            let field = paragraph
+                .runs
+                .iter_mut()
+                .flat_map(|run| &mut run.content)
+                .find_map(|content| {
+                    if let RunContent::Field(field) = content {
+                        Some(field)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap();
+            field
+                .set_cached_runs_with_comment_ranges(Vec::new(), Vec::new())
+                .unwrap();
+            assert_eq!(
+                field.cached_result, "",
+                "empty marker payload keeps the ordinary typed result contract"
+            );
+            let mut reference = CT_R::new("");
+            reference.content = vec![RunContent::CommentReference {
+                id: 17,
+                raw_before: 0,
+            }];
+            let ranges = vec![
+                CommentRangeMarker::Start {
+                    id: 17,
+                    run_index: 0,
+                    raw_before: 0,
+                    has_child_content: false,
+                },
+                CommentRangeMarker::End {
+                    id: 17,
+                    run_index: 1,
+                    raw_before: 0,
+                    has_child_content: false,
+                },
+            ];
+            field
+                .set_cached_runs_with_comment_ranges(vec![CT_R::new("LITERAL"), reference], ranges)
+                .unwrap();
+            let output = serialized_paragraph(&paragraph);
+            assert!(output.contains("producer=\"keep\""));
+            assert!(!output.contains("OLD"));
+            let reopened = parse_paragraph(
+                output
+                    .strip_prefix("<w:p>")
+                    .unwrap()
+                    .strip_suffix("</w:p>")
+                    .unwrap(),
+            );
+            let field = reopened
+                .runs
+                .iter()
+                .flat_map(|run| &run.content)
+                .find_map(|content| {
+                    if let RunContent::Field(field) = content {
+                        Some(field)
+                    } else {
+                        None
+                    }
+                })
+                .expect("complex annotation cache remains typed");
+            assert_eq!(field.cached_result, "LITERAL");
+            assert_eq!(field.effective_instruction().raw, r"REF Target \f");
+            assert_eq!(field.cached_result_comment_ranges().len(), 2);
+            assert!(
+                field
+                    .cached_result_runs()
+                    .unwrap()
+                    .iter()
+                    .flat_map(|run| &run.content)
+                    .any(|content| matches!(content, RunContent::CommentReference { id: 17, .. }))
+            );
+            assert!(
+                reopened.comment_ranges.is_empty(),
+                "cache markers are owned by the field, never moved outside it"
+            );
+            assert_eq!(serialized_paragraph(&reopened), output);
+            let mut reader = NsReader::from_reader(output.as_bytes());
+            let mut stack = Vec::<Vec<u8>>::new();
+            let mut buffer = Vec::new();
+            loop {
+                match reader.read_event_into(&mut buffer).unwrap() {
+                    Event::Start(element) => stack.push(element.local_name().as_ref().to_vec()),
+                    Event::End(_) => {
+                        stack.pop();
+                    }
+                    Event::Empty(element)
+                        if matches!(
+                            element.local_name().as_ref(),
+                            b"commentRangeStart" | b"commentRangeEnd"
+                        ) =>
+                    {
+                        assert_ne!(stack.last().map(Vec::as_slice), Some(b"r".as_slice()))
+                    }
+                    Event::Eof => break,
+                    _ => {}
+                }
+                buffer.clear();
+            }
+        }
+    }
+
+    #[test]
+    fn typed_annotation_marker_failures_leave_field_unchanged() {
+        let mut reference = CT_R::new("");
+        reference.content = vec![RunContent::CommentReference {
+            id: 17,
+            raw_before: 0,
+        }];
+        for ranges in [
+            vec![CommentRangeMarker::Start {
+                id: 17,
+                run_index: 0,
+                raw_before: 0,
+                has_child_content: false,
+            }],
+            vec![
+                CommentRangeMarker::Start {
+                    id: 18,
+                    run_index: 0,
+                    raw_before: 0,
+                    has_child_content: false,
+                },
+                CommentRangeMarker::End {
+                    id: 18,
+                    run_index: 1,
+                    raw_before: 0,
+                    has_child_content: false,
+                },
+            ],
+            vec![
+                CommentRangeMarker::Start {
+                    id: 17,
+                    run_index: 0,
+                    raw_before: 1,
+                    has_child_content: false,
+                },
+                CommentRangeMarker::End {
+                    id: 17,
+                    run_index: 1,
+                    raw_before: 0,
+                    has_child_content: false,
+                },
+            ],
+            vec![
+                CommentRangeMarker::Start {
+                    id: 17,
+                    run_index: 0,
+                    raw_before: 0,
+                    has_child_content: true,
+                },
+                CommentRangeMarker::End {
+                    id: 17,
+                    run_index: 1,
+                    raw_before: 0,
+                    has_child_content: false,
+                },
+            ],
+            vec![
+                CommentRangeMarker::Start {
+                    id: 17,
+                    run_index: 3,
+                    raw_before: 0,
+                    has_child_content: false,
+                },
+                CommentRangeMarker::End {
+                    id: 17,
+                    run_index: 3,
+                    raw_before: 0,
+                    has_child_content: false,
+                },
+            ],
+        ] {
+            let mut field = Field::new(r"REF Target \f", "OLD");
+            let before = format!("{field:?}");
+            assert!(
+                field
+                    .set_cached_runs_with_comment_ranges(
+                        vec![CT_R::new("literal"), reference.clone()],
+                        ranges
+                    )
+                    .is_err()
+            );
+            assert_eq!(format!("{field:?}"), before);
+        }
+        let mut field = Field::new(r"REF Target \f", "OLD");
+        let before = format!("{field:?}");
+        let mut raw = CT_R::new("literal");
+        raw.extra_xml
+            .push(br#"<w:commentRangeStart w:id="17"/>"#.to_vec());
+        assert!(
+            field
+                .set_cached_runs_with_comment_ranges(vec![raw, reference], vec![])
+                .is_err()
+        );
+        assert_eq!(format!("{field:?}"), before);
+    }
+
+    #[test]
+    fn typed_annotation_nested_cache_keeps_raw_markers_and_parent_controls() {
+        for outer in [FieldForm::Simple, FieldForm::Complex] {
+            for inner in [FieldForm::Simple, FieldForm::Complex] {
+                let child =
+                    Field::from_raw(r"REF Target \f", inner, vec![CT_R::new("OLD")]).unwrap();
+                let parent = Field::from_raw(
+                    "UNKNOWN",
+                    outer,
+                    vec![CT_R::new("kept "), field_run(child, None)],
+                )
+                .unwrap();
+                let mut paragraph = CT_P::new();
+                paragraph.runs.push(field_run(parent, None));
+                let original = serialized_paragraph(&paragraph);
+                let mut paragraph = parse_paragraph(
+                    original
+                        .strip_prefix("<w:p>")
+                        .unwrap()
+                        .strip_suffix("</w:p>")
+                        .unwrap(),
+                );
+                let RunContent::Field(parent) = &mut paragraph.runs[0].content[0] else {
+                    panic!("parent");
+                };
+                let child = parent.cached_field_mut(0).unwrap();
+                let mut reference = CT_R::new("");
+                reference.content = vec![RunContent::CommentReference {
+                    id: 29,
+                    raw_before: 0,
+                }];
+                child
+                    .set_cached_runs_with_comment_ranges(
+                        vec![CT_R::new("ANNOTATED"), reference],
+                        vec![
+                            CommentRangeMarker::Start {
+                                id: 29,
+                                run_index: 0,
+                                raw_before: 0,
+                                has_child_content: false,
+                            },
+                            CommentRangeMarker::End {
+                                id: 29,
+                                run_index: 1,
+                                raw_before: 0,
+                                has_child_content: false,
+                            },
+                        ],
+                    )
+                    .unwrap();
+                parent.refresh_cached_field_projection();
+                let output = serialized_paragraph(&paragraph);
+                assert!(!output.contains("OLD"));
+                assert!(output.contains("UNKNOWN"));
+                let output = output.replace(
+                    "<w:commentRangeStart ",
+                    "<w:commentRangeStart producer='verbatim' ",
+                );
+                let reopened = parse_paragraph(
+                    output
+                        .strip_prefix("<w:p>")
+                        .unwrap()
+                        .strip_suffix("</w:p>")
+                        .unwrap(),
+                );
+                let parent = parsed_field(&reopened, 0);
+                assert_eq!(parent.cached_result, "kept ANNOTATED");
+                let child = parent.cached_fields_in_source_order()[0];
+                assert_eq!(child.cached_result_comment_ranges().len(), 2);
+                assert_eq!(child.cached_result, "ANNOTATED");
+                assert!(reopened.comment_ranges.is_empty());
+                assert_eq!(serialized_paragraph(&reopened), output);
+            }
+        }
     }
 }

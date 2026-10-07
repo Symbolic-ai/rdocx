@@ -2198,6 +2198,7 @@ mod tests {
 
     fn layout_with_styles(table: &CT_Tbl, width: f64, styles: &CT_Styles) -> TableBlock {
         let input = LayoutInput {
+            sequence_snapshot: None,
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
             mirror_margins: false,
@@ -2396,6 +2397,7 @@ mod tests {
         // Layout with default styles
         let styles = rdocx_oxml::styles::CT_Styles::default();
         let input = crate::input::LayoutInput {
+            sequence_snapshot: None,
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
             mirror_margins: false,

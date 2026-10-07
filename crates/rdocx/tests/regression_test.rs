@@ -28333,6 +28333,7 @@ fn empty_story_layout_input() -> rdocx_layout::LayoutInput {
     };
 
     rdocx_layout::LayoutInput {
+        sequence_snapshot: None,
         automatic_hyphenation: false,
         clamp_tabs_past_margin: false,
         modern_footnote_layout: false,
@@ -40043,6 +40044,7 @@ mod advanced_table_geometry_regressions {
 
     fn layout_input() -> rdocx_layout::LayoutInput {
         rdocx_layout::LayoutInput {
+            sequence_snapshot: None,
             automatic_hyphenation: false,
             clamp_tabs_past_margin: false,
             modern_footnote_layout: false,
@@ -51031,5 +51033,3255 @@ fn control_owned_section_furniture_is_active_and_inherited() {
     for page in &layout.layout.pages {
         let text = f252_page_text(page);
         assert!(text.contains("CONTROL-HEADER") && text.contains("CONTROL-FOOTER"));
+    }
+}
+
+#[test]
+fn f280_hidden_sequence_format_matches_pinned_word() {
+    // F280-sequence-controls-snapshot-audit.json: hidden increments the
+    // document counter, but an explicit roman format displays the result.
+    let mut document = Document::new();
+    for instruction in ["SEQ Figure", r"SEQ Figure \h \* roman", r"SEQ Figure \c"] {
+        document
+            .add_paragraph("")
+            .add_run("")
+            .add_field(instruction, "OLD")
+            .unwrap();
+    }
+    let actual = document
+        .evaluate_fields(&FieldEvaluationContext::default())
+        .unwrap();
+    assert_eq!(
+        actual
+            .into_iter()
+            .map(|field| field.outcome)
+            .collect::<Vec<_>>(),
+        [
+            FieldOutcome::Resolved("1".into()),
+            FieldOutcome::Resolved("ii".into()),
+            FieldOutcome::Resolved("2".into())
+        ]
+    );
+}
+
+#[test]
+fn sequence_options_validate_and_preserve_switch_semantics() {
+    let mut document = Document::new();
+    document.add_paragraph("anchor");
+    let story = f254_story(&document, StoryKind::Body);
+    let position = StoryRunPosition {
+        location: f254_item(&document, &story, 0),
+        run_index: 0,
+    };
+    let options = rdocx::SequenceOptions {
+        restart: Some(7),
+        format: Some("ROMAN".into()),
+        ..Default::default()
+    };
+    document
+        .insert_sequence(&position, "Figure", &options)
+        .unwrap();
+    let fields = document
+        .evaluate_fields(&FieldEvaluationContext::default())
+        .unwrap();
+    assert_eq!(fields.len(), 1);
+    assert_eq!(fields[0].outcome, FieldOutcome::Resolved("VII".into()));
+}
+
+#[test]
+fn caption_and_reference_failure_is_atomic() {
+    let mut document = Document::new();
+    document.add_paragraph("anchor");
+    let story = f254_story(&document, StoryKind::Body);
+    let location = f254_item(&document, &story, 0);
+    let before = document.to_bytes().unwrap();
+    let options = rdocx::CaptionOptions {
+        label: String::new(),
+        text: "invalid".into(),
+        bookmark: "caption".into(),
+        ..Default::default()
+    };
+    assert!(document.insert_caption(&location, &options).is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let position = StoryRunPosition {
+        location,
+        run_index: usize::MAX,
+    };
+    assert!(
+        document
+            .insert_cross_reference(
+                &position,
+                "caption",
+                &rdocx::CrossReferenceOptions::default()
+            )
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn caption_targets_cover_text_label_and_number_in_each_story() {
+    for kind in [
+        StoryKind::Body,
+        StoryKind::Header,
+        StoryKind::Footer,
+        StoryKind::Footnote,
+        StoryKind::Endnote,
+    ] {
+        let mut document = Document::new();
+        document.add_paragraph("anchor");
+        document.set_header("header");
+        document.set_footer("footer");
+        document.add_footnote("footnote");
+        let body = f254_story(&document, StoryKind::Body);
+        document
+            .create_endnote(&f254_item(&document, &body, 0), "endnote")
+            .unwrap();
+        let story = f254_story(&document, kind);
+        let location = f254_item(&document, &story, 0);
+        let target = document
+            .insert_caption(
+                &location,
+                &rdocx::CaptionOptions {
+                    text: "A caption".into(),
+                    bookmark: "Caption".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let ranges = document.story_ranges().unwrap();
+        let names = ranges
+            .iter()
+            .filter_map(|range| match range.kind() {
+                rdocx::StoryRangeKind::Bookmark { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect::<HashSet<_>>();
+        assert!(names.contains(target.entire_caption.as_str()));
+        assert!(names.contains(target.label_and_number.as_str()));
+        assert!(names.contains(target.number.as_str()));
+        assert_eq!(
+            document.story_items(target.paragraph.story()).unwrap()[0].location(),
+            &target.paragraph
+        );
+        let bytes = document.to_bytes().unwrap();
+        assert_eq!(
+            Document::from_bytes(&bytes)
+                .unwrap()
+                .story_ranges()
+                .unwrap()
+                .len(),
+            3
+        );
+    }
+}
+
+#[test]
+fn sequence_story_context_matches_pinned_word() {
+    let mut document = Document::new();
+    for _ in 0..2 {
+        document
+            .add_paragraph("")
+            .add_run("")
+            .add_field("SEQ Control", "OLD")
+            .unwrap();
+    }
+    document.set_header("header");
+    let story = f254_story(&document, StoryKind::Header);
+    let location = f254_item(&document, &story, 0);
+    document
+        .insert_sequence(
+            &StoryRunPosition {
+                location,
+                run_index: 0,
+            },
+            "Control",
+            &rdocx::SequenceOptions {
+                repeat: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let values = document
+        .evaluate_fields(&FieldEvaluationContext::default())
+        .unwrap();
+    // Pure furniture evaluation cannot select a physical page context. Actual
+    // rendering reads the main document event context at this page placement.
+    assert!(
+        matches!(&values[2].outcome, FieldOutcome::KeepStored { diagnostic }
+        if diagnostic.contains("no unique physical document context"))
+    );
+    let layout = document.layout_deterministic().unwrap();
+    assert_eq!(layout.layout.pages.len(), 1);
+    let mut twos = 0;
+    let mut painted = Vec::new();
+    for page in &layout.layout.pages {
+        oxml_layout::walk(&page.elements, &mut |element, _| {
+            let text = match element {
+                oxml_layout::PositionedElement::Text(run) => Some(run.text.as_str()),
+                oxml_layout::PositionedElement::MultilingualText(run) => {
+                    Some(run.logical_text.as_str())
+                }
+                _ => None,
+            };
+            if let Some(text) = text {
+                painted.push(text.to_owned());
+                if text == "2" {
+                    twos += 1;
+                }
+            }
+        });
+    }
+    assert_eq!(
+        twos, 2,
+        "body source and actual header placement both paint 2: {painted:?}"
+    );
+}
+
+#[test]
+fn caption_reference_round_trip_preserves_producer_xml() {
+    let mut document = Document::new();
+    document.add_paragraph("anchor");
+    let location = f254_item(&document, &f254_story(&document, StoryKind::Body), 0);
+    let target = document
+        .insert_caption(&location, &rdocx::CaptionOptions::default())
+        .unwrap();
+    let position = StoryRunPosition {
+        location: target.paragraph,
+        run_index: 3,
+    };
+    document
+        .insert_cross_reference(
+            &position,
+            &target.number,
+            &rdocx::CrossReferenceOptions::default(),
+        )
+        .unwrap();
+    let bytes = document.to_bytes().unwrap();
+    let mut reopened = Document::from_bytes(&bytes).unwrap();
+    assert_eq!(
+        document
+            .evaluate_fields(&FieldEvaluationContext::default())
+            .unwrap(),
+        reopened
+            .evaluate_fields(&FieldEvaluationContext::default())
+            .unwrap()
+    );
+    assert_eq!(reopened.to_bytes().unwrap(), bytes);
+}
+
+#[test]
+fn ref_position_distinguishes_same_paragraph_run_boundaries() {
+    let mut document = Document::new();
+    document.add_paragraph("target").add_run(" separator");
+    let story = f254_story(&document, StoryKind::Body);
+    let location = f254_item(&document, &story, 0);
+    document
+        .add_story_bookmark(
+            "target",
+            StoryRunRange {
+                start: StoryRunPosition {
+                    location: location.clone(),
+                    run_index: 0,
+                },
+                end: StoryRunPosition {
+                    location,
+                    run_index: 1,
+                },
+            },
+        )
+        .unwrap();
+    let story = f254_story(&document, StoryKind::Body);
+    let location = f254_item(&document, &story, 0);
+    document
+        .insert_cross_reference(
+            &StoryRunPosition {
+                location,
+                run_index: 2,
+            },
+            "target",
+            &rdocx::CrossReferenceOptions {
+                position: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        document
+            .evaluate_fields(&FieldEvaluationContext::default())
+            .unwrap()[0]
+            .outcome,
+        FieldOutcome::Resolved("above".into())
+    );
+}
+
+#[test]
+fn f280_ref_position_before_after_and_containment_survive_update_reopen_and_paint() {
+    for (body, expected) in [
+        (
+            r#"<w:fldSimple w:instr=" REF target \p "><w:r><w:t>OLD-POSITION</w:t></w:r></w:fldSimple><w:bookmarkStart w:id="1" w:name="target"/><w:r><w:t>TARGET</w:t></w:r><w:bookmarkEnd w:id="1"/>"#,
+            Some("below"),
+        ),
+        (
+            r#"<w:bookmarkStart w:id="1" w:name="target"/><w:r><w:t>TARGET</w:t></w:r><w:bookmarkEnd w:id="1"/><w:fldSimple w:instr=" REF target \p "><w:r><w:t>OLD-POSITION</w:t></w:r></w:fldSimple>"#,
+            Some("above"),
+        ),
+        (
+            r#"<w:bookmarkStart w:id="1" w:name="target"/><w:r><w:t>TARGET</w:t></w:r><w:fldSimple w:instr=" REF target \p "><w:r><w:t>OLD-POSITION</w:t></w:r></w:fldSimple><w:bookmarkEnd w:id="1"/>"#,
+            None,
+        ),
+    ] {
+        let xml = format!(
+            r#"<w:document xmlns:w="{W_NS}"><w:body><w:p>{body}</w:p></w:body></w:document>"#
+        );
+        let mut document = document_with_content_controls(&xml);
+        let original = document.to_bytes().unwrap();
+        let fields = document
+            .evaluate_fields(&FieldEvaluationContext::default())
+            .unwrap();
+        match expected {
+            Some(value) => assert_eq!(fields[0].outcome, FieldOutcome::Resolved(value.into())),
+            None => assert!(
+                matches!(&fields[0].outcome, FieldOutcome::KeepStored { diagnostic } if diagnostic.contains("contains the field"))
+            ),
+        }
+        assert_eq!(document.to_bytes().unwrap(), original);
+        let painted = f252_page_text(&document.layout_deterministic().unwrap().layout.pages[0]);
+        assert!(
+            painted.contains(expected.unwrap_or("OLD-POSITION")),
+            "{painted}"
+        );
+        document
+            .update_fields(&FieldEvaluationContext::default())
+            .unwrap();
+        let saved = document.to_bytes().unwrap();
+        let mut reopened = Document::from_bytes(&saved).unwrap();
+        let fields = reopened
+            .evaluate_fields(&FieldEvaluationContext::default())
+            .unwrap();
+        assert_eq!(fields[0].cached_result, expected.unwrap_or("OLD-POSITION"));
+        let layout = reopened.layout_deterministic().unwrap();
+        let painted = f252_page_text(&layout.layout.pages[0]);
+        assert!(
+            painted.contains(expected.unwrap_or("OLD-POSITION")),
+            "{painted}"
+        );
+        if expected.is_none() {
+            assert!(
+                layout
+                    .layout
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.message.contains("contains the field"))
+            );
+        }
+        assert_eq!(reopened.to_bytes().unwrap(), saved);
+    }
+}
+
+#[test]
+fn f280_same_physical_owner_positions_match_authenticated_word_controls() {
+    use base64::Engine as _;
+    // Native-normalized source 6283b061ebcaf7a1f23bda0181e1235e447f1cf15c6dbfe5730379a6f28ba790.
+    // Derived input resets only36 selected complex cache text nodes and6 fallback copies.
+    // Explicit native F9 selected body, header, footer, normal footnote, normal endnote and box.
+    // Word emits a self-reference error for CONTAIN. This library conservatively
+    // preserves that producer cache with a diagnostic rather than claiming error parity.
+    let bytes = base64::engine::general_purpose::STANDARD.decode("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").unwrap();
+    let mut document = Document::from_bytes(&bytes).unwrap();
+    let original = document.to_bytes().unwrap();
+    let original_xml = document_xml(&mut document);
+    let opaque_fallback = original_xml
+        .split("<mc:Fallback>")
+        .nth(1)
+        .unwrap()
+        .split("</mc:Fallback>")
+        .next()
+        .unwrap()
+        .to_string();
+    let fields = document.evaluate_fields(&Default::default()).unwrap();
+    assert_eq!(fields.len(), 36, "{fields:?}");
+    let mut expected = Vec::new();
+    for field in &fields {
+        let cache = field.cached_result.as_str();
+        let value = if cache.ends_with("_PARA_BEFORE") || cache.ends_with("_RUN_BEFORE") {
+            "below".to_string()
+        } else if cache.ends_with("_RUN_AFTER") || cache.ends_with("_PARA_AFTER") {
+            "above".to_string()
+        } else if cache.ends_with("_PLAIN") {
+            format!(
+                "TARGET_{}",
+                cache
+                    .strip_prefix("OLD_")
+                    .unwrap()
+                    .strip_suffix("_PLAIN")
+                    .unwrap()
+            )
+        } else {
+            assert!(cache.ends_with("_CONTAIN"), "{field:?}");
+            assert!(
+                matches!(&field.outcome, FieldOutcome::KeepStored { diagnostic } if diagnostic.contains("contains the field")),
+                "{field:?}"
+            );
+            cache.to_string()
+        };
+        if !cache.ends_with("_CONTAIN") {
+            assert_eq!(
+                field.outcome,
+                FieldOutcome::Resolved(value.clone()),
+                "{field:?}"
+            );
+        }
+        expected.push(value);
+    }
+    assert_eq!(document.to_bytes().unwrap(), original);
+    for owner in ["BODY", "HEADER", "FOOTER", "FOOTNOTE", "ENDNOTE", "BOX"] {
+        assert_eq!(
+            fields
+                .iter()
+                .filter(|field| field.cached_result.starts_with(&format!("OLD_{owner}_")))
+                .count(),
+            6
+        );
+    }
+    let layout = document.layout_deterministic().unwrap();
+    let painted = layout
+        .layout
+        .pages
+        .iter()
+        .map(|page| f252_page_text(page))
+        .collect::<String>();
+    for owner in ["BODY", "HEADER", "FOOTER", "FOOTNOTE", "ENDNOTE", "BOX"] {
+        assert!(
+            painted.contains(&format!("TARGET_{owner}")),
+            "{owner}: {painted}"
+        );
+        assert!(
+            painted.contains(&format!("OLD_{owner}_CONTAIN")),
+            "{owner}: {painted}"
+        );
+        for case in [
+            "PARA_BEFORE",
+            "RUN_BEFORE",
+            "RUN_AFTER",
+            "PARA_AFTER",
+            "PLAIN",
+        ] {
+            assert!(
+                !painted.contains(&format!("OLD_{owner}_{case}")),
+                "{owner}: {painted}"
+            );
+        }
+    }
+    assert_eq!(document.update_fields(&Default::default()).unwrap(), 36);
+    let saved = document.to_bytes().unwrap();
+    let saved_xml = document_xml(&mut document);
+    assert_eq!(
+        saved_xml
+            .split("<mc:Fallback>")
+            .nth(1)
+            .unwrap()
+            .split("</mc:Fallback>")
+            .next()
+            .unwrap(),
+        opaque_fallback
+    );
+    assert!(opaque_fallback.contains("OLD_BOX_RUN_BEFORE"));
+    let mut reopened = Document::from_bytes(&saved).unwrap();
+    let values = reopened.evaluate_fields(&Default::default()).unwrap();
+    assert_eq!(
+        values
+            .iter()
+            .map(|field| field.cached_result.clone())
+            .collect::<Vec<_>>(),
+        expected
+    );
+    assert_eq!(reopened.to_bytes().unwrap(), saved);
+    assert_eq!(
+        values
+            .iter()
+            .map(|field| field.instruction.as_str())
+            .collect::<Vec<_>>(),
+        fields
+            .iter()
+            .map(|field| field.instruction.as_str())
+            .collect::<Vec<_>>()
+    );
+    let painted = reopened
+        .layout_deterministic()
+        .unwrap()
+        .layout
+        .pages
+        .iter()
+        .map(|page| f252_page_text(page))
+        .collect::<String>();
+    for owner in ["BODY", "HEADER", "FOOTER", "FOOTNOTE", "ENDNOTE", "BOX"] {
+        assert!(
+            painted.contains(&format!("TARGET_{owner}")),
+            "{owner}: {painted}"
+        );
+        assert!(
+            painted.contains(&format!("OLD_{owner}_CONTAIN")),
+            "{owner}: {painted}"
+        );
+    }
+}
+
+#[test]
+fn f280_unclosed_sequence_quotes_retain_cache_without_advancing_the_shared_counter() {
+    let xml = format!(
+        r#"<w:document xmlns:w="{W_NS}"><w:body><w:p><w:fldSimple w:instr=" SEQ Figure \* &quot;ARABIC"><w:r><w:t>OLD-MALFORMED</w:t></w:r></w:fldSimple><w:r><w:t> / </w:t></w:r><w:fldSimple w:instr=" SEQ Figure "><w:r><w:t>OLD-VALID</w:t></w:r></w:fldSimple></w:p></w:body></w:document>"#
+    );
+    let mut document = document_with_content_controls(&xml);
+    let original = document.to_bytes().unwrap();
+    let fields = document
+        .evaluate_fields(&FieldEvaluationContext::default())
+        .unwrap();
+    assert!(
+        matches!(&fields[0].outcome, FieldOutcome::KeepStored { diagnostic } if diagnostic.starts_with("field SEQ has unclosed quoting")),
+        "{fields:?}"
+    );
+    assert_eq!(fields[1].outcome, FieldOutcome::Resolved("1".into()));
+    assert_eq!(document.to_bytes().unwrap(), original);
+    let layout = document.layout_deterministic().unwrap();
+    let painted = f252_page_text(&layout.layout.pages[0]);
+    assert!(
+        painted.contains("OLD-MALFORMED")
+            && painted.contains('1')
+            && !painted.contains("OLD-VALID"),
+        "{painted}"
+    );
+    assert!(
+        layout
+            .layout
+            .diagnostics
+            .iter()
+            .any(|d| d.message == "field SEQ has unclosed quoting")
+    );
+    document
+        .update_fields(&FieldEvaluationContext::default())
+        .unwrap();
+    let saved = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&saved).unwrap();
+    let fields = reopened
+        .evaluate_fields(&FieldEvaluationContext::default())
+        .unwrap();
+    assert_eq!(fields[0].cached_result, "OLD-MALFORMED");
+    assert_eq!(fields[1].cached_result, "1");
+    let painted = f252_page_text(&reopened.layout_deterministic().unwrap().layout.pages[0]);
+    assert!(
+        painted.contains("OLD-MALFORMED")
+            && painted.contains('1')
+            && !painted.contains("OLD-VALID"),
+        "{painted}"
+    );
+}
+
+#[test]
+fn f280_ordinary_ref_consumes_related_targets_and_retains_cross_story_positions() {
+    for kind in [
+        StoryKind::Header,
+        StoryKind::Footer,
+        StoryKind::Footnote,
+        StoryKind::Endnote,
+        StoryKind::TextBox,
+    ] {
+        let mut document = Document::new();
+        document.add_paragraph("BODY-TARGET");
+        document.set_header("header");
+        document.set_footer("footer");
+        let body_story = f254_story(&document, StoryKind::Body);
+        let body_location = f254_item(&document, &body_story, 0);
+        document
+            .create_footnote(&body_location, "footnote")
+            .unwrap();
+        let body_location = f254_item(&document, &f254_story(&document, StoryKind::Body), 0);
+        document.create_endnote(&body_location, "endnote").unwrap();
+        let zero = Length::pt(0.0);
+        document
+            .add_text_box_to_story(
+                &f254_story(&document, StoryKind::Body),
+                "box",
+                rdocx::TextBoxOptions {
+                    width: Length::pt(360.0),
+                    height: Length::pt(96.0),
+                    anchor: rdocx::PictureAnchor {
+                        horizontal_relative_from: rdocx::DrawingHorizontalRelativeFrom::Column,
+                        horizontal_offset: zero,
+                        horizontal_alignment: None,
+                        vertical_relative_from: rdocx::DrawingVerticalRelativeFrom::Paragraph,
+                        vertical_offset: Length::pt(60.0),
+                        vertical_alignment: None,
+                        wrap: rdocx::DrawingWrap::None,
+                        distance_top: zero,
+                        distance_bottom: zero,
+                        distance_left: zero,
+                        distance_right: zero,
+                        relative_height: 1,
+                        behind_text: false,
+                    },
+                    rotation_degrees: 0.0,
+                    text_direction: rdocx::TextBoxDirection::Horizontal,
+                    fill_color: None,
+                },
+            )
+            .unwrap();
+        let definition = document
+            .add_numbering_definition(&[ListLevel::decimal()])
+            .unwrap();
+        let instance = document.add_numbering_instance(definition, &[]).unwrap();
+        let mut target = CT_P::new();
+        target.properties = Some(CT_PPr {
+            num_id: Some(instance),
+            num_ilvl: Some(0),
+            ..Default::default()
+        });
+        target.add_run("RELATED-TARGET");
+        target
+            .anchor_accepted_range(
+                Some(0),
+                Some(1),
+                rdocx_oxml::text::RangeAnchor::Bookmark {
+                    id: 90,
+                    name: "RelatedTarget",
+                },
+            )
+            .unwrap();
+        let mut position = CT_R::new("");
+        position.content = vec![rdocx_oxml::text::RunContent::Field(
+            rdocx_oxml::text::Field::new(r"REF BodyTarget \p", "OLD-RELATED-POSITION"),
+        )];
+        target.runs.push(position);
+        let mut position = CT_R::new("");
+        position.content = vec![rdocx_oxml::text::RunContent::Field(
+            rdocx_oxml::text::Field::new(r"REF BodyTarget \n \p", "OLD-RELATED-NUMBER-POSITION"),
+        )];
+        target.runs.push(position);
+        let story = f254_story(&document, kind);
+        document
+            .insert_content(
+                &f254_item(&document, &story, 0),
+                ContentFragment::paragraph(target).unwrap(),
+            )
+            .unwrap();
+        let location = f254_item(&document, &f254_story(&document, StoryKind::Body), 0);
+        document
+            .add_story_bookmark(
+                "BodyTarget",
+                StoryRunRange {
+                    start: StoryRunPosition {
+                        location: location.clone(),
+                        run_index: 0,
+                    },
+                    end: StoryRunPosition {
+                        location,
+                        run_index: 1,
+                    },
+                },
+            )
+            .unwrap();
+        let mut fields = document.add_paragraph("");
+        for (instruction, cache) in [
+            ("REF RelatedTarget", "OLD-TEXT"),
+            (r"REF RelatedTarget \n", "OLD-NUMBER"),
+            (r"REF RelatedTarget \w \t", "OLD-FULL"),
+            (r"REF RelatedTarget \p", "OLD-BODY-POSITION"),
+            (r"REF RelatedTarget \n \p", "OLD-BODY-NUMBER-POSITION"),
+        ] {
+            fields.add_run("").add_field(instruction, cache).unwrap();
+        }
+        let original = document.to_bytes().unwrap();
+        let pure = document.evaluate_fields(&Default::default()).unwrap();
+        assert_eq!(pure.len(), 7, "{kind:?}: {pure:?}");
+        assert_eq!(
+            pure[0].outcome,
+            FieldOutcome::Resolved("RELATED-TARGET".into()),
+            "{kind:?}: {pure:?}"
+        );
+        assert_eq!(
+            pure[1].outcome,
+            FieldOutcome::Resolved("1".into()),
+            "{kind:?}: {pure:?}"
+        );
+        assert_eq!(
+            pure[2].outcome,
+            FieldOutcome::Resolved("1".into()),
+            "{kind:?}: {pure:?}"
+        );
+        for field in &pure[3..] {
+            assert!(
+                matches!(&field.outcome, FieldOutcome::KeepStored { diagnostic } if diagnostic.contains("unavailable across story owners")),
+                "{kind:?}: {pure:?}"
+            );
+        }
+        assert_eq!(document.to_bytes().unwrap(), original);
+        let layout = document.layout_deterministic().unwrap();
+        let painted = layout
+            .layout
+            .pages
+            .iter()
+            .map(|page| f252_page_text(page))
+            .collect::<String>();
+        for cache in [
+            "OLD-BODY-POSITION",
+            "OLD-BODY-NUMBER-POSITION",
+            "OLD-RELATED-POSITION",
+            "OLD-RELATED-NUMBER-POSITION",
+        ] {
+            assert!(painted.contains(cache), "{kind:?}: {painted}");
+        }
+        assert!(
+            layout
+                .layout
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("unavailable across story owners"))
+        );
+        assert_eq!(
+            document.update_fields(&Default::default()).unwrap(),
+            7,
+            "{kind:?}: ordinary updater also marks retained caches dirty"
+        );
+        let saved = document.to_bytes().unwrap();
+        let mut reopened = Document::from_bytes(&saved).unwrap();
+        let values = reopened.evaluate_fields(&Default::default()).unwrap();
+        assert_eq!(values[0].cached_result, "RELATED-TARGET");
+        assert_eq!(values[1].cached_result, "1");
+        assert_eq!(values[2].cached_result, "1");
+        assert_eq!(
+            values[3..]
+                .iter()
+                .map(|f| f.cached_result.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "OLD-BODY-POSITION",
+                "OLD-BODY-NUMBER-POSITION",
+                "OLD-RELATED-POSITION",
+                "OLD-RELATED-NUMBER-POSITION"
+            ]
+        );
+        assert_eq!(reopened.to_bytes().unwrap(), saved);
+        let painted = reopened
+            .layout_deterministic()
+            .unwrap()
+            .layout
+            .pages
+            .iter()
+            .map(|page| f252_page_text(page))
+            .collect::<String>();
+        assert!(
+            painted.contains("RELATED-TARGET") && painted.contains("OLD-BODY-NUMBER-POSITION"),
+            "{kind:?}: {painted}"
+        );
+    }
+}
+
+#[test]
+fn f280_checked_accepted_insertion_preserves_controls_and_rejects_revisions_atomically() {
+    let xml = format!(
+        r#"<w:p xmlns:w="{W_NS}" xmlns:x="urn:opaque"><w:r><w:t>before</w:t></w:r><w:sdt><w:sdtPr/><w:sdtContent><w:r><w:t>A</w:t></w:r><w:r><w:t>B</w:t></w:r></w:sdtContent></w:sdt><x:keep x:value="untouched"/><w:r><w:t>after</w:t></w:r></w:p>"#
+    );
+    let mut paragraph = CT_P::from_xml_fragment(xml.as_bytes()).unwrap();
+    paragraph
+        .insert_accepted_run(2, CT_R::new("inserted"))
+        .unwrap();
+    let output = f280_paragraph_xml(&paragraph);
+    let text = String::from_utf8(output).unwrap();
+    assert!(text.contains(r#"<x:keep x:value="untouched"/>"#));
+    assert!(text.find("inserted").unwrap() < text.find("</w:sdtContent>").unwrap());
+    let runs = paragraph
+        .accepted_run_paths()
+        .into_iter()
+        .map(|path| paragraph.accepted_run(&path).unwrap().text())
+        .collect::<Vec<_>>();
+    assert_eq!(runs, ["before", "A", "inserted", "B", "after"]);
+    let revision = format!(
+        r#"<w:p xmlns:w="{W_NS}"><w:ins w:id="1" w:author="producer"><w:r><w:t>A</w:t></w:r><w:r><w:t>B</w:t></w:r></w:ins></w:p>"#
+    );
+    let mut paragraph = CT_P::from_xml_fragment(revision.as_bytes()).unwrap();
+    let before = f280_paragraph_xml(&paragraph);
+    assert!(
+        paragraph
+            .insert_accepted_run(1, CT_R::new("refused"))
+            .is_err()
+    );
+    assert_eq!(f280_paragraph_xml(&paragraph), before);
+}
+
+fn f280_paragraph_xml(paragraph: &CT_P) -> Vec<u8> {
+    let mut output = Vec::new();
+    paragraph
+        .to_xml(&mut quick_xml::Writer::new(&mut output))
+        .unwrap();
+    output
+}
+
+#[test]
+fn f280_end_boundary_insertion_retains_existing_bookmark_attachment() {
+    let mut paragraph = CT_P::new();
+    paragraph.add_run("target");
+    paragraph
+        .anchor_accepted_range(
+            Some(0),
+            Some(1),
+            rdocx_oxml::text::RangeAnchor::Bookmark {
+                id: 1,
+                name: "target",
+            },
+        )
+        .unwrap();
+    paragraph
+        .insert_accepted_run(1, CT_R::new("inside"))
+        .unwrap();
+    let xml = String::from_utf8(f280_paragraph_xml(&paragraph)).unwrap();
+    assert!(xml.find("inside").unwrap() < xml.find("bookmarkEnd").unwrap());
+    assert_eq!(
+        paragraph
+            .bookmark_markers
+            .iter()
+            .find(|marker| !marker.is_start())
+            .unwrap()
+            .projected_run_index(),
+        2
+    );
+}
+
+#[test]
+fn ref_note_copy_matches_pinned_word_typed_content() {
+    let mut document = Document::new();
+    let note = document.add_footnote("Source note payload");
+    document.add_paragraph("literal").add_footnote_ref(note);
+    document.add_paragraph("reference");
+    let story = f254_story(&document, StoryKind::Body);
+    let location = f254_item(&document, &story, 0);
+    document
+        .add_story_bookmark(
+            "marker",
+            StoryRunRange {
+                start: StoryRunPosition {
+                    location: location.clone(),
+                    run_index: 1,
+                },
+                end: StoryRunPosition {
+                    location,
+                    run_index: 2,
+                },
+            },
+        )
+        .unwrap();
+    let story = f254_story(&document, StoryKind::Body);
+    document
+        .insert_cross_reference(
+            &StoryRunPosition {
+                location: f254_item(&document, &story, 1),
+                run_index: 1,
+            },
+            "marker",
+            &rdocx::CrossReferenceOptions {
+                copy_referenced_notes: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    document
+        .update_fields(&FieldEvaluationContext::default())
+        .unwrap();
+    // Authenticated marker-only REF f has empty text, a typed reference and
+    // a separately allocated copied note. It is not a number-string cache.
+    let notes = document.footnotes();
+    assert_eq!(notes.len(), 2);
+    assert_eq!(notes[0].1, "Source note payload");
+    assert_eq!(notes[1].1, "Source note payload");
+    assert_ne!(notes[0].0, notes[1].0);
+    let bytes = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let body = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    assert_eq!(body.matches("footnoteReference").count(), 2);
+}
+
+#[test]
+fn accepted_revision_sequence_sources_keep_deleted_physical_ids_through_update_and_reopen() {
+    let mut seed = document_with_mail_merge_header();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    let mut body =
+        String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let deleted = r#"<w:del w:id="0" w:author="A"><w:fldSimple w:instr="SEQ Figure" w:dirty="0"><w:r><w:delText>DELETED-OLD</w:delText><w:fldSimple w:instr="SEQ Figure \r 99"><w:r><w:t>DELETED-NESTED-OLD</w:t></w:r></w:fldSimple></w:r></w:fldSimple></w:del>"#;
+    let inserted = r#"<w:ins w:id="1" w:author="A"><w:fldSimple w:instr="SEQ Figure"><w:r><w:t>INSERTED-OLD</w:t></w:r></w:fldSimple></w:ins>"#;
+    body = body.replacen("<w:body>", &format!(r#"<w:body><w:p>{deleted}{inserted}<w:bookmarkStart w:id="1" w:name="AcceptedSequence"/><w:fldSimple w:instr="SEQ Figure"><w:r><w:t>DIRECT-OLD</w:t></w:r></w:fldSimple><w:bookmarkEnd w:id="1"/></w:p>"#), 1);
+    package.set_part("/word/document.xml", body.into_bytes());
+    let header = br#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:del w:id="2" w:author="A"><w:fldSimple w:instr="SEQ Figure"><w:r><w:delText>HEADER-DELETED-OLD</w:delText></w:r></w:fldSimple></w:del><w:ins w:id="3" w:author="A"><w:fldSimple w:instr="REF AcceptedSequence"><w:r><w:t>HEADER-REF-OLD</w:t></w:r></w:fldSimple></w:ins><w:sdt><w:sdtContent><w:ins w:id="4" w:author="A"><w:fldSimple w:instr="REF AcceptedSequence"><w:r><w:t>HEADER-CONTROL-REF-OLD</w:t></w:r></w:fldSimple></w:ins></w:sdtContent></w:sdt></w:p></w:hdr>"#;
+    package.set_part("/word/header1.xml", header.to_vec());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+    let context = FieldEvaluationContext::default();
+    let before = document.to_bytes().unwrap();
+    let outcomes = document.evaluate_fields(&context).unwrap();
+    assert_eq!(document.to_bytes().unwrap(), before);
+    assert_eq!(
+        outcomes
+            .iter()
+            .map(|field| field.outcome.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            FieldOutcome::Resolved("1".into()),
+            FieldOutcome::Resolved("2".into()),
+            FieldOutcome::Resolved("2".into()),
+            FieldOutcome::Resolved("2".into())
+        ]
+    );
+    assert_eq!(document.update_fields(&context).unwrap(), 4);
+    let saved = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    let body = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    let header = std::str::from_utf8(package.get_part("/word/header1.xml").unwrap()).unwrap();
+    assert!(body.contains(deleted));
+    assert!(header.contains("HEADER-DELETED-OLD"));
+    assert!(!body.contains("INSERTED-OLD") && !body.contains("DIRECT-OLD"));
+    assert!(!header.contains("HEADER-REF-OLD"));
+    let reopened = Document::from_bytes(&saved).unwrap();
+    assert_eq!(
+        reopened
+            .evaluate_fields(&context)
+            .unwrap()
+            .iter()
+            .map(|field| field.cached_result.as_str())
+            .collect::<Vec<_>>(),
+        vec!["1", "2", "2", "2"]
+    );
+    let layout = reopened.layout_deterministic().unwrap();
+    let painted = layout
+        .layout
+        .pages
+        .iter()
+        .map(|page| f252_page_text(page))
+        .collect::<String>();
+    assert!(!painted.contains("DELETED") && !painted.contains("OLD"));
+    assert!(painted.contains('1') && painted.contains('2'));
+}
+
+#[test]
+fn expanded_sequence_reference_sources_preserve_ordinary_field_discovery() {
+    let mut seed = document_with_mail_merge_header();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    let mut body =
+        String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    body = body.replacen("<w:body>", r#"<w:body><w:p><w:bookmarkStart w:id="1" w:name="BodySequence"/><w:fldSimple w:instr="SEQ Figure \r 7"><w:r><w:t>OLD-BODY-SEQ</w:t></w:r></w:fldSimple><w:bookmarkEnd w:id="1"/></w:p><w:p><w:fldSimple w:instr="MERGEFIELD BodyValue"><w:r><w:t>OLD-BODY-MERGE</w:t></w:r></w:fldSimple></w:p>"#, 1);
+    package.set_part("/word/document.xml", body.into_bytes());
+    let mut header =
+        String::from_utf8(package.get_part("/word/header1.xml").unwrap().to_vec()).unwrap();
+    let hidden = r#"<q:fldSimple q:instr="MERGEFIELD &quot;Full Name&quot;"><q:r><q:t>stored table header</q:t></q:r></q:fldSimple>"#;
+    assert!(header.contains(hidden));
+    let hidden_preserved =
+        hidden.replacen("q:instr=", "q:dirty=\"0\" q:fldLock=\"false\" q:instr=", 1);
+    header = header.replacen(hidden, &hidden_preserved, 1);
+    header = header.replacen("<w:tbl", r#"<w:p><w:fldSimple w:instr="REF BodySequence"><w:r><w:t>OLD-HEADER-REF</w:t></w:r></w:fldSimple></w:p><w:tbl"#, 1);
+    header = header.replacen(&hidden_preserved, &format!(r#"{hidden_preserved}<q:fldSimple q:instr="SEQ Figure"><q:r><q:t>OLD-HEADER-SEQ</q:t></q:r></q:fldSimple>"#), 1);
+    package.set_part("/word/header1.xml", header.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+    let context = FieldEvaluationContext {
+        merge_fields: [
+            ("BodyValue".into(), "VISIBLE".into()),
+            ("Full Name".into(), "UNEXPECTED-TABLE".into()),
+            ("Name".into(), "UNEXPECTED-CONTROL".into()),
+        ]
+        .into(),
+        ..Default::default()
+    };
+    let before = document.to_bytes().unwrap();
+    let fields = document.evaluate_fields(&context).unwrap();
+    assert_eq!(document.to_bytes().unwrap(), before);
+    assert_eq!(
+        fields
+            .iter()
+            .map(|field| field.field_index)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2, 3]
+    );
+    assert_eq!(
+        fields
+            .iter()
+            .map(|field| field.outcome.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            FieldOutcome::Resolved("7".into()),
+            FieldOutcome::Resolved("VISIBLE".into()),
+            FieldOutcome::Resolved("7".into()),
+            FieldOutcome::Resolved("Error! Main Document Only.".into())
+        ]
+    );
+    assert_eq!(document.update_fields(&context).unwrap(), 4);
+    let saved = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    let header = std::str::from_utf8(package.get_part("/word/header1.xml").unwrap()).unwrap();
+    assert!(
+        header.contains(&hidden_preserved),
+        "hidden ordinary source XML changed: {header}"
+    );
+    assert!(header.contains("stored control header"));
+    assert!(!header.contains("UNEXPECTED") && !header.contains("OLD-HEADER"));
+    let reopened = Document::from_bytes(&saved).unwrap();
+    let fields = reopened.evaluate_fields(&context).unwrap();
+    assert_eq!(fields.len(), 4);
+    assert_eq!(fields[2].cached_result, "7");
+    assert_eq!(fields[3].cached_result, "Error! Main Document Only.");
+    let layout = reopened.layout_deterministic().unwrap();
+    assert!(
+        layout
+            .layout
+            .pages
+            .iter()
+            .any(|page| f252_page_text(page).contains("Error! Main Document Only."))
+    );
+}
+
+#[test]
+fn captions_and_references_match_pinned_word_before_and_after_renumbering() {
+    let mut document = Document::new();
+    document.add_paragraph("references");
+    let mut targets = Vec::new();
+    for label in ["Figure", "Table", "Equation"] {
+        let story = f254_story(&document, StoryKind::Body);
+        let target = document
+            .insert_caption(
+                &f254_item(&document, &story, 0),
+                &rdocx::CaptionOptions {
+                    label: label.into(),
+                    bookmark: format!("{label}Caption"),
+                    text: "Original".into(),
+                    separator: " : ".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        targets.push((label.to_owned(), target.number));
+    }
+    for (_, number) in &targets {
+        let story = f254_story(&document, StoryKind::Body);
+        let items = document.story_items(&story).unwrap();
+        let position = StoryRunPosition {
+            location: items
+                .iter()
+                .rev()
+                .find(|item| item.kind() == rdocx::StoryItemKind::Paragraph)
+                .unwrap()
+                .location()
+                .clone(),
+            run_index: 1,
+        };
+        document
+            .insert_cross_reference(&position, number, &rdocx::CrossReferenceOptions::default())
+            .unwrap();
+    }
+    document
+        .update_fields(&FieldEvaluationContext::default())
+        .unwrap();
+    let before = document
+        .evaluate_fields(&FieldEvaluationContext::default())
+        .unwrap();
+    assert!(
+        before
+            .iter()
+            .filter(|field| field.instruction.starts_with("REF"))
+            .all(|field| field.cached_result == "1")
+    );
+    for (label, _) in &targets {
+        let story = f254_story(&document, StoryKind::Body);
+        document
+            .insert_caption(
+                &f254_item(&document, &story, 0),
+                &rdocx::CaptionOptions {
+                    label: label.clone(),
+                    bookmark: format!("{label}Inserted"),
+                    text: "Inserted".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+    document
+        .update_fields(&FieldEvaluationContext::default())
+        .unwrap();
+    let after = document
+        .evaluate_fields(&FieldEvaluationContext::default())
+        .unwrap();
+    assert!(
+        after
+            .iter()
+            .filter(|field| field.instruction.starts_with("REF"))
+            .all(|field| field.cached_result == "2")
+    );
+}
+
+#[test]
+fn ref_switches_preserve_number_context_delimiters_and_links() {
+    let mut document = Document::new();
+    document.add_paragraph("anchor");
+    let story = f254_story(&document, StoryKind::Body);
+    document
+        .insert_cross_reference(
+            &StoryRunPosition {
+                location: f254_item(&document, &story, 0),
+                run_index: 1,
+            },
+            "target",
+            &rdocx::CrossReferenceOptions {
+                number: rdocx::CrossReferenceNumber::FullContext,
+                delimiter: Some("-".into()),
+                hyperlink: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let field = &document
+        .evaluate_fields(&FieldEvaluationContext::default())
+        .unwrap()[0];
+    assert!(field.instruction.contains(r"\w"));
+    assert!(field.instruction.contains(r"\h"));
+    let instruction = rdocx_oxml::text::Field::new(&field.instruction, "").instruction;
+    assert!(instruction.switches.iter().any(|switch| switch.name == "d"
+        && switch.argument == Some(rdocx_oxml::text::FieldArgument::Text("-".into()))));
+    assert!(matches!(field.outcome, FieldOutcome::KeepStored { .. }));
+}
+
+#[test]
+fn optional_sequence_bookmarks_match_pinned_word_without_incrementing() {
+    // Word 16.113.2 build 16.113.26092012, six-stage authenticated capture.
+    // Exact original document.xml from source DOCX SHA
+    // 343e1636310dab3b8c3f2df809185763bcc0845cbdcb681c3a9c05adedf9df06.
+    // First actual F9 SHA 5d22afe6ffc23b52773270159135c93934762de9a7a5d37d5b6b91fe789896ac.
+    // Reopen SHA 06b4ac4f6bc4a0e6744300cbe8eeac64735eddf6ec27452d70f25ca99c8b0fb4.
+    // This asserts typed field values and unchanged instructions, not native package normalization or PDF parity.
+    let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><w:body><w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">TARGET-BEFORE = </w:t></w:r><w:bookmarkStart w:id="0" w:name="S90_SEQ_BEFORE"/><w:fldSimple w:instr="SEQ Figure \r 4"><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">OLD-TARGET-BEFORE</w:t></w:r></w:fldSimple><w:bookmarkEnd w:id="0"/></w:p><w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">BACKWARD = </w:t></w:r><w:fldSimple w:instr="SEQ Figure S90_SEQ_BEFORE"><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">OLD-BACKWARD</w:t></w:r></w:fldSimple></w:p><w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">AFTER-BACKWARD = </w:t></w:r><w:fldSimple w:instr="SEQ Figure"><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">OLD-AFTER-BACKWARD</w:t></w:r></w:fldSimple></w:p><w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">FORWARD = </w:t></w:r><w:fldSimple w:instr="SEQ Figure S90_SEQ_AFTER"><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">OLD-FORWARD</w:t></w:r></w:fldSimple></w:p><w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">AFTER-FORWARD = </w:t></w:r><w:fldSimple w:instr="SEQ Figure"><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">OLD-AFTER-FORWARD</w:t></w:r></w:fldSimple></w:p><w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">TARGET-AFTER = </w:t></w:r><w:bookmarkStart w:id="1" w:name="S90_SEQ_AFTER"/><w:fldSimple w:instr="SEQ Figure"><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">OLD-TARGET-AFTER</w:t></w:r></w:fldSimple><w:bookmarkEnd w:id="1"/></w:p><w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">AFTER-TARGET = </w:t></w:r><w:fldSimple w:instr="SEQ Figure"><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">OLD-AFTER-TARGET</w:t></w:r></w:fldSimple></w:p><w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">IDENTIFIER-MISMATCH = </w:t></w:r><w:fldSimple w:instr="SEQ Table S90_SEQ_BEFORE"><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">OLD-IDENTIFIER-MISMATCH</w:t></w:r></w:fldSimple></w:p><w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">TABLE-AFTER-MISMATCH = </w:t></w:r><w:fldSimple w:instr="SEQ Table"><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">OLD-TABLE-AFTER-MISMATCH</w:t></w:r></w:fldSimple></w:p><w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">MISSING = </w:t></w:r><w:fldSimple w:instr="SEQ Figure S90_SEQ_MISSING"><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">OLD-MISSING</w:t></w:r></w:fldSimple></w:p><w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">AFTER-MISSING = </w:t></w:r><w:fldSimple w:instr="SEQ Figure"><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">OLD-AFTER-MISSING</w:t></w:r></w:fldSimple></w:p><w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">MULTI-TARGET = </w:t></w:r><w:bookmarkStart w:id="2" w:name="S90_SEQ_MULTI"/><w:fldSimple w:instr="SEQ Figure"><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">OLD-MULTI-TARGET</w:t></w:r></w:fldSimple><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve"> | </w:t></w:r><w:fldSimple w:instr="SEQ Figure"><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">OLD-MULTI-TARGET-SECOND</w:t></w:r></w:fldSimple><w:bookmarkEnd w:id="2"/></w:p><w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">MULTI-REFERENCE = </w:t></w:r><w:fldSimple w:instr="SEQ Figure S90_SEQ_MULTI"><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">OLD-MULTI-REFERENCE</w:t></w:r></w:fldSimple></w:p><w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">AFTER-MULTI = </w:t></w:r><w:fldSimple w:instr="SEQ Figure"><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">OLD-AFTER-MULTI</w:t></w:r></w:fldSimple></w:p><w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">LITERAL-TARGET = </w:t></w:r><w:bookmarkStart w:id="3" w:name="S90_SEQ_LITERAL"/><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">LITERAL-ONLY</w:t></w:r><w:bookmarkEnd w:id="3"/></w:p><w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">LITERAL-REFERENCE = </w:t></w:r><w:fldSimple w:instr="SEQ Figure S90_SEQ_LITERAL"><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">OLD-LITERAL-REFERENCE</w:t></w:r></w:fldSimple></w:p><w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">BACKWARD-ROMAN = </w:t></w:r><w:fldSimple w:instr="SEQ Figure S90_SEQ_BEFORE \* ROMAN"><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">OLD-BACKWARD-ROMAN</w:t></w:r></w:fldSimple></w:p><w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">BACKWARD-HIDDEN = </w:t></w:r><w:fldSimple w:instr="SEQ Figure S90_SEQ_BEFORE \h"><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">OLD-BACKWARD-HIDDEN</w:t></w:r></w:fldSimple></w:p><w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">BACKWARD-HIDDEN-FORMATTED = </w:t></w:r><w:fldSimple w:instr="SEQ Figure S90_SEQ_BEFORE \h \* ROMAN"><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">OLD-BACKWARD-HIDDEN-FORMATTED</w:t></w:r></w:fldSimple></w:p><w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">FINAL-COUNTER = </w:t></w:r><w:fldSimple w:instr="SEQ Figure"><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">OLD-FINAL-COUNTER</w:t></w:r></w:fldSimple></w:p><w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1080" w:right="1440" w:bottom="1080" w:left="1440" w:gutter="0" w:header="360" w:footer="360"/></w:sectPr></w:body></w:document>"#;
+    let mut package = f249_package(&Document::new().to_bytes().unwrap());
+    package.set_part("/word/document.xml", xml.to_vec());
+    let bytes = f236_package_bytes(package);
+    let mut document = Document::from_bytes(&bytes).unwrap();
+    let expected = [
+        ("SEQ Figure \\r 4", "4"),
+        ("SEQ Figure S90_SEQ_BEFORE", "4"),
+        ("SEQ Figure", "5"),
+        ("SEQ Figure S90_SEQ_AFTER", "7"),
+        ("SEQ Figure", "6"),
+        ("SEQ Figure", "7"),
+        ("SEQ Figure", "8"),
+        ("SEQ Table S90_SEQ_BEFORE", "0"),
+        ("SEQ Table", "1"),
+        ("SEQ Figure S90_SEQ_MISSING", "Error! Bookmark not defined."),
+        ("SEQ Figure", "9"),
+        ("SEQ Figure", "10"),
+        ("SEQ Figure", "11"),
+        ("SEQ Figure S90_SEQ_MULTI", "11"),
+        ("SEQ Figure", "12"),
+        ("SEQ Figure S90_SEQ_LITERAL", "12"),
+        ("SEQ Figure S90_SEQ_BEFORE \\* ROMAN", "IV"),
+        ("SEQ Figure S90_SEQ_BEFORE \\h", ""),
+        ("SEQ Figure S90_SEQ_BEFORE \\h \\* ROMAN", "IV"),
+        ("SEQ Figure", "13"),
+    ];
+    let results = document
+        .evaluate_fields(&FieldEvaluationContext::default())
+        .unwrap();
+    assert_eq!(results.len(), expected.len());
+    for (result, (instruction, value)) in results.iter().zip(expected) {
+        assert_eq!(result.instruction.trim(), instruction);
+        assert_eq!(
+            result.outcome,
+            FieldOutcome::Resolved(value.into()),
+            "{instruction}"
+        );
+    }
+    assert_eq!(
+        document
+            .update_fields(&FieldEvaluationContext::default())
+            .unwrap(),
+        20
+    );
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    for (result, (instruction, value)) in reopened
+        .evaluate_fields(&FieldEvaluationContext::default())
+        .unwrap()
+        .iter()
+        .zip(expected)
+    {
+        assert_eq!(result.instruction.trim(), instruction);
+        assert_eq!(result.cached_result, value);
+    }
+}
+
+#[test]
+fn ordinary_sequence_updates_preserve_related_table_and_control_owners() {
+    let mut source = f279_oracle_extended("notes-textbox");
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(source.to_bytes().unwrap()))
+            .unwrap();
+    let keep = r#"<x:keep xmlns:x="urn:f280:producer"><x:p> untouched </x:p></x:keep>"#;
+    for (part, label) in [
+        ("/word/header1.xml", "H"),
+        ("/word/footer1.xml", "F"),
+        ("/word/footnotes.xml", "FN"),
+        ("/word/endnotes.xml", "EN"),
+    ] {
+        let mut xml = String::from_utf8(package.get_part(part).unwrap().to_vec()).unwrap();
+        for (suffix, table) in [("SECTION", true), ("SECTIONPAGES", false)] {
+            let at = xml.find(&format!("{label}-{suffix} = ")).unwrap();
+            let start = xml[..at]
+                .match_indices("<w:p")
+                .filter(|(at, _)| matches!(xml.as_bytes().get(at + 4), Some(b' ') | Some(b'>')))
+                .map(|(at, _)| at)
+                .last()
+                .unwrap();
+            let end = at + xml[at..].find("</w:p>").unwrap() + 6;
+            let paragraph =
+                xml[start..end].replace(&format!("w:instr=\"{suffix}\""), "w:instr=\"SEQ Figure\"");
+            let owner = if table {
+                format!(
+                    "<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:tcPr/>{paragraph}</w:tc></w:tr></w:tbl>"
+                )
+            } else {
+                format!(
+                    "<w:sdt><w:sdtPr><w:tag w:val=\"F280-control\"/></w:sdtPr><w:sdtContent>{paragraph}</w:sdtContent></w:sdt>"
+                )
+            };
+            xml.replace_range(start..end, &owner);
+        }
+        let end = xml.rfind("</w:").unwrap();
+        xml.insert_str(end, keep);
+        package.set_part(part, xml.into_bytes());
+    }
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+    let values = document.evaluate_fields(&Default::default()).unwrap();
+    assert_eq!(
+        values
+            .iter()
+            .filter(|value| value.instruction == "SEQ Figure"
+                && value.outcome
+                    == rdocx::FieldOutcome::Resolved("Error! Main Document Only.".into()))
+            .count(),
+        8
+    );
+    document.update_fields(&Default::default()).unwrap();
+    let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let saved =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(reopened.to_bytes().unwrap()))
+            .unwrap();
+    for part in [
+        "/word/header1.xml",
+        "/word/footer1.xml",
+        "/word/footnotes.xml",
+        "/word/endnotes.xml",
+    ] {
+        let xml = std::str::from_utf8(saved.get_part(part).unwrap()).unwrap();
+        assert!(
+            xml.contains(keep) && xml.contains("F280-control") && xml.contains("<w:tbl>"),
+            "{part}: {xml}"
+        );
+        assert_eq!(
+            xml.matches("Error! Main Document Only.").count(),
+            2,
+            "{part}: {xml}"
+        );
+    }
+}
+
+#[test]
+fn identical_selected_box_sequences_keep_nested_owners_and_fallback_caches() {
+    let mut source = f279_oracle_extended("notes-textbox");
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(source.to_bytes().unwrap()))
+            .unwrap();
+    let mut xml =
+        String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let start = xml.find("<mc:Fallback").unwrap();
+    let end = start + xml[start..].find("</mc:Fallback>").unwrap() + "</mc:Fallback>".len();
+    let fallback = xml[start..end].to_owned();
+    let cache =
+        r#"<w:fldSimple w:instr="SEQ Figure"><w:r><w:t>IDENTICAL-OLD</w:t></w:r></w:fldSimple>"#;
+    for (label, table) in [("BOX-PAGE", true), ("BOX-SECTION", false)] {
+        let at = xml.find(&format!("{label} = ")).unwrap();
+        let start = xml[..at]
+            .match_indices("<w:p")
+            .filter(|(at, _)| matches!(xml.as_bytes().get(at + 4), Some(b' ') | Some(b'>')))
+            .map(|(at, _)| at)
+            .last()
+            .unwrap();
+        let end = at + xml[at..].find("</w:p>").unwrap() + 6;
+        let owner = if table {
+            format!(
+                "<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:tcPr/><w:p>{cache}</w:p></w:tc></w:tr></w:tbl>"
+            )
+        } else {
+            format!(
+                "<w:sdt><w:sdtPr><w:tag w:val=\"F280-box\"/></w:sdtPr><w:sdtContent><w:p>{cache}</w:p></w:sdtContent></w:sdt>"
+            )
+        };
+        xml.replace_range(start..end, &owner);
+    }
+    package.set_part("/word/document.xml", xml.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+    let values = document.evaluate_fields(&Default::default()).unwrap();
+    assert_eq!(
+        values
+            .iter()
+            .filter(|value| value.instruction == "SEQ Figure")
+            .map(|value| value.outcome.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            rdocx::FieldOutcome::Resolved("1".into()),
+            rdocx::FieldOutcome::Resolved("2".into())
+        ]
+    );
+    document.update_fields(&Default::default()).unwrap();
+    let saved =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let xml = std::str::from_utf8(saved.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(xml.contains(&fallback), "fallback was modified");
+    assert!(!xml.contains("IDENTICAL-OLD"), "{xml}");
+    assert!(xml.contains("F280-box") && xml.contains("<w:tbl>"));
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(
+        reopened
+            .evaluate_fields(&Default::default())
+            .unwrap()
+            .iter()
+            .filter(|value| value.instruction == "SEQ Figure")
+            .map(|value| value.cached_result.clone())
+            .collect::<Vec<_>>(),
+        ["1", "2"]
+    );
+    let mut locked_package = package.clone();
+    let source_xml =
+        std::str::from_utf8(locked_package.get_part("/word/document.xml").unwrap()).unwrap();
+    let locked = concat!(
+        r#"<w:r><w:fldChar w:fldCharType="begin" w:fldLock="1" producer="F280-lock"/></w:r>"#,
+        r#"<w:r><w:instrText xml:space="preserve">IF </w:instrText></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>SEQ Figure</w:instrText></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>LOCKED-INNER</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+        r#"<w:r><w:instrText xml:space="preserve"> = &quot;yes&quot; &quot;then&quot; &quot;else&quot;</w:instrText></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>LOCKED-OUTER</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+    );
+    let source_xml = source_xml.replacen(cache, locked, 1);
+    locked_package.set_part("/word/document.xml", source_xml.into_bytes());
+    let mut input = std::io::Cursor::new(Vec::new());
+    locked_package.write_to(&mut input).unwrap();
+    let mut locked_document = Document::from_bytes(input.get_ref()).unwrap();
+    let before = locked_document.to_bytes().unwrap();
+    let evaluations = locked_document
+        .evaluate_fields(&Default::default())
+        .unwrap();
+    let sequences = evaluations
+        .iter()
+        .filter(|field| field.instruction == "SEQ Figure")
+        .collect::<Vec<_>>();
+    assert_eq!(sequences.len(), 2);
+    assert!(
+        matches!(&sequences[0].outcome,FieldOutcome::KeepStored { diagnostic } if diagnostic.contains("locked")),
+        "{evaluations:?}"
+    );
+    assert_eq!(
+        sequences[1].outcome,
+        FieldOutcome::Resolved("1".into()),
+        "locked ancestor must not advance the next selected owner's counter"
+    );
+    assert!(
+        evaluations
+            .iter()
+            .all(|field| !field.instruction.starts_with("IF ")),
+        "ordinary selected-box parents retain the established discovery boundary"
+    );
+    assert_eq!(locked_document.to_bytes().unwrap(), before);
+    locked_document.update_fields(&Default::default()).unwrap();
+    let saved = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(
+        locked_document.to_bytes().unwrap(),
+    ))
+    .unwrap();
+    let xml = std::str::from_utf8(saved.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(
+        xml.contains(locked),
+        "locked source instruction, cache and controls must stay byte exact: {xml}"
+    );
+    assert!(
+        xml.contains(&fallback),
+        "unselected alternate source remains exact"
+    );
+
+    // Identical physical owners also bind an unlocked nested instruction by its
+    // exact enclosing source and compact instruction/lock/cache projection.
+    let mut unlocked_package = package.clone();
+    let unlocked = locked.replace(" w:fldLock=\"1\"", "");
+    let xml = std::str::from_utf8(unlocked_package.get_part("/word/document.xml").unwrap())
+        .unwrap()
+        .replacen(cache, &unlocked, 1);
+    unlocked_package.set_part("/word/document.xml", xml.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    unlocked_package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+    let before = document.to_bytes().unwrap();
+    let evaluations = document.evaluate_fields(&Default::default()).unwrap();
+    assert_eq!(
+        evaluations
+            .iter()
+            .filter(|field| field.instruction == "SEQ Figure")
+            .map(|field| field.outcome.clone())
+            .collect::<Vec<_>>(),
+        [
+            FieldOutcome::Resolved("1".into()),
+            FieldOutcome::Resolved("2".into())
+        ],
+        "{evaluations:?}"
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+    document.update_fields(&Default::default()).unwrap();
+    let saved =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let xml = std::str::from_utf8(saved.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(xml.contains(&fallback));
+    assert!(
+        !xml.contains("LOCKED-INNER") && xml.contains("LOCKED-OUTER"),
+        "{xml}"
+    );
+    assert!(xml.contains("producer=\"F280-lock\""), "{xml}");
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(
+        reopened
+            .evaluate_fields(&Default::default())
+            .unwrap()
+            .iter()
+            .filter(|field| field.instruction == "SEQ Figure")
+            .map(|field| field.cached_result.clone())
+            .collect::<Vec<_>>(),
+        ["1", "2"]
+    );
+    let layout = reopened.layout_deterministic().unwrap();
+    let painted = layout
+        .layout
+        .pages
+        .iter()
+        .map(|page| f252_page_text(page))
+        .collect::<String>();
+    assert!(
+        painted.contains("LOCKED-OUTER"),
+        "ordinary parent cache still paints"
+    );
+    assert!(
+        !painted.contains("LOCKED-INNER"),
+        "instruction child cache does not paint"
+    );
+}
+
+#[test]
+fn ref_note_copy_matches_pinned_word_typed_content_and_context_suppression() {
+    use base64::Engine as _;
+    // Actual native first-F9 and explicit original-note context-F9 controls.
+    // Identity numbers are allocated by owner scope, independently of visual numbering.
+    for (family, input, source_sha) in [
+        (
+            "footnote",
+            "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",
+            "f1ccc2d0684836651590144d4c298ce5426d335ed18ce55ea8bee62d07302943",
+        ),
+        (
+            "endnote",
+            "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",
+            "fb89b4c8261f14bba5b31d50c8c03ed70742ddb936e5cb90631634627e82776b",
+        ),
+    ] {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(input)
+            .unwrap();
+        let mut document = Document::from_bytes(&bytes).unwrap();
+        let before = document.to_bytes().unwrap();
+        let pure = document.evaluate_fields(&Default::default()).unwrap();
+        let expected = [
+            "",
+            "",
+            "FN-PRODUCER-SOURCE = ",
+            "",
+            "",
+            "",
+            "FN-PRODUCER-SOURCE = ",
+        ];
+        assert_eq!(
+            pure.iter()
+                .map(|field| field.outcome.clone())
+                .collect::<Vec<_>>(),
+            expected
+                .iter()
+                .map(|value| rdocx::FieldOutcome::Resolved((*value).into()))
+                .collect::<Vec<_>>(),
+            "{family}: {source_sha}"
+        );
+        assert_eq!(
+            document.to_bytes().unwrap(),
+            before,
+            "pure evaluation changed receiver"
+        );
+        assert_eq!(document.update_fields(&Default::default()).unwrap(), 7);
+        let result = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&result).unwrap();
+        let values = reopened.evaluate_fields(&Default::default()).unwrap();
+        assert_eq!(
+            values
+                .iter()
+                .map(|field| field.cached_result.as_str())
+                .collect::<Vec<_>>(),
+            expected,
+            "{family}"
+        );
+        assert_eq!(
+            values
+                .iter()
+                .map(|field| field.instruction.as_str())
+                .collect::<Vec<_>>(),
+            pure.iter()
+                .map(|field| field.instruction.as_str())
+                .collect::<Vec<_>>()
+        );
+        let original_package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&result)).unwrap();
+        let part = if family == "footnote" {
+            "/word/footnotes.xml"
+        } else {
+            "/word/endnotes.xml"
+        };
+        let original =
+            rdocx_oxml::footnotes::CT_Footnotes::from_xml(original_package.get_part(part).unwrap())
+                .unwrap();
+        let notes =
+            rdocx_oxml::footnotes::CT_Footnotes::from_xml(package.get_part(part).unwrap()).unwrap();
+        assert_eq!(
+            notes.footnotes.iter().find(|note| note.id == 2),
+            original.footnotes.iter().find(|note| note.id == 2),
+            "original source owner changed"
+        );
+        assert_eq!(notes.footnotes.len(), original.footnotes.len() + 4);
+        let body = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        let references = if family == "footnote" {
+            "footnoteReference"
+        } else {
+            "endnoteReference"
+        };
+        assert_eq!(
+            body.matches(references).count(),
+            6,
+            "four copied and two original body references: {body}"
+        );
+        let layout = reopened.layout_deterministic().unwrap();
+        let mut rendered = String::new();
+        for page in &layout.layout.pages {
+            oxml_layout::walk(&page.elements, &mut |element, _| {
+                if let oxml_layout::PositionedElement::Text(run) = element {
+                    rendered.push_str(&run.text);
+                }
+            });
+        }
+        assert!(!rendered.contains("OLD-"), "{family}: {rendered}");
+        assert!(
+            rendered.matches("REAL_FOOTNOTE_ALPHA_TEXT").count() >= 5,
+            "four copied owners and original must actually render: {family}: {rendered}"
+        );
+    }
+}
+
+#[test]
+fn rich_ref_note_copy_preserves_style_media_and_original_owner_graph() {
+    use base64::Engine as _;
+    // Native rich inherited-Emphasis control, source SHA-256 6f50fd3e728f10c9d4e2c0cc441c1b62736a7138ff117c073dd6d85a2c555a60.
+    let input = base64::engine::general_purpose::STANDARD.decode("UEsDBBQAAAAIAAAAIQDlPG+YXwEAAG8FAAATAAAAW0NvbnRlbnRfVHlwZXNdLnhtbLWUzW7CMBCE7zyF5WuVGHqoqiqBQ3+OLQf6AK6zCVbjH9kLhbfvmgCtUKFpEZdIyezMfF5FLiYr07IlhKidLfkoH3IGVrlK26bkr7On7JaziNJWsnUWSr6GyCfjQTFbe4iMzDaWfI7o74SIag5Gxtx5sKTULhiJ9Boa4aV6lw2I6+HwRihnESxmmDL4eMBY8QC1XLTIHlekdCzeNpzdd6OpreTapIj0XRwzBWjjgUt632olkXSxtNUBXbYly8m5mYlz7eMVDRwvSeLxji/rC+016ArYVAZ8loYGReXUNDgfBVny00E/wLq61gooY2HIkkNiqqDKPEVCQA3fyU/WKxfg7/27ZSV3/9IPFyqxhz730CmNqhXESD+pafO9YqS2fVBqKp/Jt/YfC/iNZR/dj8OhdQjxEhzb6D4cERDJdgGMXXIvCly3l1hFl9uHAOn6gu45OptjE7NrLcTmvhx/AlBLAwQUAAAACAAAACEAF1a+wekAAABXAgAACwAAAF9yZWxzLy5yZWxzrZLNTsMwDIDve4rI9zXdkBBCTXdBSLshNB7AStw2ovlRYmB7eywEiCEGO3CMY3/+bLnb7MOsnqlUn6KBVdOComiT83E08LC7XV6BqozR4ZwiGThQhU2/6O5pRpaaOvlclUBiNTAx52utq50oYG1Spig/QyoBWZ5l1BntI46k1217qctXBvQLpY6wausMlK1bgdodMp2DT8PgLd0k+xQo8g9dvmUIGctIbOAlFafde7gRLOiTQuvzhU7PqwMxOmTUNhVa5iLVhb2s99NJdO4kXN8y/nC6+M8l0Z4pOnK/W2HOH1KdPrqH/hVQSwMEFAAAAAgAAAAhAC4Jvnr5AAAAVQMAABwAAAB3b3JkL19yZWxzL2RvY3VtZW50LnhtbC5yZWxzrZPLTsMwEEX3/Qpr9sQJC4RQnG5QpWxL+ABjTx4i8UT2FDV/j0XTkkpAWWR5r+Uzx5adb49DLz7Qh46cgixJQaAzZDvXKHitdnePIAJrZ3VPDhVMGGBbbPI99prjntB2YxAR4oKClnl8kjKYFgcdEhrRxZWa/KA5Rt/IUZt33aC8T9MH6ZcMKDZCXGFFaRX40kalahrxP3iq687gM5nDgI5/mCIDT308gqi0b5AVnHISOSB/MbBkji/IHK8krKryzTzLzM1NnSqOxTVdeAbOIl/xVGY3ZXbkuNJv/apC9QI6S12qP41Km63rQeyIl0/mUp09cnn1G4pPUEsDBBQAAAAIAAAAIQDXbqJ67AAAAN0BAAAdAAAAd29yZC9fcmVscy9mb290bm90ZXMueG1sLnJlbHOtkcFOwzAMhu97iij3Nu0OaEJtdwGkHbig8QAmcZtoiR0lAXVvT9CEYBJIHDja1v/5kz3s1+DFG6bsmEbZt50USJqNo2WUz8eHZidFLkAGPBOO8oxZ7qfN8IQeSs1k62IWFUJ5lLaUeKtU1hYD5JYjUp3MnAKUWqZFRdAnWFBtu+5Gpe8MOW2EuMKKgxllOpiqdDxH/Aue59lpvGP9GpDKD1uUraTkHZ0qFNKC5YLNlYsrhOix1RzUvN11TXLaNsQFm5j4BT8Tj2yqzP1aMBF4qX4V7/9T3IV6ty/pgMbBpdm3kZYPjUFdfWV6B1BLAwQUAAAACAAAACEAHmFxRbUAAAAyAQAAEAAAAGRvY1Byb3BzL2FwcC54bWydkMsKwjAQRX+lZG8TBUUkTRHEtQt1H5JpG2gnIRlL+/dGxcfa5dwzHOaOrKehL0aIyXms2LIUrAA03jpsK3Y5HxdbViTSaHXvESo2Q2K1kqfoA0RykIoswFSxjijsOE+mg0GnMmPMpPFx0JTH2HLfNM7AwZvbAEh8JcSGw0SAFuwifITsZdyN9K/UevO4L13Pc8g+Jfch9M5oyh1VzHSS/Dd68OvrBUqIUojl+rnwziT/1lV3UEsDBBQAAAAIAAAAIQCWXNIV0wAAAG0BAAARAAAAZG9jUHJvcHMvY29yZS54bWxtkE1LxEAMhu/+ipJ7m1ZBpGx3b54UBBW8DpnYHbbzwSTa3X/vbNEquMfwPnlI3s3u6Kfqk7O4GAbomhYqDhStC+MAry/39R1UoiZYM8XAA5xYYLe92lDqKWZ+yjFxVsdSFVGQntIAe9XUIwrt2RtpChFK+B6zN1rGPGIydDAj43Xb3qJnNdaowbOwTqsRvpWWVmX6yNMisIQ8seeggl3T4S+rnL1cXFiSP6R3ekp8Ef0JV/oobgXneW7mmwUt93f49vjwvLxau3CuihhKQfivoe0XUEsDBBQAAAAIAAAAIQDmlNx0yAIAADgVAAARAAAAd29yZC9kb2N1bWVudC54bWztWG1P4kAQ/itNv9dW9AwhgkFo40UEUyB3l5iYpZ3Sjd2X7C5W7tffbl8AFS94iccH+NJ2ZpinO888GTK9vHohmfUMQmJG2/bpiWdbQCMWYzpv29NJ4DRtSypEY5QxCm17CdK+6lzmrZhFCwJUWRqAylbetlOleMt1ZZQCQfKEcaA6ljBBkNKmmLs5EzEXLAIpNT7J3IbnXbgEYWpXMGIXGJYkOIJ+dYASRECGlK5BppjLGo1Eu8ARJJ4W3IkY4RpihjOslgVoDZPzXWBigfKNql7X2i+DtmFuxuKlufPici/MTXIU6bilo6BBNdG6EXkLJQpE9Zxhw3/jfGWEi0w74AVFynY7l+4KrLxUzwGjShooGWHctieYgLSGkFshI4garLRL5fYIIKm6EqOtwUi+d7tFLb919Bll+rBe7enJt74MFeUWPqDOdPz6hSvXDMe4Nssqq8oK5RXEaRa4AAniGexO0Gh6TugHTuD0RsNJOBpYbcukqTK5JOrI/1fxf62Jv/aDUei/5T1vJVk8xoRnoHExlUpTqztlmZY9BsPHu254az0k9gFx2BkN+s6asrc6XRH2H1Q7Y+zJjMKxQkKZBsUVBEVEZ9RN+nEzGvhl+QfSow/mzNC5D0f9ac8PnfFoGva26H0bpafvKTW632A0YUxRpiCEBIT+M4Yqs1GfaxPap/EK2N0e8Oo+H4feVw69bjDxw+PM+8TMKxjb58g7EMI/1mwxzD+t2TLrQEVbFH8U7R5Fe/Pr3g8H34e3/zpsrYf0IKW7Iu4o373Jd+L/nHy0mO6k3wNU7iZnR+nub98xLTCt0JL0Q3+4beP56wJztl5g6l5JiFT5Wj4fm/pyvcg0qmak+vlb87wqjM/vkNBexbj2N73iJwLPU6XN8zJjxpRiZB3OINmIzhdq3fYUUGyMs4vCNGeuzfKU9dHc+oudu/7o2fkDUEsDBBQAAAAIAAAAIQBIoNP7mwAAAM0AAAASAAAAd29yZC9mb250VGFibGUueG1sZY5NCsIwEIWvEmZvU12IhKYuBJcupB4gttM20MyUTDB6eyPoyuXje3/N8RkW9cAonsnCtqpBIfU8eJos3Lrz5gBKkqPBLUxo4YUCx7bJZmRKokqaxGQLc0qr0Vr6GYOTilekwkaOwaUi46Qzx2GN3KNIKQ+L3tX1XgfnCX59Khtyoayc3OLv0YP+I50PKOqCWV05OPo49PdM+wZQSwMEFAAAAAgAAAAhAEI70Dn+AwAAXxkAABIAAAB3b3JkL2Zvb3Rub3Rlcy54bWztWG1v2zYQ/iuEvqtysqEohNiFY0uLUdU2ZAVbgQEGTVExEUkkSPptv35HilbsxNuyJMWC1V+U44sf3j13vOPl6vO2KtGaSsV43fUuPnQ8RGvCc1bfdb3bLPY/eUhpXOe45DXtejuqvM+9q01YcK5rrqlCgFCrcNP1llqLMAgUWdIKqw9c0BrWCi4rrGEo74INl7mQnFCl4ICqDC47nY9BhVntORj5HBheFIzQISerita6AZG0xBqMUEsmlHeoIdqELO96l3ZSmI88XE5pEfSuAjdrP7qXRv1kHk8m2XiSRfN+Mr3pz7PotwwRLhjN0WKH0ij2C8QKpJcUgVH5ilCJ1EoILrVC+UqUjFiVDLjeHxE4HYQzuCLPsbjC8n4lfMIrAZALVjK9s3a/MW9v68yNeA5OLvHmAOAYdtgsNr6bWu8ogQlMgVsXFHAgKCFoNyEuNJVOLpmJ1cuf20G6KmGCbjHRXuNtB9Z8nBzzGjwHUIow1vUyVkF4j+kGpbzCtcFa9mt1eoVipfuK4ZOLRD2dDqwtf8DqGpegbGc/M1CP50pszbVztPZvZ8cHtlMLlrP90MV0Y5k2DrHEAQtCUkXlmnq9dDS48eOxP5hMv/mzyW06iFAXHYUrgHJ+b8JvprHU7V0CocYVoMWXnzpzAzS3V2U0zqJ03E8axf9jdhfvgOPrSTKcO24fMXvEzkzvSrpXIKrEEiumHIv/37jsjbJ+MhrMZ9m3JNrz9BcBGNV5G37BOZG+IpEud4JKSIv3SFo+5SjvfIcCvK+lJjm0tRSKqE0Q82Q0/vK4MraKnd37Cvda3t1uEEXIalMDUc6UzmyFNNJ1KyWtlFrpuzD1piaKkG41HIjIFh6tnYuPHVCb7Fo5sHtyTqYSmQC/8FBTraaM6JWkZgMO7yQWS0achvgFClonHkANscZoJdkLoITTrHcFUihatUB6NVq9BrtNxjUDMl47VjonWNnvMPtNkn3y80XJRMzK0lhtZEghtFrQJotcNMQqLakmSyMWsDWlRBusg4XgGMqMlH2R4XBbyMr8hdBCW6vkznwtMHj9b1wePPxYSKV/obxCRgDVQAPrJ7xOlNNlv8Up0xwfOPLtjgOnHo5NbtrfKZun2qt2+MIPHjqME83IT+8zH/3bDmkwGZuu6CG7ux6p1oCmkN5w1yYVjJY5TGB5R7V5vJumicNHPrRO5qhzq3Ruld5lq2Si24/96yiepJHv4v5ps1SU+YxVwr7k4QZoYBkuALJNUjyef+2nX9DvhfcD0dmD/sc/yd7ju95yd77555v/zm6+C1n/62g4TJ78k+QcrudwfVfhGvv9GNrsF9epX28mEOU/bqE6Yu8f69TRU/9goHp/AlBLAwQUAAAACAAAACEAmwvbaUMAAABJAAAAFQAAAHdvcmQvbWVkaWEvaW1hZ2UxLnBuZ+sM8HPn5ZLiYmBg4PX0cAkC0kwgzAEi/16ZVQykBDxdHEMq5iT/OH+AwYVHgItB/h3z3+54kStAOQZPVz+XdU4JTQBQSwMEFAAAAAgAAAAhAGmCL1ySAAAAtgAAABEAAAB3b3JkL3NldHRpbmdzLnhtbEWNQQ7CIBBFr0Jmb6kujCGl7noCPcCkTFsSGBoGi95eXLn8+f+9P9zfMaiDsvjEFs5dD4p4Ts7zauH5mE43UFKQHYbEZOFDAvdxqEaolDYS1QQsplrYStmN1jJvFFG6tBO3bkk5Ymkxr7qm7PacZhJpaAz60vdXHdEz/JSv3WGhyVNwoqo5MFhYMAiBHgf9vxy/UEsDBBQAAAAIAAAAIQDIk/5QNwQAAOEaAAAPAAAAd29yZC9zdHlsZXMueG1s3Zhbc6M2FMe/CsN7FoMBX2a9O6m3aTqTpukm6T4LkIO6QqKSHCf76SuJiy+IBGNmO+Pxg61zkHT0+x8dGX38/JJh6xkyjihZ2O6HkW1BEtMEkaeF/fhwdTG1LS4ASQCmBC7sV8jtz58+buZcvGLILdmd8PlmYadC5HPH4XEKM8A/0BwS6VtRlgEhm+zJ2VCW5IzGkHM5eoYdbzQKnQwgYpfDsC7D0NUKxfALjdcZJKIYhEEMhFwBT1HObRVeQuMvcAXWWHDVZHesbJYt/XVFieDWZg54jNDCXgKMIoZsaUkvCd+3QMDFJUdgzxjzhf2AMsnhFm6srzQDxHY0nR/S+wzwwva8yrLk+zanDMQ5DC8/bOn+OYglNhXtSkBJyg1HKgSMlCxeMKsaX9dYGsBa0HKSvJxkd1inQUjrKYcQr7nsngMGnhjIUzWqdv2eLOxbJQNWpqToKaPQtAnIYLW48iHHGHsEpZRyfB16uZDdZfij/WXAFxCL3XW0incow1ZEg2crpsHZRdSRQdTShoFeqbZBcvF4vz9hbYpQgqrmfjZo3l01uYZAbdamDmnhsNwirAhwmPxJTCoR+CLeUO87hPmtfMSpGjdSHu6YhS0VrKU1SRcVAS2LMWKKKashXgX+LDzEPTbsofHhHupDzWul5vWmtkZ3DFGGxGvlnZUOkqIEfksheZSDatO/V7qw9abdhL2Z07VQ++fmGVfzu0YVOnD3QkOahwNwH7dyH58Rd+997u7VeBKOG9x9A3d/AO5+K3d/eO4cZugaJQkk/68MY6MMSD+N3i5CJ+IOWnEH54vbP6banAg4bAUcni/g4JiyciLgSSvgyfkCDo8tGIPhnrbinp4v7kmHgjFRn8Yx6RqOSXcAGWatMszOV4bp0cfkTxLlAQkMG4oU1uHUcEswBtiNV++33lirF28Fiwg5/Rrg+2IAE9/t2DqKiyqM75DVC/Kmh5ADwx/z4KQD9X4dCSPn2jEgarc7anXL8W55CC7Vx3YMQN2g14XMUexuaSmw4S7EqlxtLIbNup3rnqOW8Neaiqb2hXU44b1Zh9XWNwmj3bJV5oEsRSRRK4crIUtW6KtHGHpKy5Z+5J+4mjCGcguyYwubP1KfUzLiBnFxV3sOsSqvtXW/x7fJcey3ctzFM6mupN6qRMcubQlyddPaWFRc2ofLlnG1dfsckI3dU6ZTx/3TKU38wA8vD8uLO22WF3faLZkEiGSh3Tv7lOU3hpLm+ac8lna18Zu1XML2qCcywgjXP36hLIFMXxsLmlfzqVv9Mvwf6jXQKuasbns1u93zUSVp374RFYJmfXvrgtG3MyJc5t/1ad3/7tfdaeCP8BJi/AdgWzE2Zd8ip5IXsId7o/7qTA3+GmlL/wpaywDOfjBOnTHt6R6nssLEqkDvpvyvWZ4Cjngj42uHc7A/mxur+sU//QdQSwMEFAAAAAgAAAAhAFi3s6brBgAAESIAABUAAAB3b3JkL3RoZW1lL3RoZW1lMS54bWztWluP2zYW/iuE3h1dbPkSxCl8bZrMJIOZSYo+0hItMaZEgaRnxigCFOnTviywQHexLwvs2z4sihZogRZ96Y8J0KDb/RFLUbIs2lQuzWQ3wM4MMGNS33f46ZzDw2PZdz66Sgi4QIxjmg4t95ZjAZQGNMRpNLQen89bfQtwAdMQEpqiobVB3Pro7h14W8QoQUCyU34bDq1YiOy2bfNATkN+i2YoldeWlCVQyCGL7JDBS2k1IbbnOF07gTi1QAoTafTRcokDBM5zk1ZlfEbkn1TwfCIg7CxQK9YZChuu3Pwf3/AJYeACkqEl1wnp5Tm6EhYgkAt5YWg56sey796xKxIRDdwab65+Sl5JCFee4rFoURGdmdfvuJV9r7B/iJv189/KngLAIJB36h5gXb/r9L0SWwMVLw22Bz23reNr9tuH9gfdsdfR8O0dvnN4j/PBbOpr+M4O7x/gR443HrQ1vL/Ddw/wndmo5800vALFBKerQ3S31+93S3QFWVJyzwgfdLtOb1rCdyi7ll0FPxVNuZbAp5TNJUAFFwqcArHJ0BIGEjfKBOVginlG4MYCGUwpl9OO57oy8TqOV/0qj8PbCNbYxVTAD6ZyPYAHDGdiaN2XVq0a5Jcff3zx/PsXz3948eWXL55/A45wFAsD7x5Mozrvt3/86d9/+wL867u///bVn814Xse//PoPL3/6+VXmhSbrL9++/P7bX/76x1//+ZUBPmJwUYef4wRx8BBdglOayBs0LIAW7O0Y5zHEdcYojThMYc4xoGci1tAPN5BAA26MdD8+YbJcmIAfr59qgs9ithbYAHwQJxrwmFIypsx4Tw/ytepeWKeReXG2ruNOIbwwrT3Zi/Jsncm8xyaTkxhpMk+IDDmMUIoEyK/RFUIG2mcYa349xgGjnC4F+AyDMcRGl5zjhTCT7uFExmVjEijjrfnm+AkYU2IyP0UXOlLuDUhMJhHR3PgxXAuYGBXDhNSRR1DEJpFnGxZoDudCRjpChIJZiDg3cR6xjSb3AZR1yxj2Y7JJdCQTeGVCHkFK68gpXU1imGRGzTiN69hP+EqmKAQnVBhFUH2H5GMZB5g2hvsJRuLt9vZjWYbMCZJfWTPTlkBU348bsoTIZHzEEq3Ejhg2Zsd4HWmpfYQQgZcwRAg8/sSEpxk1i74fy6pyD5l8cx/quZqPU8Rlr5Q3N4bAYq6l7BmKaIOe481e4dnANIGsyfLDlZ4yswWTm9GUryRYaaUUs3zTmkU84gl8I6snMdTSKh9zc75uWPq2e0xynv4ODnprjizsb+ybc0iQOWHOIQZHpnIrKWszJd9OirY28pb6pt2Fwd5rehKcvqYD+t90Pu+t57n+bqepoOz3OE24/c5mQlmIP/zGZgrX6QmSZ8lNX3PT1/w/9jVN+/mmm7npZm66mf9aN7NrYOz6wx5lJWl88rPEhJyJDUFHXLU+XO79cC4n1UCRqgdNWSxflstpuIhB9RowKj7FIj6LYSaXcdUKES9NRxxklMv2yWq0rZqvdXJMw/I5nrt9tikJUOzmHb+al62aKGa7vd2D0Mq8GkW8LsBXRt9cRG0xXUTbIKLXfjMRrnNdKgYGFX33VSrsWlTk4QRg/lDc7xSKZLrJlA7zOBX8bXSvPdJNztRv2zPc3qBzbZHWRNTSTRdRS8NYHh7709cc68HAHGrPKKPXfx+xtg9rA0n1EbjMNfVyOwHMhtZSvm+SL5NMGuR5qYIkSodWIEpP/57SkjEuppDHBUxdKhyQYIEYIDiRyV6PA0lr4gZy03yo4rw8CB+aOHs/ymi5RIFomNkN5bXCiPHqO4LzAV1L0WdxeAkWZM1OoXSU33Pz6IaYiyrUIWa17N55ca9elXtR+whot0chyWJYHin1al7A1etKTu0+lNL9u7JNLlxE8+s4dl9P2quaDSdIr7GMvb9TvqaqbVblG4vdoO+8+ph49xOhJq1vltY2S2s6PK6xI6gt123wm9cYzXc8Dvaz1q41lmp08Ok2XTyVmT+V7eqaFDMklSMlOTthSvuChpvyJeHFLinuaVsGSHqKlgCHV7JkmpxTfnxcFbHTYoH88KqIRq/qxBK/KzwV2X09uWJse/aKrNpykwFxVa1c4IuAVVWj9JRt8qJ878fgZPvhblFO1ey2RF8JsGZ4aH3u+KPOxPMnLafvz1qddsdp9f1RuzXy/bY7811nOvaeSXkiTly/COAcJphsym9AqPmDb0Ek2zcstwKa2FS9m7AVWX0LwvWavwUhvSJleTO34428SWsydbutjjfttvq99qg18bpTbyQreXc+emaBCwV2x9PpfO57re5E4jrOyG+Nxu1Jq9ufjb25O+tMHQkuA3Eltv+3Oap03f0PUEsBAhQDFAAAAAgAAAAhAOU8b5hfAQAAbwUAABMAAAAAAAAAAAAAAKSBAAAAAFtDb250ZW50X1R5cGVzXS54bWxQSwECFAMUAAAACAAAACEAF1a+wekAAABXAgAACwAAAAAAAAAAAAAApIGQAQAAX3JlbHMvLnJlbHNQSwECFAMUAAAACAAAACEALgm+evkAAABVAwAAHAAAAAAAAAAAAAAApIGiAgAAd29yZC9fcmVscy9kb2N1bWVudC54bWwucmVsc1BLAQIUAxQAAAAIAAAAIQDXbqJ67AAAAN0BAAAdAAAAAAAAAAAAAACkgdUDAAB3b3JkL19yZWxzL2Zvb3Rub3Rlcy54bWwucmVsc1BLAQIUAxQAAAAIAAAAIQAeYXFFtQAAADIBAAAQAAAAAAAAAAAAAACkgfwEAABkb2NQcm9wcy9hcHAueG1sUEsBAhQDFAAAAAgAAAAhAJZc0hXTAAAAbQEAABEAAAAAAAAAAAAAAKSB3wUAAGRvY1Byb3BzL2NvcmUueG1sUEsBAhQDFAAAAAgAAAAhAOaU3HTIAgAAOBUAABEAAAAAAAAAAAAAAKSB4QYAAHdvcmQvZG9jdW1lbnQueG1sUEsBAhQDFAAAAAgAAAAhAEig0/ubAAAAzQAAABIAAAAAAAAAAAAAAKSB2AkAAHdvcmQvZm9udFRhYmxlLnhtbFBLAQIUAxQAAAAIAAAAIQBCO9A5/gMAAF8ZAAASAAAAAAAAAAAAAACkgaMKAAB3b3JkL2Zvb3Rub3Rlcy54bWxQSwECFAMUAAAACAAAACEAmwvbaUMAAABJAAAAFQAAAAAAAAAAAAAApIHRDgAAd29yZC9tZWRpYS9pbWFnZTEucG5nUEsBAhQDFAAAAAgAAAAhAGmCL1ySAAAAtgAAABEAAAAAAAAAAAAAAKSBRw8AAHdvcmQvc2V0dGluZ3MueG1sUEsBAhQDFAAAAAgAAAAhAMiT/lA3BAAA4RoAAA8AAAAAAAAAAAAAAKSBCBAAAHdvcmQvc3R5bGVzLnhtbFBLAQIUAxQAAAAIAAAAIQBYt7Om6wYAABEiAAAVAAAAAAAAAAAAAACkgWwUAAB3b3JkL3RoZW1lL3RoZW1lMS54bWxQSwUGAAAAAA0ADQBNAwAAihsAAAAA").unwrap();
+    let original = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&input)).unwrap();
+    let mut document = Document::from_bytes(&input).unwrap();
+    assert_eq!(document.update_fields(&Default::default()).unwrap(), 7);
+    let bytes = document.to_bytes().unwrap();
+    let saved = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let note_xml = std::str::from_utf8(saved.get_part("/word/footnotes.xml").unwrap()).unwrap();
+    assert_eq!(
+        note_xml.matches("bookmarkStart").count(),
+        1,
+        "original internal bookmark remains"
+    );
+    assert_eq!(note_xml.matches("bookmarkEnd").count(), 1);
+    assert_eq!(
+        note_xml.matches("<w:hyperlink").count(),
+        1,
+        "only original external hyperlink wrapper remains"
+    );
+    assert_eq!(
+        note_xml.matches("w:rStyle w:val=\"Emphasis\"").count(),
+        5,
+        "defined inherited style stays on source and four copies"
+    );
+    assert_eq!(note_xml.matches("BOLD_SOURCE").count(), 5);
+    assert_eq!(
+        saved.get_part("/word/styles.xml"),
+        original.get_part("/word/styles.xml")
+    );
+    assert_eq!(
+        saved
+            .get_part_rels("/word/footnotes.xml")
+            .unwrap()
+            .to_xml()
+            .unwrap(),
+        original
+            .get_part_rels("/word/footnotes.xml")
+            .unwrap()
+            .to_xml()
+            .unwrap()
+    );
+    for relationship in &original.get_part_rels("/word/footnotes.xml").unwrap().items {
+        if relationship.target_mode.as_deref() != Some("External") {
+            let target = oxml_opc::OpcPackage::resolve_rel_target(
+                "/word/footnotes.xml",
+                &relationship.target,
+            );
+            assert_eq!(
+                saved.get_part(&target),
+                original.get_part(&target),
+                "retained owned media"
+            );
+        }
+    }
+    let mut reader = quick_xml::NsReader::from_reader(note_xml.as_bytes());
+    let mut buffer = Vec::new();
+    let mut drawing_ids = std::collections::HashSet::new();
+    loop {
+        match reader.read_event_into(&mut buffer).unwrap() {
+            quick_xml::events::Event::Start(element) | quick_xml::events::Event::Empty(element)
+                if element.local_name().as_ref() == b"docPr" =>
+            {
+                let id = element
+                    .attributes()
+                    .filter_map(|attribute| attribute.ok())
+                    .find(|attribute| attribute.key.as_ref() == b"id")
+                    .unwrap()
+                    .decoded_and_normalized_value(
+                        quick_xml::XmlVersion::Implicit1_0,
+                        element.decoder(),
+                    )
+                    .unwrap()
+                    .into_owned();
+                assert!(
+                    drawing_ids.insert(id),
+                    "drawing ID duplicated in copied owners"
+                );
+            }
+            quick_xml::events::Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    assert_eq!(drawing_ids.len(), 5);
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let layout = reopened.layout_deterministic().unwrap();
+    let mut text = String::new();
+    let mut images = 0usize;
+    for page in &layout.layout.pages {
+        oxml_layout::walk(&page.elements, &mut |element, _| match element {
+            oxml_layout::PositionedElement::Text(run) => text.push_str(&run.text),
+            oxml_layout::PositionedElement::Image { .. } => images += 1,
+            _ => {}
+        });
+    }
+    assert_eq!(images, 5, "note-owned media actually paints in each copy");
+    assert!(!text.contains("OLD-"));
+    let original_notes =
+        std::str::from_utf8(original.get_part("/word/footnotes.xml").unwrap()).unwrap();
+    let source_start = original_notes.find("<w:footnote w:id=\"2\"").unwrap();
+    let source_end = source_start
+        + original_notes[source_start..]
+            .find("</w:footnote>")
+            .unwrap()
+        + "</w:footnote>".len();
+    assert!(
+        note_xml.contains(&original_notes[source_start..source_end]),
+        "original rich owner XML remains exact"
+    );
+
+    // Repeated explicit updates retain the uniquely owned cached note identities.
+    // A source-only mutation must refresh every copy without growing the graph.
+    let mut repeated_package = saved.clone();
+    let source_start = note_xml.find("<w:footnote w:id=\"2\"").unwrap();
+    let source_end = source_start
+        + note_xml[source_start..].find("</w:footnote>").unwrap()
+        + "</w:footnote>".len();
+    let mut mutated_notes = note_xml.to_owned();
+    mutated_notes.replace_range(
+        source_start..source_end,
+        &note_xml[source_start..source_end].replace("BOLD_SOURCE", "BOLD_REFRESHED"),
+    );
+    repeated_package.set_part("/word/footnotes.xml", mutated_notes.into_bytes());
+    let mut mutated = std::io::Cursor::new(Vec::new());
+    repeated_package.write_to(&mut mutated).unwrap();
+    let mut repeated = Document::from_bytes(mutated.get_ref()).unwrap();
+    let original_ids = rdocx_oxml::footnotes::CT_Footnotes::from_xml(
+        saved.get_part("/word/footnotes.xml").unwrap(),
+    )
+    .unwrap()
+    .footnotes
+    .iter()
+    .map(|note| note.id)
+    .collect::<Vec<_>>();
+    let note_reference_counts = |graph: &oxml_opc::OpcPackage| {
+        let mut counts = std::collections::BTreeMap::<i32, usize>::new();
+        for (part, xml) in &graph.parts {
+            if !part.ends_with(".xml")
+                || !xml
+                    .windows(b"footnoteReference".len())
+                    .any(|window| window == b"footnoteReference")
+            {
+                continue;
+            }
+            let mut reader = quick_xml::NsReader::from_reader(xml.as_slice());
+            let mut buffer = Vec::new();
+            loop {
+                match reader.read_event_into(&mut buffer).unwrap() {
+                    quick_xml::events::Event::Start(element)
+                    | quick_xml::events::Event::Empty(element)
+                        if element.local_name().as_ref() == b"footnoteReference" =>
+                    {
+                        let id = element
+                            .attributes()
+                            .map(|attribute| attribute.unwrap())
+                            .find(|attribute| attribute.key.local_name().as_ref() == b"id")
+                            .unwrap();
+                        let id = std::str::from_utf8(id.value.as_ref())
+                            .unwrap()
+                            .parse::<i32>()
+                            .unwrap();
+                        *counts.entry(id).or_default() += 1;
+                    }
+                    quick_xml::events::Event::Eof => break,
+                    _ => {}
+                }
+                buffer.clear();
+            }
+        }
+        counts
+    };
+    for _ in 0..2 {
+        assert_eq!(repeated.update_fields(&Default::default()).unwrap(), 7);
+        let repeated_bytes = repeated.to_bytes().unwrap();
+        let graph =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&repeated_bytes)).unwrap();
+        let notes = graph.get_part("/word/footnotes.xml").unwrap();
+        let ids = rdocx_oxml::footnotes::CT_Footnotes::from_xml(notes)
+            .unwrap()
+            .footnotes
+            .iter()
+            .map(|note| note.id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids, original_ids,
+            "repeated update must not append or orphan note owners"
+        );
+        let references = note_reference_counts(&graph);
+        assert_eq!(
+            references
+                .keys()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>(),
+            ids.iter().copied().filter(|id| *id > 0).collect(),
+            "no dangling or orphan normal owners"
+        );
+        assert!(
+            references.values().all(|count| *count == 1),
+            "each measured owner is referenced exactly once"
+        );
+
+        let xml = std::str::from_utf8(notes).unwrap();
+        assert_eq!(
+            xml.matches("BOLD_REFRESHED").count(),
+            5,
+            "copies refresh from original source"
+        );
+        assert!(!xml.contains("BOLD_SOURCE"));
+        assert_eq!(
+            xml.matches("docPr ").count(),
+            5,
+            "drawing graph stays bounded"
+        );
+        assert_eq!(
+            graph
+                .parts
+                .keys()
+                .collect::<std::collections::BTreeSet<_>>(),
+            saved.parts.keys().collect()
+        );
+        assert_eq!(
+            graph.get_part("/word/styles.xml"),
+            saved.get_part("/word/styles.xml")
+        );
+        assert_eq!(
+            graph
+                .get_part_rels("/word/footnotes.xml")
+                .unwrap()
+                .to_xml()
+                .unwrap(),
+            saved
+                .get_part_rels("/word/footnotes.xml")
+                .unwrap()
+                .to_xml()
+                .unwrap()
+        );
+        for (part, payload) in &saved.parts {
+            if part.starts_with("/word/media/") {
+                assert_eq!(graph.get_part(part), Some(payload.as_slice()));
+            }
+        }
+        repeated = Document::from_bytes(&repeated_bytes).unwrap();
+    }
+
+    let mut shared_package = saved.clone();
+    let shared_id = *original_ids
+        .iter()
+        .find(|id| **id > 0 && **id != 2 && **id != 3)
+        .unwrap();
+    let mut main = std::str::from_utf8(shared_package.get_part("/word/document.xml").unwrap())
+        .unwrap()
+        .to_owned();
+    let insertion = main
+        .find("<w:sectPr")
+        .unwrap_or_else(|| main.find("</w:body>").unwrap());
+    main.insert_str(
+        insertion,
+        &format!("<w:p><w:r><w:footnoteReference w:id=\"{shared_id}\"/></w:r></w:p>"),
+    );
+    shared_package.set_part("/word/document.xml", main.into_bytes());
+    let mut shared_input = std::io::Cursor::new(Vec::new());
+    shared_package.write_to(&mut shared_input).unwrap();
+    let mut shared = Document::from_bytes(shared_input.get_ref()).unwrap();
+    let before = shared.to_bytes().unwrap();
+    let evaluations = shared.evaluate_fields(&Default::default()).unwrap();
+    assert!(evaluations.iter().any(|evaluation| matches!(&evaluation.outcome,
+        FieldOutcome::KeepStored { diagnostic } if diagnostic.contains("ownership is ambiguous, shared"))),
+        "shared copied owner must retain its cache with an explicit diagnostic: {evaluations:?}");
+    assert_eq!(shared.to_bytes().unwrap(), before);
+    shared.update_fields(&Default::default()).unwrap();
+    let shared_bytes = shared.to_bytes().unwrap();
+    let shared_graph =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(shared_bytes)).unwrap();
+    let ids = rdocx_oxml::footnotes::CT_Footnotes::from_xml(
+        shared_graph.get_part("/word/footnotes.xml").unwrap(),
+    )
+    .unwrap()
+    .footnotes
+    .iter()
+    .map(|note| note.id)
+    .collect::<Vec<_>>();
+    assert_eq!(
+        ids, original_ids,
+        "shared owner must not be replaced, deleted or leave another copy"
+    );
+
+    for failure in ["missing-media", "missing-relationship"] {
+        let mut malformed =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&input)).unwrap();
+        if failure == "missing-media" {
+            let relationship = original
+                .get_part_rels("/word/footnotes.xml")
+                .unwrap()
+                .items
+                .iter()
+                .find(|relationship| relationship.target_mode.as_deref() != Some("External"))
+                .unwrap();
+            let target = oxml_opc::OpcPackage::resolve_rel_target(
+                "/word/footnotes.xml",
+                &relationship.target,
+            );
+            malformed.remove_part(&target);
+        } else {
+            let xml =
+                std::str::from_utf8(malformed.get_part("/word/footnotes.xml").unwrap()).unwrap();
+            let xml = xml.replace("r:embed=\"", "r:embed=\"missing-");
+            malformed.set_part("/word/footnotes.xml", xml.into_bytes());
+        }
+        let mut output = std::io::Cursor::new(Vec::new());
+        malformed.write_to(&mut output).unwrap();
+        let mut failed = Document::from_bytes(output.get_ref()).unwrap();
+        let before = failed.to_bytes().unwrap();
+        assert!(
+            failed.update_fields(&Default::default()).is_err(),
+            "{failure}"
+        );
+        assert_eq!(
+            failed.to_bytes().unwrap(),
+            before,
+            "{failure} must not publish any cache, owner or allocated identity"
+        );
+    }
+}
+
+#[test]
+fn reference_updates_visit_original_annotation_owners_and_preserve_ordinary_fields() {
+    let mut seed = document_with_field_parts(
+        &wrap_word_body(
+            r#"<w:p><w:bookmarkStart w:id="1" w:name="Direct"/><w:r><w:t>one</w:t></w:r><w:bookmarkEnd w:id="1"/><w:bookmarkStart w:id="2" w:name="Table"/><w:r><w:t>two</w:t></w:r><w:bookmarkEnd w:id="2"/><w:bookmarkStart w:id="3" w:name="Control"/><w:r><w:t>three</w:t></w:r><w:bookmarkEnd w:id="3"/></w:p>"#,
+        ),
+        None,
+        None,
+    );
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    let field = |name: &str| {
+        format!(
+            r#"<w:p><w:fldSimple w:instr="REF {name} \f" producer="keep"><w:r><w:t>OLD-{name}</w:t></w:r></w:fldSimple><w:fldSimple w:instr="MERGEFIELD Hidden{name}" w:dirty="0"><w:r><w:t>ORDINARY-{name}</w:t></w:r></w:fldSimple></w:p>"#
+        )
+    };
+    let comments = format!(
+        r#"<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:q="urn:producer"><w:comment w:id="0" w:author="Owner" q:owner="original">{}<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:tcPr/>{}</w:tc></w:tr></w:tbl><w:sdt><w:sdtPr><w:richText/></w:sdtPr><w:sdtContent>{}</w:sdtContent></w:sdt><q:payload untouched="yes"/></w:comment></w:comments>"#,
+        field("Direct"),
+        field("Table"),
+        field("Control")
+    );
+    package.set_part("/word/comments.xml", comments.into_bytes());
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add(oxml_opc::relationship::rel_types::COMMENTS, "comments.xml");
+    package.content_types.add_override(
+        "/word/comments.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
+    );
+    let mut input = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut input).unwrap();
+    let mut document = Document::from_bytes(input.get_ref()).unwrap();
+    let context = FieldEvaluationContext {
+        merge_fields: BTreeMap::from([
+            ("HiddenDirect".to_owned(), "UNEXPECTED".to_owned()),
+            ("HiddenTable".to_owned(), "UNEXPECTED".to_owned()),
+            ("HiddenControl".to_owned(), "UNEXPECTED".to_owned()),
+        ]),
+        ..Default::default()
+    };
+    let before = document.to_bytes().unwrap();
+    let pure = document.evaluate_fields(&context).unwrap();
+    assert_eq!(pure.len(), 3);
+    assert_eq!(document.to_bytes().unwrap(), before);
+    assert_eq!(document.update_fields(&context).unwrap(), 3);
+    let bytes = document.to_bytes().unwrap();
+    let saved = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let xml = std::str::from_utf8(saved.get_part("/word/comments.xml").unwrap()).unwrap();
+    for value in ["one", "two", "three"] {
+        assert!(xml.contains(&format!("<w:t>{value}</w:t>")));
+    }
+    assert_eq!(xml.matches("producer=\"keep\"").count(), 3);
+    assert!(!xml.contains("UNEXPECTED"));
+    for name in ["Direct", "Table", "Control"] {
+        assert!(xml.contains(&format!(r#"<w:fldSimple w:instr="MERGEFIELD Hidden{name}" w:dirty="0"><w:r><w:t>ORDINARY-{name}</w:t></w:r></w:fldSimple>"#)));
+    }
+    assert!(xml.contains("q:owner=\"original\""));
+    assert!(xml.contains("<q:payload untouched=\"yes\"/>"));
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    assert_eq!(reopened.evaluate_fields(&context).unwrap().len(), 3);
+}
+
+#[test]
+fn ref_f_targets_related_story_nested_tables_without_flattening_owner_payloads() {
+    let body = r#"<w:p><w:fldSimple w:instr="REF RelatedTable \f" producer="source-field"><w:r><w:t>OLD</w:t></w:r></w:fldSimple></w:p>"#;
+    let mut seed = document_with_field_parts(&wrap_word_body(body), None, None);
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    let header = br#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:q="urn:producer"><w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:tcPr/><w:sdt><w:sdtPr><w:richText/></w:sdtPr><w:sdtContent><w:p><w:bookmarkStart w:id="90" w:name="RelatedTable"/><w:r><w:rPr><w:b/></w:rPr><w:t>RELATED-TABLE-TARGET</w:t></w:r><w:bookmarkEnd w:id="90"/></w:p></w:sdtContent></w:sdt></w:tc></w:tr></w:tbl><q:payload unchanged="yes"/></w:hdr>"#;
+    package.set_part("/word/header1.xml", header.to_vec());
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add_with_id(
+            "f280Header",
+            oxml_opc::relationship::rel_types::HEADER,
+            "header1.xml",
+        );
+    package.set_part("/word/document.xml", format!(r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>{body}<w:sectPr><w:headerReference w:type="default" r:id="f280Header"/></w:sectPr></w:body></w:document>"#).into_bytes());
+    package.content_types.add_override(
+        "/word/header1.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+    );
+    let mut input = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut input).unwrap();
+    let mut document = Document::from_bytes(input.get_ref()).unwrap();
+    let before = document.to_bytes().unwrap();
+    let pure = document.evaluate_fields(&Default::default()).unwrap();
+    assert_eq!(pure.len(), 1);
+    assert_eq!(pure[0].cached_result, "OLD");
+    assert!(
+        matches!(&pure[0].outcome, FieldOutcome::Resolved(value) if value == "RELATED-TABLE-TARGET"),
+        "{pure:?}"
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+    assert_eq!(document.update_fields(&Default::default()).unwrap(), 1);
+    let bytes = document.to_bytes().unwrap();
+    let saved = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    assert_eq!(saved.get_part("/word/header1.xml"), Some(header.as_slice()));
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let fields = reopened.evaluate_fields(&Default::default()).unwrap();
+    assert_eq!(fields[0].cached_result, "RELATED-TABLE-TARGET");
+    let main = std::str::from_utf8(saved.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(main.contains("producer=\"source-field\""));
+    assert!(
+        main.contains("<w:b/>"),
+        "typed rich target formatting must survive copy"
+    );
+}
+
+#[test]
+fn f280_numbered_ref_qualifies_related_nested_cell_target_and_rejects_duplicate_name() {
+    for duplicate in [false, true] {
+        let body = r#"<w:p><w:fldSimple w:instr="REF RelatedTable"><w:r><w:t>OLD-TEXT</w:t></w:r></w:fldSimple><w:fldSimple w:instr="REF RelatedTable \n"><w:r><w:t>OLD-NUMBER</w:t></w:r></w:fldSimple></w:p>"#;
+        let mut seed = document_with_field_parts(&wrap_word_body(body), None, None);
+        let definition = seed
+            .add_numbering_definition(&[ListLevel::decimal()])
+            .unwrap();
+        let instance = seed.add_numbering_instance(definition, &[]).unwrap();
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+                .unwrap();
+        let target = format!(
+            r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="{instance}"/></w:numPr></w:pPr><w:bookmarkStart w:id="90" w:name="RelatedTable"/><w:r><w:t>RELATED-TABLE-TARGET</w:t></w:r><w:bookmarkEnd w:id="90"/></w:p>"#
+        );
+        let duplicated = if duplicate {
+            r#"<w:p><w:bookmarkStart w:id="91" w:name="RelatedTable"/><w:r><w:t>AMBIGUOUS</w:t></w:r><w:bookmarkEnd w:id="91"/></w:p>"#
+        } else {
+            ""
+        };
+        let header = format!(
+            r#"<w:hdr xmlns:w="{W_NS}" xmlns:q="urn:producer"><w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:tcPr/><w:sdt><w:sdtPr><w:richText/></w:sdtPr><w:sdtContent>{target}</w:sdtContent></w:sdt></w:tc></w:tr></w:tbl>{duplicated}<q:payload unchanged="yes"/></w:hdr>"#
+        );
+        package.set_part("/word/header1.xml", header.as_bytes().to_vec());
+        package
+            .get_or_create_part_rels("/word/document.xml")
+            .add_with_id(
+                "f280Header",
+                oxml_opc::relationship::rel_types::HEADER,
+                "header1.xml",
+            );
+        package.set_part("/word/document.xml", format!(r#"<w:document xmlns:w="{W_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>{body}<w:sectPr><w:headerReference w:type="default" r:id="f280Header"/></w:sectPr></w:body></w:document>"#).into_bytes());
+        package.content_types.add_override(
+            "/word/header1.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+        );
+        let mut input = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut input).unwrap();
+        let mut document = Document::from_bytes(input.get_ref()).unwrap();
+        let original = document.to_bytes().unwrap();
+        let fields = document.evaluate_fields(&Default::default()).unwrap();
+        if duplicate {
+            assert!(
+                fields
+                    .iter()
+                    .all(|field| matches!(field.outcome, FieldOutcome::KeepStored { .. })),
+                "{fields:?}"
+            );
+        } else {
+            assert_eq!(
+                fields[0].outcome,
+                FieldOutcome::Resolved("RELATED-TABLE-TARGET".into())
+            );
+            assert_eq!(fields[1].outcome, FieldOutcome::Resolved("1".into()));
+        }
+        assert_eq!(document.to_bytes().unwrap(), original);
+        document.update_fields(&Default::default()).unwrap();
+        let saved = document.to_bytes().unwrap();
+        let archive = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+        assert_eq!(
+            archive.get_part("/word/header1.xml"),
+            Some(header.as_bytes())
+        );
+        let reopened = Document::from_bytes(&saved).unwrap();
+        let fields = reopened.evaluate_fields(&Default::default()).unwrap();
+        assert_eq!(
+            fields[0].cached_result,
+            if duplicate {
+                "OLD-TEXT"
+            } else {
+                "RELATED-TABLE-TARGET"
+            }
+        );
+        assert_eq!(
+            fields[1].cached_result,
+            if duplicate { "OLD-NUMBER" } else { "1" }
+        );
+        let painted = reopened
+            .layout_deterministic()
+            .unwrap()
+            .layout
+            .pages
+            .iter()
+            .map(|page| f252_page_text(page))
+            .collect::<String>();
+        assert_eq!(painted.contains("OLD-NUMBER"), duplicate, "{painted}");
+    }
+}
+
+#[test]
+fn typed_ref_f_cache_uses_same_update_sequence_value_and_rich_source_properties() {
+    let body = r#"<w:p><w:bookmarkStart w:id="77" w:name="CaptionTarget"/><w:r><w:t>Figure </w:t></w:r><w:fldSimple w:instr="SEQ Figure \r 4" producer="caption"><w:r><w:rPr><w:b/></w:rPr><w:t>OLD-SEQUENCE</w:t></w:r></w:fldSimple><w:bookmarkEnd w:id="77"/></w:p><w:p><w:fldSimple w:instr="REF CaptionTarget \f" producer="reference"><w:r><w:t>OLD-REF</w:t></w:r></w:fldSimple></w:p>"#;
+    let mut document = document_with_field_parts(&wrap_word_body(body), None, None);
+    let before = document.to_bytes().unwrap();
+    let evaluations = document.evaluate_fields(&Default::default()).unwrap();
+    assert!(matches!(&evaluations[1].outcome,FieldOutcome::Resolved(value) if value=="Figure 4"));
+    assert_eq!(document.to_bytes().unwrap(), before);
+    assert_eq!(document.update_fields(&Default::default()).unwrap(), 2);
+    let bytes = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let evaluations = reopened.evaluate_fields(&Default::default()).unwrap();
+    assert_eq!(evaluations[0].cached_result, "4");
+    assert_eq!(evaluations[1].cached_result, "Figure 4");
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(!xml.contains("OLD-"));
+    assert_eq!(
+        xml.matches("<w:b/>").count(),
+        2,
+        "original and copied sequence formatting survives: {xml}"
+    );
+    assert_eq!(
+        xml.matches("SEQ Figure").count(),
+        1,
+        "copied result never becomes an executable SEQ"
+    );
+}
+
+#[test]
+fn ref_annotation_copy_matches_pinned_word_owned_range_and_optional_companion_graph() {
+    use base64::Engine as _;
+    // Word 16.113.2 genuine annotation WHOLE control. The marker-only target
+    // was removed by producer normalization and supplies no universal policy.
+    // Source SHA 758823512515f5303f5a61d5dc38c6a2ff83b977042c149d8cf1480da77de131. Native repeat and source-only mutation audits
+    // independently prove closed owned IDs with refreshed payload, not copied
+    // paragraph/durable identity equality or a particular internal mechanism.
+    let bytes = base64::engine::general_purpose::STANDARD.decode("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").unwrap();
+    let mut document = Document::from_bytes(&bytes).unwrap();
+    let before = document.to_bytes().unwrap();
+    let values = document.evaluate_fields(&Default::default()).unwrap();
+    let whole = values
+        .iter()
+        .filter(|field| field.instruction.contains("F280_ANN_WHOLE"))
+        .collect::<Vec<_>>();
+    assert_eq!(whole.len(), 2, "{values:?}");
+    assert_eq!(
+        whole[0].outcome,
+        FieldOutcome::Resolved("ANN-PRODUCER-SOURCE = ".into()),
+        "{values:?}"
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let original = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&before)).unwrap();
+    let part_set = original
+        .parts
+        .keys()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut cached_comment_id = None;
+    for _ in 0..2 {
+        document.update_fields(&Default::default()).unwrap();
+        let saved_bytes = document.to_bytes().unwrap();
+        let saved = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved_bytes)).unwrap();
+        assert_eq!(
+            saved
+                .parts
+                .keys()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>(),
+            part_set
+        );
+        assert!(
+            saved.get_part("/word/commentsIds.xml").is_none(),
+            "absent optional metadata must stay absent"
+        );
+        let comments = rdocx_oxml::comments::CT_Comments::from_xml(
+            saved.get_part("/word/comments.xml").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            comments.comments.len(),
+            3,
+            "owner graph must not grow on repeat"
+        );
+        let body = rdocx_oxml::document::CT_Document::from_xml(
+            saved.get_part("/word/document.xml").unwrap(),
+        )
+        .unwrap();
+        let whole = body
+            .body
+            .paragraphs()
+            .flat_map(|paragraph| paragraph.runs())
+            .flat_map(|run| &run.content)
+            .find_map(|content| match content {
+                rdocx_oxml::text::RunContent::Field(field)
+                    if field.instruction.raw.contains("F280_ANN_WHOLE") =>
+                {
+                    Some(field)
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(whole.cached_result, "ANN-PRODUCER-SOURCE = ");
+        let ids = whole
+            .cached_result_runs()
+            .unwrap()
+            .iter()
+            .flat_map(|run| &run.content)
+            .filter_map(|content| match content {
+                rdocx_oxml::text::RunContent::CommentReference { id, .. } => Some(*id),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(ids.len(), 1);
+        assert_ne!(ids[0], 0);
+        if let Some(id) = cached_comment_id {
+            assert_eq!(ids[0], id);
+        } else {
+            cached_comment_id = Some(ids[0]);
+        }
+        assert_eq!(whole.cached_result_comment_ranges().len(), 2);
+        let extended = rdocx_oxml::comments_extended::CT_CommentsEx::from_xml(
+            saved.get_part("/word/commentsExtended.xml").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(extended.comments.len(), 3);
+        assert!(
+            extended
+                .comments
+                .iter()
+                .all(|entry| entry.para_id_parent.is_none())
+        );
+        let reopened = Document::from_bytes(&saved_bytes).unwrap();
+        assert_eq!(
+            reopened
+                .evaluate_fields(&Default::default())
+                .unwrap()
+                .iter()
+                .find(|field| field.instruction.contains("F280_ANN_WHOLE"))
+                .unwrap()
+                .cached_result,
+            "ANN-PRODUCER-SOURCE = "
+        );
+        document = reopened;
+    }
+}
+
+#[test]
+fn ref_annotation_refreshes_original_payload_with_closed_modern_companions_and_reopened_paint() {
+    use base64::Engine as _;
+    // Genuine Word saved annotation graph SHA 36e2606a4ebceea402d58fccd5559bb8525c5413d766eaaef627847eb11104a5. The original source
+    // comment is 1, its cached WHOLE copy is 2 and the context owner is 3.
+    let bytes = base64::engine::general_purpose::STANDARD.decode("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").unwrap();
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let comments =
+        String::from_utf8(package.get_part("/word/comments.xml").unwrap().to_vec()).unwrap();
+    assert_eq!(comments.matches("REAL_ANNOTATION_ALPHA_TEXT").count(), 2);
+    package.set_part(
+        "/word/comments.xml",
+        comments
+            .replacen(
+                "REAL_ANNOTATION_ALPHA_TEXT",
+                "REAL_ANNOTATION_REFRESHED_TEXT",
+                1,
+            )
+            .into_bytes(),
+    );
+    let parts = package
+        .parts
+        .keys()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut input = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut input).unwrap();
+    let mut document = Document::from_bytes(input.get_ref()).unwrap();
+    for _ in 0..2 {
+        let before = document.to_bytes().unwrap();
+        let values = document.evaluate_fields(&Default::default()).unwrap();
+        assert_eq!(
+            values
+                .iter()
+                .find(|field| field.instruction.contains("F280_ANN_WHOLE"))
+                .unwrap()
+                .outcome,
+            FieldOutcome::Resolved("ANN-PRODUCER-SOURCE = ".into()),
+            "{values:?}"
+        );
+        assert_eq!(document.to_bytes().unwrap(), before);
+        document.update_fields(&Default::default()).unwrap();
+        let bytes = document.to_bytes().unwrap();
+        let saved = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+        assert_eq!(
+            saved
+                .parts
+                .keys()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>(),
+            parts
+        );
+        let comments_xml =
+            std::str::from_utf8(saved.get_part("/word/comments.xml").unwrap()).unwrap();
+        assert_eq!(
+            comments_xml
+                .matches("REAL_ANNOTATION_REFRESHED_TEXT")
+                .count(),
+            2
+        );
+        assert!(!comments_xml.contains("REAL_ANNOTATION_ALPHA_TEXT"));
+        let comments = rdocx_oxml::comments::CT_Comments::from_xml(
+            saved.get_part("/word/comments.xml").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            comments
+                .comments
+                .iter()
+                .map(|comment| comment.id)
+                .collect::<std::collections::BTreeSet<_>>(),
+            std::collections::BTreeSet::from([1, 2, 3])
+        );
+        let paragraph_ids = comments
+            .comments
+            .iter()
+            .map(|comment| {
+                comment
+                    .paragraph_ids
+                    .last()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .clone()
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(paragraph_ids.len(), 3);
+        let extended = rdocx_oxml::comments_extended::CT_CommentsEx::from_xml(
+            saved.get_part("/word/commentsExtended.xml").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            extended
+                .comments
+                .iter()
+                .map(|entry| entry.para_id.clone())
+                .collect::<std::collections::BTreeSet<_>>(),
+            paragraph_ids
+        );
+        let ids_xml =
+            std::str::from_utf8(saved.get_part("/word/commentsIds.xml").unwrap()).unwrap();
+        assert_eq!(
+            ids_xml.matches("<w16cid:commentId ").count(),
+            3,
+            "{ids_xml}"
+        );
+        for id in paragraph_ids {
+            assert!(ids_xml.contains(&format!("paraId=\"{id}\"")), "{ids_xml}");
+        }
+        let body = rdocx_oxml::document::CT_Document::from_xml(
+            saved.get_part("/word/document.xml").unwrap(),
+        )
+        .unwrap();
+        let whole = body
+            .body
+            .paragraphs()
+            .flat_map(|paragraph| paragraph.runs())
+            .flat_map(|run| &run.content)
+            .find_map(|content| match content {
+                rdocx_oxml::text::RunContent::Field(field)
+                    if field.instruction.raw.contains("F280_ANN_WHOLE") =>
+                {
+                    Some(field)
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(whole.cached_result_comment_ranges().len(), 2);
+        assert!(
+            whole
+                .cached_result_runs()
+                .unwrap()
+                .iter()
+                .flat_map(|run| &run.content)
+                .any(|content| matches!(
+                    content,
+                    rdocx_oxml::text::RunContent::CommentReference { id: 2, .. }
+                ))
+        );
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        let layout = reopened.layout_deterministic().unwrap();
+        let painted = layout
+            .layout
+            .pages
+            .iter()
+            .map(|page| f252_page_text(page))
+            .collect::<String>();
+        assert!(
+            painted.contains("B-F-WHOLE = ANN-PRODUCER-SOURCE = "),
+            "{painted}"
+        );
+        document = reopened;
+    }
+
+    // These are library qualification controls, not additional Word oracle claims.
+    for variant in [
+        "shared-cache",
+        "missing-copy-entry",
+        "missing-source-entry",
+        "reply-source",
+        "duplicate-durable",
+        "missing-companion-part",
+        "foreign-source-entry",
+        "shared-source-paragraph",
+    ] {
+        let mut unqualified = package.clone();
+        // The refusal control concerns the body copy. Freeze independently
+        // updateable related context fields so every owned graph part can be
+        // asserted byte exact without conflating ordinary context updates.
+        let context_xml =
+            std::str::from_utf8(unqualified.get_part("/word/comments.xml").unwrap()).unwrap();
+        assert_eq!(
+            context_xml
+                .matches(r#"<w:fldChar w:fldCharType="begin"/>"#)
+                .count(),
+            2
+        );
+        unqualified.set_part(
+            "/word/comments.xml",
+            context_xml
+                .replace(
+                    r#"<w:fldChar w:fldCharType="begin"/>"#,
+                    r#"<w:fldChar w:fldCharType="begin" w:fldLock="1"/>"#,
+                )
+                .into_bytes(),
+        );
+        match variant {
+            "shared-cache" => {
+                let xml = std::str::from_utf8(unqualified.get_part("/word/document.xml").unwrap())
+                    .unwrap();
+                let extra = r#"<w:p><w:commentRangeStart w:id="2"/><w:r><w:t>SHARED</w:t></w:r><w:commentRangeEnd w:id="2"/><w:r><w:commentReference w:id="2"/></w:r></w:p>"#;
+                unqualified.set_part(
+                    "/word/document.xml",
+                    xml.replace("</w:body>", &format!("{extra}</w:body>"))
+                        .into_bytes(),
+                );
+            }
+            "missing-copy-entry" | "missing-source-entry" => {
+                let mut xml = String::from_utf8(
+                    unqualified
+                        .get_part("/word/commentsIds.xml")
+                        .unwrap()
+                        .to_vec(),
+                )
+                .unwrap();
+                let id = if variant == "missing-copy-entry" {
+                    "58690041"
+                } else {
+                    "00000001"
+                };
+                let at = xml.find(&format!("w16cid:paraId=\"{id}\"")).unwrap();
+                let start = xml[..at].rfind("<w16cid:commentId ").unwrap();
+                let end = at + xml[at..].find("/>").unwrap() + 2;
+                xml.replace_range(start..end, "");
+                unqualified.set_part("/word/commentsIds.xml", xml.into_bytes());
+            }
+            "shared-source-paragraph" => {
+                let xml = std::str::from_utf8(unqualified.get_part("/word/comments.xml").unwrap())
+                    .unwrap();
+                unqualified.set_part(
+                    "/word/comments.xml",
+                    xml.replacen("w14:paraId=\"00000001\"", "w14:paraId=\"00000003\"", 1)
+                        .into_bytes(),
+                );
+            }
+            "reply-source" => {
+                let xml = std::str::from_utf8(
+                    unqualified.get_part("/word/commentsExtended.xml").unwrap(),
+                )
+                .unwrap();
+                unqualified.set_part(
+                    "/word/commentsExtended.xml",
+                    xml.replacen(
+                        r#"w15:paraId="00000001""#,
+                        r#"w15:paraId="00000001" w15:paraIdParent="00000003""#,
+                        1,
+                    )
+                    .into_bytes(),
+                );
+            }
+            "duplicate-durable" => {
+                let xml =
+                    std::str::from_utf8(unqualified.get_part("/word/commentsIds.xml").unwrap())
+                        .unwrap();
+                unqualified.set_part(
+                    "/word/commentsIds.xml",
+                    xml.replace("4EF1E74F", "00000001").into_bytes(),
+                );
+            }
+            "missing-companion-part" => {
+                unqualified.remove_part("/word/commentsIds.xml");
+            }
+            "foreign-source-entry" => {
+                let xml =
+                    std::str::from_utf8(unqualified.get_part("/word/commentsIds.xml").unwrap())
+                        .unwrap();
+                unqualified.set_part(
+                    "/word/commentsIds.xml",
+                    xml.replacen(
+                        r#"w16cid:paraId="00000001""#,
+                        r#"xmlns:w16cid="urn:foreign" w16cid:paraId="00000001""#,
+                        1,
+                    )
+                    .into_bytes(),
+                );
+            }
+            _ => unreachable!(),
+        }
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        unqualified.write_to(&mut bytes).unwrap();
+        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+        let before = document.to_bytes().unwrap();
+        let values = document.evaluate_fields(&Default::default()).unwrap();
+        assert!(
+            matches!(&values.iter().find(|field|field.instruction.contains("F280_ANN_WHOLE")).unwrap().outcome,FieldOutcome::KeepStored{diagnostic} if diagnostic.contains("annotation")),
+            "{variant}: {values:?}"
+        );
+        assert_eq!(document.to_bytes().unwrap(), before);
+        document.update_fields(&Default::default()).unwrap();
+        let saved =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+                .unwrap();
+        for part in [
+            "/word/comments.xml",
+            "/word/commentsExtended.xml",
+            "/word/commentsIds.xml",
+        ] {
+            assert_eq!(
+                saved.get_part(part),
+                unqualified.get_part(part),
+                "{variant}: {part}"
+            );
+        }
+        assert_eq!(
+            saved
+                .parts
+                .keys()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>(),
+            unqualified.parts.keys().cloned().collect()
+        );
+    }
+}
+
+#[test]
+fn numbered_ref_delimiters_match_all_pinned_word_controls_and_reopen() {
+    use base64::Engine as _;
+    // Authenticated source SHA 1721284db394241d250c2c886ac4ce15d41278efea878169e33c013f20ea151b.
+    // Native normal-close SHA b8dcdad458b8fce6209f5a934286266962823623ee6dc24cdbc8c5f4d7c8dd59.
+    // Native no-F9 reopen SHA 14881ef4d924b595f13293398e4ca336884f22780ba5cc426c4b1195f01f78a1.
+    // All 53 owners/instructions and native rich caches survive no-F9 reopen.
+    // Rust checks semantic results and actual paint, not producer normalization or PDF parity.
+    let bytes = base64::engine::general_purpose::STANDARD.decode("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").unwrap();
+    let expected = [
+        ("REF HEAD_DEEP1 \\n", "Clause 1", "SAME-N-BASE"),
+        ("REF HEAD_DEEP1 \\n \\d \"-\"", "Clause 1", "SAME-N-D"),
+        ("REF HEAD_DEEP1 \\n \\t", "1", "SAME-N-T-BASE"),
+        ("REF HEAD_DEEP1 \\n \\t \\d \"-\"", "1", "SAME-N-T-D"),
+        ("REF HEAD_DEEP1 \\r", "Clause 1", "SAME-R-BASE"),
+        ("REF HEAD_DEEP1 \\r \\d \"-\"", "Clause 1", "SAME-R-D"),
+        ("REF HEAD_DEEP1 \\r \\t", "1", "SAME-R-T-BASE"),
+        ("REF HEAD_DEEP1 \\r \\t \\d \"-\"", "1", "SAME-R-T-D"),
+        ("REF HEAD_DEEP1 \\w", "1.1.Clause 1", "SAME-W-BASE"),
+        ("REF HEAD_DEEP1 \\w \\d \"-\"", "1.1.-Clause 1", "SAME-W-D"),
+        ("REF HEAD_DEEP1 \\w \\t", "1.1.1", "SAME-W-T-BASE"),
+        ("REF HEAD_DEEP1 \\w \\t \\d \"-\"", "1.1.-1", "SAME-W-T-D"),
+        ("REF HEAD_DEEP1 \\n", "Clause 1", "REF-HEAD_SAME_N"),
+        ("REF HEAD_DEEP1 \\r", "Clause 1", "REF-HEAD_SAME_R"),
+        ("REF HEAD_DEEP1 \\w", "1.1.Clause 1", "REF-HEAD_SAME_W"),
+        ("REF HEAD_DEEP1 \\n", "Clause 1", "DIFFERENT-N-BASE"),
+        ("REF HEAD_DEEP1 \\n \\d \"-\"", "Clause 1", "DIFFERENT-N-D"),
+        ("REF HEAD_DEEP1 \\n \\t", "1", "DIFFERENT-N-T-BASE"),
+        ("REF HEAD_DEEP1 \\n \\t \\d \"-\"", "1", "DIFFERENT-N-T-D"),
+        ("REF HEAD_DEEP1 \\r", "1.1.Clause 1", "DIFFERENT-R-BASE"),
+        (
+            "REF HEAD_DEEP1 \\r \\d \"-\"",
+            "1.1.-Clause 1",
+            "DIFFERENT-R-D",
+        ),
+        ("REF HEAD_DEEP1 \\r \\t", "1.1.1", "DIFFERENT-R-T-BASE"),
+        (
+            "REF HEAD_DEEP1 \\r \\t \\d \"-\"",
+            "1.1.-1",
+            "DIFFERENT-R-T-D",
+        ),
+        ("REF HEAD_DEEP1 \\w", "1.1.Clause 1", "DIFFERENT-W-BASE"),
+        (
+            "REF HEAD_DEEP1 \\w \\d \"-\"",
+            "1.1.-Clause 1",
+            "DIFFERENT-W-D",
+        ),
+        ("REF HEAD_DEEP1 \\w \\t", "1.1.1", "DIFFERENT-W-T-BASE"),
+        (
+            "REF HEAD_DEEP1 \\w \\t \\d \"-\"",
+            "1.1.-1",
+            "DIFFERENT-W-T-D",
+        ),
+        ("REF HEAD_DEEP1 \\n", "Clause 1", "REF-HEAD_DIFFERENT_N"),
+        ("REF HEAD_DEEP1 \\r", "1.1.Clause 1", "REF-HEAD_DIFFERENT_R"),
+        ("REF HEAD_DEEP1 \\w", "1.1.Clause 1", "REF-HEAD_DIFFERENT_W"),
+        ("REF HEAD_DEEP1 \\r \\t", "1.1.1", "REF-HEAD_DIFFERENT_R_T"),
+        ("REF HEAD_ROOT1 \\n", "Part 1", "ROOT-N-BASE"),
+        ("REF HEAD_ROOT1 \\n \\d \"-\"", "Part 1", "ROOT-N-D"),
+        ("REF HEAD_ROOT1 \\r", "Part 1", "ROOT-R-BASE"),
+        ("REF HEAD_ROOT1 \\r \\d \"-\"", "Part 1", "ROOT-R-D"),
+        ("REF HEAD_ROOT1 \\w", "Part 1", "ROOT-W-BASE"),
+        ("REF HEAD_ROOT1 \\w \\d \"-\"", "Part 1", "ROOT-W-D"),
+        ("REF HEAD_BRANCH1 \\n", "1.1", "EMBED-N-BASE"),
+        ("REF HEAD_BRANCH1 \\n \\d \"-\"", "1.1", "EMBED-N-D"),
+        ("REF HEAD_BRANCH1 \\r", "1.1", "EMBED-R-BASE"),
+        ("REF HEAD_BRANCH1 \\r \\d \"-\"", "1.1", "EMBED-R-D"),
+        ("REF HEAD_BRANCH1 \\w", "1.1", "EMBED-W-BASE"),
+        ("REF HEAD_BRANCH1 \\w \\d \"-\"", "1.1", "EMBED-W-D"),
+        ("REF HEAD_DEEP1 \\n \\d \"\"", "Clause 1", "EMPTY-N"),
+        ("REF HEAD_DEEP1 \\n", "Clause 1", "UNNUMBERED-N-BASE"),
+        ("REF HEAD_DEEP1 \\n \\d \"-\"", "Clause 1", "UNNUMBERED-N-D"),
+        ("REF HEAD_DEEP1 \\r \\d \"\"", "1.1. Clause 1", "EMPTY-R"),
+        ("REF HEAD_DEEP1 \\r", "1.1.Clause 1", "UNNUMBERED-R-BASE"),
+        (
+            "REF HEAD_DEEP1 \\r \\d \"-\"",
+            "1.1.-Clause 1",
+            "UNNUMBERED-R-D",
+        ),
+        ("REF HEAD_DEEP1 \\w \\d \"\"", "1.1. Clause 1", "EMPTY-W"),
+        ("REF HEAD_DEEP1 \\w", "1.1.Clause 1", "UNNUMBERED-W-BASE"),
+        (
+            "REF HEAD_DEEP1 \\w \\d \"-\"",
+            "1.1.-Clause 1",
+            "UNNUMBERED-W-D",
+        ),
+        (
+            "REF HEAD_DEEP1 \\w \\d \"-\"",
+            "1.1.-Clause 1",
+            "REF-HEAD_DELIMITER",
+        ),
+    ];
+    let mut document = Document::from_bytes(&bytes).unwrap();
+    let before = document.to_bytes().unwrap();
+    let fields = document.evaluate_fields(&Default::default()).unwrap();
+    assert_eq!(fields.len(), expected.len());
+    for (field, (instruction, value, label)) in fields.iter().zip(expected) {
+        assert_eq!(field.instruction.trim(), instruction, "{label}");
+        assert_eq!(
+            field.outcome,
+            FieldOutcome::Resolved(value.into()),
+            "{label}"
+        );
+    }
+    assert_eq!(
+        document.to_bytes().unwrap(),
+        before,
+        "pure evaluation preserves the source"
+    );
+    let layout = document.layout_deterministic().unwrap();
+    let painted = layout
+        .layout
+        .pages
+        .iter()
+        .map(|page| f252_page_text(page))
+        .collect::<String>();
+    for (_, value, label) in expected {
+        assert!(
+            painted.contains(&format!("{label} = {value}")),
+            "{label}: {painted}"
+        );
+    }
+    assert!(!painted.contains("OLD-"));
+    for _ in 0..2 {
+        assert_eq!(
+            document.update_fields(&Default::default()).unwrap(),
+            expected.len()
+        );
+        let saved = document.to_bytes().unwrap();
+        document = Document::from_bytes(&saved).unwrap();
+        let fields = document.evaluate_fields(&Default::default()).unwrap();
+        assert_eq!(fields.len(), expected.len());
+        for (field, (instruction, value, label)) in fields.iter().zip(expected) {
+            assert_eq!(field.instruction.trim(), instruction, "{label}");
+            assert_eq!(field.cached_result, value, "{label}");
+        }
+    }
+}
+
+#[test]
+fn all_caption_references_match_authenticated_before_and_after_word() {
+    use base64::Engine as _;
+    // Exact physical owners and semantic cache records from Word 16.113.2 build 16.113.26092012.
+    // This pins 55 original and 58 inserted/renumbered controls, not native font normalization or PDF parity.
+    {
+        // before source SHA 78c5264224147e7cd529f4a74d5088ec3dc2b1dbc6a0e69b3d32b2ef975d4fb6. Actual native saved SHA a793e1d8e582e501ee3dcf65799bf3eb3e11969561deed81f634d49e80ec5bcc.
+        // Native no-F9 reopen SHA b6d5e2fd018fd36d1d2b7382b9e4ece151f4b8cc3a4296f76be4123b931c89b7. Producer removed two direct heading REF font properties.
+        let bytes = base64::engine::general_purpose::STANDARD.decode("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").unwrap();
+        let expected = [
+            ("SEQ Figure \\* ARABIC", "1", "CAP-FIG1"),
+            ("SEQ Table \\* ARABIC", "1", "CAP-TAB1"),
+            ("SEQ Equation \\* ARABIC", "1", "CAP-EQ1"),
+            ("SEQ Figure \\* ARABIC", "2", "CAP-FIG2"),
+            ("SEQ Table \\* ARABIC", "2", "CAP-TAB2"),
+            ("SEQ Equation \\* ARABIC", "2", "CAP-EQ2"),
+            ("REF HEAD_DEEP1 \\n", "Clause 1", "REF-HEAD_SAME_N"),
+            ("REF HEAD_DEEP1 \\r", "Clause 1", "REF-HEAD_SAME_R"),
+            ("REF HEAD_DEEP1 \\w", "1.1.Clause 1", "REF-HEAD_SAME_W"),
+            ("REF HEAD_DEEP1 \\n", "Clause 1", "REF-HEAD_DIFFERENT_N"),
+            ("REF HEAD_DEEP1 \\r", "1.1.Clause 1", "REF-HEAD_DIFFERENT_R"),
+            ("REF HEAD_DEEP1 \\w", "1.1.Clause 1", "REF-HEAD_DIFFERENT_W"),
+            ("REF HEAD_DEEP1 \\r \\t", "1.1.1", "REF-HEAD_DIFFERENT_R_T"),
+            (
+                "REF CAP_FIG1_ENTIRE",
+                "Figure 1 : CAP-FIG1",
+                "REF-FIG1_ENTIRE",
+            ),
+            ("REF CAP_FIG1_LABEL", "Figure 1", "REF-FIG1_LABEL"),
+            ("REF CAP_FIG1_NUMBER", "1", "REF-FIG1_NUMBER"),
+            ("REF CAP_FIG1_NUMBER \\h", "1", "REF-FIG1_HYPERLINK"),
+            ("REF CAP_FIG1_NUMBER \\p", "above", "REF-FIG1_POSITION"),
+            (
+                "REF CAP_TAB1_ENTIRE",
+                "Table 1 : CAP-TAB1",
+                "REF-TAB1_ENTIRE",
+            ),
+            ("REF CAP_TAB1_LABEL", "Table 1", "REF-TAB1_LABEL"),
+            ("REF CAP_TAB1_NUMBER", "1", "REF-TAB1_NUMBER"),
+            ("REF CAP_TAB1_NUMBER \\h", "1", "REF-TAB1_HYPERLINK"),
+            ("REF CAP_TAB1_NUMBER \\p", "above", "REF-TAB1_POSITION"),
+            (
+                "REF CAP_EQ1_ENTIRE",
+                "Equation 1 : CAP-EQ1",
+                "REF-EQ1_ENTIRE",
+            ),
+            ("REF CAP_EQ1_LABEL", "Equation 1", "REF-EQ1_LABEL"),
+            ("REF CAP_EQ1_NUMBER", "1", "REF-EQ1_NUMBER"),
+            ("REF CAP_EQ1_NUMBER \\h", "1", "REF-EQ1_HYPERLINK"),
+            ("REF CAP_EQ1_NUMBER \\p", "above", "REF-EQ1_POSITION"),
+            (
+                "REF CAP_FIG2_ENTIRE",
+                "Figure 2 : CAP-FIG2",
+                "REF-FIG2_ENTIRE",
+            ),
+            ("REF CAP_FIG2_LABEL", "Figure 2", "REF-FIG2_LABEL"),
+            ("REF CAP_FIG2_NUMBER", "2", "REF-FIG2_NUMBER"),
+            ("REF CAP_FIG2_NUMBER \\h", "2", "REF-FIG2_HYPERLINK"),
+            ("REF CAP_FIG2_NUMBER \\p", "above", "REF-FIG2_POSITION"),
+            (
+                "REF CAP_TAB2_ENTIRE",
+                "Table 2 : CAP-TAB2",
+                "REF-TAB2_ENTIRE",
+            ),
+            ("REF CAP_TAB2_LABEL", "Table 2", "REF-TAB2_LABEL"),
+            ("REF CAP_TAB2_NUMBER", "2", "REF-TAB2_NUMBER"),
+            ("REF CAP_TAB2_NUMBER \\h", "2", "REF-TAB2_HYPERLINK"),
+            ("REF CAP_TAB2_NUMBER \\p", "above", "REF-TAB2_POSITION"),
+            (
+                "REF CAP_EQ2_ENTIRE",
+                "Equation 2 : CAP-EQ2",
+                "REF-EQ2_ENTIRE",
+            ),
+            ("REF CAP_EQ2_LABEL", "Equation 2", "REF-EQ2_LABEL"),
+            ("REF CAP_EQ2_NUMBER", "2", "REF-EQ2_NUMBER"),
+            ("REF CAP_EQ2_NUMBER \\h", "2", "REF-EQ2_HYPERLINK"),
+            ("REF CAP_EQ2_NUMBER \\p", "above", "REF-EQ2_POSITION"),
+            ("REF HEAD_DEEP1", "HEAD-DEEP1", "REF-HEAD_TEXT"),
+            ("REF HEAD_DEEP1 \\n", "Clause 1", "REF-HEAD_N"),
+            ("REF HEAD_DEEP1 \\n \\t", "1", "REF-HEAD_N_T"),
+            ("REF HEAD_DEEP1 \\r", "1.1.Clause 1", "REF-HEAD_R"),
+            ("REF HEAD_DEEP1 \\w", "1.1.Clause 1", "REF-HEAD_W"),
+            ("REF HEAD_DEEP1 \\w \\t", "1.1.1", "REF-HEAD_W_T"),
+            ("REF HEAD_DEEP1 \\n \\p", "Clause 1 above", "REF-HEAD_N_P"),
+            ("REF HEAD_DEEP1 \\p", "above", "REF-HEAD_P"),
+            ("REF HEAD_DEEP1 \\h", "HEAD-DEEP1", "REF-HEAD_H"),
+            (
+                "REF HEAD_DEEP1 \\w \\d \"-\"",
+                "1.1.-Clause 1",
+                "REF-HEAD_DELIMITER",
+            ),
+            ("REF SAMEPARA_TARGET \\p", "below", "SAMEPARA-BEFORE"),
+            ("REF SAMEPARA_TARGET \\p", "above", "SAMEPARA-AFTER"),
+        ];
+        let mut document = Document::from_bytes(&bytes).unwrap();
+        let before = document.to_bytes().unwrap();
+        let fields = document.evaluate_fields(&Default::default()).unwrap();
+        assert_eq!(fields.len(), expected.len());
+        for (field, (instruction, value, label)) in fields.iter().zip(expected) {
+            assert_eq!(field.instruction.trim(), instruction, "before {label}");
+            assert_eq!(
+                field.outcome,
+                FieldOutcome::Resolved(value.into()),
+                "before {label}"
+            );
+        }
+        assert_eq!(document.to_bytes().unwrap(), before);
+        assert_eq!(
+            document.update_fields(&Default::default()).unwrap(),
+            expected.len()
+        );
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        let fields = reopened.evaluate_fields(&Default::default()).unwrap();
+        assert_eq!(fields.len(), expected.len());
+        for (field, (instruction, value, label)) in fields.iter().zip(expected) {
+            assert_eq!(field.instruction.trim(), instruction, "before {label}");
+            assert_eq!(field.cached_result, value, "before {label}");
+        }
+    }
+    {
+        // after source SHA 02349bcee97fc140e343689ba921dc7e8d93a1ad08c62be7568565a80efa6558. Actual native saved SHA cee171fab6a27cb6c49210a198bd785f7002494f6b195b08c8718569ae6e843c.
+        // Native no-F9 reopen SHA fc6869495cca7c014bf69bd5b53fb895e2dc6fda0482ee745cf8660e28452f16. Producer removed two direct heading REF font properties.
+        let bytes = base64::engine::general_purpose::STANDARD.decode("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").unwrap();
+        let expected = [
+            ("SEQ Figure \\* ARABIC", "1", "CAP-FIG0"),
+            ("SEQ Table \\* ARABIC", "1", "CAP-TAB0"),
+            ("SEQ Equation \\* ARABIC", "1", "CAP-EQ0"),
+            ("SEQ Figure \\* ARABIC", "2", "CAP-FIG1"),
+            ("SEQ Table \\* ARABIC", "2", "CAP-TAB1"),
+            ("SEQ Equation \\* ARABIC", "2", "CAP-EQ1"),
+            ("SEQ Figure \\* ARABIC", "3", "CAP-FIG2"),
+            ("SEQ Table \\* ARABIC", "3", "CAP-TAB2"),
+            ("SEQ Equation \\* ARABIC", "3", "CAP-EQ2"),
+            ("REF HEAD_DEEP1 \\n", "Clause 1", "REF-HEAD_SAME_N"),
+            ("REF HEAD_DEEP1 \\r", "Clause 1", "REF-HEAD_SAME_R"),
+            ("REF HEAD_DEEP1 \\w", "2.1.Clause 1", "REF-HEAD_SAME_W"),
+            ("REF HEAD_DEEP1 \\n", "Clause 1", "REF-HEAD_DIFFERENT_N"),
+            ("REF HEAD_DEEP1 \\r", "2.1.Clause 1", "REF-HEAD_DIFFERENT_R"),
+            ("REF HEAD_DEEP1 \\w", "2.1.Clause 1", "REF-HEAD_DIFFERENT_W"),
+            ("REF HEAD_DEEP1 \\r \\t", "2.1.1", "REF-HEAD_DIFFERENT_R_T"),
+            (
+                "REF CAP_FIG1_ENTIRE",
+                "Figure 2 : CAP-FIG1",
+                "REF-FIG1_ENTIRE",
+            ),
+            ("REF CAP_FIG1_LABEL", "Figure 2", "REF-FIG1_LABEL"),
+            ("REF CAP_FIG1_NUMBER", "2", "REF-FIG1_NUMBER"),
+            ("REF CAP_FIG1_NUMBER \\h", "2", "REF-FIG1_HYPERLINK"),
+            ("REF CAP_FIG1_NUMBER \\p", "above", "REF-FIG1_POSITION"),
+            (
+                "REF CAP_TAB1_ENTIRE",
+                "Table 2 : CAP-TAB1",
+                "REF-TAB1_ENTIRE",
+            ),
+            ("REF CAP_TAB1_LABEL", "Table 2", "REF-TAB1_LABEL"),
+            ("REF CAP_TAB1_NUMBER", "2", "REF-TAB1_NUMBER"),
+            ("REF CAP_TAB1_NUMBER \\h", "2", "REF-TAB1_HYPERLINK"),
+            ("REF CAP_TAB1_NUMBER \\p", "above", "REF-TAB1_POSITION"),
+            (
+                "REF CAP_EQ1_ENTIRE",
+                "Equation 2 : CAP-EQ1",
+                "REF-EQ1_ENTIRE",
+            ),
+            ("REF CAP_EQ1_LABEL", "Equation 2", "REF-EQ1_LABEL"),
+            ("REF CAP_EQ1_NUMBER", "2", "REF-EQ1_NUMBER"),
+            ("REF CAP_EQ1_NUMBER \\h", "2", "REF-EQ1_HYPERLINK"),
+            ("REF CAP_EQ1_NUMBER \\p", "above", "REF-EQ1_POSITION"),
+            (
+                "REF CAP_FIG2_ENTIRE",
+                "Figure 3 : CAP-FIG2",
+                "REF-FIG2_ENTIRE",
+            ),
+            ("REF CAP_FIG2_LABEL", "Figure 3", "REF-FIG2_LABEL"),
+            ("REF CAP_FIG2_NUMBER", "3", "REF-FIG2_NUMBER"),
+            ("REF CAP_FIG2_NUMBER \\h", "3", "REF-FIG2_HYPERLINK"),
+            ("REF CAP_FIG2_NUMBER \\p", "above", "REF-FIG2_POSITION"),
+            (
+                "REF CAP_TAB2_ENTIRE",
+                "Table 3 : CAP-TAB2",
+                "REF-TAB2_ENTIRE",
+            ),
+            ("REF CAP_TAB2_LABEL", "Table 3", "REF-TAB2_LABEL"),
+            ("REF CAP_TAB2_NUMBER", "3", "REF-TAB2_NUMBER"),
+            ("REF CAP_TAB2_NUMBER \\h", "3", "REF-TAB2_HYPERLINK"),
+            ("REF CAP_TAB2_NUMBER \\p", "above", "REF-TAB2_POSITION"),
+            (
+                "REF CAP_EQ2_ENTIRE",
+                "Equation 3 : CAP-EQ2",
+                "REF-EQ2_ENTIRE",
+            ),
+            ("REF CAP_EQ2_LABEL", "Equation 3", "REF-EQ2_LABEL"),
+            ("REF CAP_EQ2_NUMBER", "3", "REF-EQ2_NUMBER"),
+            ("REF CAP_EQ2_NUMBER \\h", "3", "REF-EQ2_HYPERLINK"),
+            ("REF CAP_EQ2_NUMBER \\p", "above", "REF-EQ2_POSITION"),
+            ("REF HEAD_DEEP1", "HEAD-DEEP1", "REF-HEAD_TEXT"),
+            ("REF HEAD_DEEP1 \\n", "Clause 1", "REF-HEAD_N"),
+            ("REF HEAD_DEEP1 \\n \\t", "1", "REF-HEAD_N_T"),
+            ("REF HEAD_DEEP1 \\r", "2.1.Clause 1", "REF-HEAD_R"),
+            ("REF HEAD_DEEP1 \\w", "2.1.Clause 1", "REF-HEAD_W"),
+            ("REF HEAD_DEEP1 \\w \\t", "2.1.1", "REF-HEAD_W_T"),
+            ("REF HEAD_DEEP1 \\n \\p", "Clause 1 above", "REF-HEAD_N_P"),
+            ("REF HEAD_DEEP1 \\p", "above", "REF-HEAD_P"),
+            ("REF HEAD_DEEP1 \\h", "HEAD-DEEP1", "REF-HEAD_H"),
+            (
+                "REF HEAD_DEEP1 \\w \\d \"-\"",
+                "2.1.-Clause 1",
+                "REF-HEAD_DELIMITER",
+            ),
+            ("REF SAMEPARA_TARGET \\p", "below", "SAMEPARA-BEFORE"),
+            ("REF SAMEPARA_TARGET \\p", "above", "SAMEPARA-AFTER"),
+        ];
+        let mut document = Document::from_bytes(&bytes).unwrap();
+        let before = document.to_bytes().unwrap();
+        let fields = document.evaluate_fields(&Default::default()).unwrap();
+        assert_eq!(fields.len(), expected.len());
+        for (field, (instruction, value, label)) in fields.iter().zip(expected) {
+            assert_eq!(field.instruction.trim(), instruction, "after {label}");
+            assert_eq!(
+                field.outcome,
+                FieldOutcome::Resolved(value.into()),
+                "after {label}"
+            );
+        }
+        assert_eq!(document.to_bytes().unwrap(), before);
+        assert_eq!(
+            document.update_fields(&Default::default()).unwrap(),
+            expected.len()
+        );
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        let fields = reopened.evaluate_fields(&Default::default()).unwrap();
+        assert_eq!(fields.len(), expected.len());
+        for (field, (instruction, value, label)) in fields.iter().zip(expected) {
+            assert_eq!(field.instruction.trim(), instruction, "after {label}");
+            assert_eq!(field.cached_result, value, "after {label}");
+        }
+    }
+}
+
+#[test]
+fn all_sequence_story_controls_match_authenticated_word_and_physical_pages() {
+    use base64::Engine as _;
+    // Source SHA ff0937b6623d1ab52f4eea4d75980c62e26d9d5a80684ac12f15bc779a9dd9dd.
+    // Native post-close SHA e0127ff029da72d1b861ce825d1924d18ccaed625fefb56980a57ed747cffa6c.
+    // Actual no-F9 reopened SHA d870d0a4e355ecee5c067b77c004de4ad48f58488b6af15775a3f49c91ee848f.
+    // The shared header/footer saved cache is lifecycle-dependent. Native actual pages repeat 14 then 16.
+    let bytes = base64::engine::general_purpose::STANDARD.decode("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").unwrap();
+    let expected = [
+        ("SEQ Control \\n", "1", "B-NEXT", false),
+        ("SEQ Control \\c", "1", "B-REPEAT", false),
+        ("SEQ Control \\r 7", "7", "B-RESTART", false),
+        ("SEQ Control", "8", "B-AFTER-RESTART", false),
+        ("SEQ Control \\h", "", "B-HIDDEN", false),
+        ("SEQ Control", "10", "B-AFTER-HIDDEN", false),
+        ("SEQ Control \\h \\* ARABIC", "11", "B-HIDDEN-ARABIC", false),
+        ("SEQ Control \\h \\* roman", "xii", "B-HIDDEN-roman", false),
+        ("SEQ Control", "13", "B-AFTER-HIDDEN-FORMAT", false),
+        ("SEQ cOnTrOl", "14", "B-CASE-IDENTIFIER", false),
+        ("SEQ ChapterFigure \\s 1", "1", "B-HEADING-A-FIRST", false),
+        ("SEQ ChapterFigure \\s 1", "2", "B-HEADING-A-SECOND", false),
+        ("SEQ ChapterFigure \\s 1", "3", "B-HEADING2-CONTINUE", false),
+        ("SEQ ChapterFigure \\s 1", "1", "B-HEADING-B-FIRST", false),
+        ("SEQ ChapterFigure \\c", "1", "B-HEADING-B-REPEAT", false),
+        ("SEQ Control", "Error! Main Document Only.", "H-NEXT", false),
+        ("SEQ Control \\c", "16", "H-REPEAT", true),
+        (
+            "SEQ Control",
+            "Error! Main Document Only.",
+            "H-AFTER",
+            false,
+        ),
+        ("SEQ Control", "Error! Main Document Only.", "F-NEXT", false),
+        ("SEQ Control \\c", "16", "F-REPEAT", true),
+        (
+            "SEQ Control",
+            "Error! Main Document Only.",
+            "F-AFTER",
+            false,
+        ),
+        (
+            "SEQ Control",
+            "Error! Main Document Only.",
+            "FN1-NEXT",
+            false,
+        ),
+        ("SEQ Control \\c", "14", "FN1-REPEAT", false),
+        (
+            "SEQ Control",
+            "Error! Main Document Only.",
+            "FN1-AFTER",
+            false,
+        ),
+        (
+            "SEQ Control",
+            "Error! Main Document Only.",
+            "FN2-NEXT",
+            false,
+        ),
+        ("SEQ Control \\c", "14", "FN2-REPEAT", false),
+        (
+            "SEQ Control",
+            "Error! Main Document Only.",
+            "FN2-AFTER",
+            false,
+        ),
+        (
+            "SEQ Control",
+            "Error! Main Document Only.",
+            "EN-NEXT",
+            false,
+        ),
+        ("SEQ Control \\c", "14", "EN-REPEAT", false),
+        (
+            "SEQ Control",
+            "Error! Main Document Only.",
+            "EN-AFTER",
+            false,
+        ),
+        ("SEQ Control", "15", "BOX-NEXT", false),
+        ("SEQ Control \\c", "15", "BOX-REPEAT", false),
+        ("SEQ Control", "16", "BOX-AFTER", false),
+    ];
+    let mut document = Document::from_bytes(&bytes).unwrap();
+    let before = document.to_bytes().unwrap();
+    let fields = document.evaluate_fields(&Default::default()).unwrap();
+    assert_eq!(fields.len(), expected.len());
+    for (field, (instruction, value, label, repeat)) in fields.iter().zip(expected) {
+        assert_eq!(field.instruction.trim(), instruction, "{label}");
+        if repeat {
+            assert!(
+                matches!(&field.outcome, FieldOutcome::KeepStored { diagnostic } if diagnostic.contains("no unique physical document context")),
+                "{label}: {:?}",
+                field.outcome
+            );
+        } else {
+            assert_eq!(
+                field.outcome,
+                FieldOutcome::Resolved(value.into()),
+                "{label}"
+            );
+        }
+    }
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let mut overridden = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml =
+        String::from_utf8(overridden.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let style = xml.find("<w:pStyle w:val=\"Heading1\"/>").unwrap();
+    let end = style + xml[style..].find("</w:pPr>").unwrap();
+    xml.insert_str(end, "<w:outlineLvl w:val=\"9\"/>");
+    overridden.set_part("/word/document.xml", xml.into_bytes());
+    let mut override_bytes = std::io::Cursor::new(Vec::new());
+    overridden.write_to(&mut override_bytes).unwrap();
+    let explicit_override = Document::from_bytes(override_bytes.get_ref()).unwrap();
+    let outcomes = explicit_override
+        .evaluate_fields(&Default::default())
+        .unwrap();
+    let first = outcomes
+        .iter()
+        .find(|field| field.cached_result == "OLD-B-HEADING-A-FIRST")
+        .unwrap();
+    assert!(
+        matches!(&first.outcome, FieldOutcome::KeepStored {diagnostic} if diagnostic.contains("no matching heading")),
+        "explicit outline override remains authoritative: {:?}",
+        first.outcome
+    );
+    for pass in 0..2 {
+        let layout = document.layout_deterministic().unwrap();
+        assert_eq!(layout.layout.pages.len(), 2, "pass {pass}");
+        for (index, page) in layout.layout.pages.iter().enumerate() {
+            let text = f252_page_text(page);
+            let mut repeats = Vec::new();
+            oxml_layout::walk(&page.elements, &mut |element, _| match element {
+                oxml_layout::PositionedElement::Text(run)
+                    if run.field_kind == Some(oxml_layout::FieldKind::SequenceRepeat) =>
+                {
+                    repeats.push(run.text.clone())
+                }
+                oxml_layout::PositionedElement::MultilingualText(run)
+                    if run.field_kind == Some(oxml_layout::FieldKind::SequenceRepeat) =>
+                {
+                    repeats.push(run.logical_text.clone())
+                }
+                _ => {}
+            });
+            assert_eq!(
+                repeats,
+                vec![if index == 0 { "14" } else { "16" }; 2],
+                "one substituted segment per furniture repeat"
+            );
+            for story in ["H", "F"] {
+                assert!(
+                    text.contains(&format!(
+                        "{story}-REPEAT = {}",
+                        if index == 0 { 14 } else { 16 }
+                    )),
+                    "pass {pass} page {index}: {text}"
+                );
+                assert!(
+                    text.contains(&format!("{story}-NEXT = Error! Main Document Only.")),
+                    "{text}"
+                );
+                assert!(
+                    text.contains(&format!("{story}-AFTER = Error! Main Document Only.")),
+                    "{text}"
+                );
+            }
+        }
+        let text = layout
+            .layout
+            .pages
+            .iter()
+            .map(|page| f252_page_text(page))
+            .collect::<String>();
+        for (_, value, label, repeat) in expected {
+            if !repeat {
+                assert!(
+                    text.contains(&format!("{label} = {value}")),
+                    "{label}: {text}"
+                );
+            }
+        }
+        assert_eq!(
+            document.update_fields(&Default::default()).unwrap(),
+            expected.len()
+        );
+        document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        for (field, (instruction, value, label, repeat)) in document
+            .evaluate_fields(&Default::default())
+            .unwrap()
+            .iter()
+            .zip(expected)
+        {
+            assert_eq!(field.instruction.trim(), instruction, "{label}");
+            if !repeat {
+                assert_eq!(field.cached_result, value, "{label}");
+            }
+        }
+    }
+}
+
+#[test]
+fn ref_f_all_captured_story_owners_preserve_selected_and_fallback_graphs() {
+    use base64::Engine as _;
+    // Authenticated source SHA 850f3e823b02dc1c20aed0cb684a90f2be150b1e4f6b7a9d06b45e6e6b2b2758.
+    // Completed five-context native update and actual no-F9 reopen SHA 1fa8d987b9b9bf28784347dd6fc5a4c1f53f45352e2bfa06fb553810d28be78c.
+    // All31 native rich wire contracts are stable. The library selects22 owners and preserves9 unselected fallback caches.
+    let bytes = base64::engine::general_purpose::STANDARD.decode("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").unwrap();
+    let expected = [
+        ("REF F280_FN_MARK \\f", "", "B-F-BEFORE"),
+        ("REF F280_FN_MARK \\f", "", "B-F-AFTER"),
+        (
+            "REF F280_FN_WHOLE \\f",
+            "FN-PRODUCER-SOURCE = ",
+            "B-F-WHOLE",
+        ),
+        ("REF F280_FN_MARK \\f \\h", "", "B-F-HYPERLINK"),
+        ("REF F280_FN_MARK", "", "B-TEXT-CONTROL"),
+        ("REF F280_FN_MARK \\f", "", "HEADER-MARK"),
+        (
+            "REF F280_FN_WHOLE \\f",
+            "FN-PRODUCER-SOURCE = ",
+            "HEADER-WHOLE",
+        ),
+        ("REF F280_FN_MARK", "", "HEADER-TEXT"),
+        ("REF F280_FN_MARK \\f", "", "FOOTER-MARK"),
+        (
+            "REF F280_FN_WHOLE \\f",
+            "FN-PRODUCER-SOURCE = ",
+            "FOOTER-WHOLE",
+        ),
+        ("REF F280_FN_MARK", "", "FOOTER-TEXT"),
+        ("REF F280_FN_MARK \\f", "", "NOTE-F-BEFORE-CONTEXT"),
+        (
+            "REF F280_FN_WHOLE \\f",
+            "FN-PRODUCER-SOURCE = ",
+            "NOTE-F-AFTER-CONTEXT",
+        ),
+        ("REF F280_FN_MARK \\f", "", "BODY-BOX-MARK"),
+        (
+            "REF F280_FN_WHOLE \\f",
+            "FN-PRODUCER-SOURCE = ",
+            "BODY-BOX-WHOLE",
+        ),
+        ("REF F280_FN_MARK", "", "BODY-BOX-TEXT"),
+        ("REF F280_FN_MARK \\f", "", "HEADER-BOX-MARK"),
+        (
+            "REF F280_FN_WHOLE \\f",
+            "FN-PRODUCER-SOURCE = ",
+            "HEADER-BOX-WHOLE",
+        ),
+        ("REF F280_FN_MARK", "", "HEADER-BOX-TEXT"),
+        ("REF F280_FN_MARK \\f", "", "FOOTER-BOX-MARK"),
+        (
+            "REF F280_FN_WHOLE \\f",
+            "FN-PRODUCER-SOURCE = ",
+            "FOOTER-BOX-WHOLE",
+        ),
+        ("REF F280_FN_MARK", "", "FOOTER-BOX-TEXT"),
+    ];
+    let source = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let fallbacks = [
+        "/word/document.xml",
+        "/word/header1.xml",
+        "/word/footer1.xml",
+    ]
+    .map(|part| {
+        let xml = String::from_utf8(source.get_part(part).unwrap().to_vec()).unwrap();
+        let start = xml.find("<mc:Fallback").unwrap();
+        let end = start + xml[start..].find("</mc:Fallback>").unwrap() + "</mc:Fallback>".len();
+        (part, xml[start..end].to_owned())
+    });
+    let mut document = Document::from_bytes(&bytes).unwrap();
+    let before = document.to_bytes().unwrap();
+    let fields = document.evaluate_fields(&Default::default()).unwrap();
+    assert_eq!(fields.len(), expected.len());
+    for (field, (instruction, value, label)) in fields.iter().zip(expected) {
+        assert_eq!(field.instruction.trim(), instruction, "{label}");
+        assert_eq!(
+            field.outcome,
+            FieldOutcome::Resolved(value.into()),
+            "{label}"
+        );
+    }
+    assert_eq!(document.to_bytes().unwrap(), before);
+    for _ in 0..2 {
+        assert_eq!(
+            document.update_fields(&Default::default()).unwrap(),
+            expected.len()
+        );
+        let bytes = document.to_bytes().unwrap();
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+        for (part, fallback) in &fallbacks {
+            let xml = String::from_utf8(package.get_part(part).unwrap().to_vec()).unwrap();
+            assert!(
+                xml.contains(fallback),
+                "unselected fallback {part} remains verbatim"
+            );
+        }
+        let body =
+            String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+        let notes =
+            String::from_utf8(package.get_part("/word/footnotes.xml").unwrap().to_vec()).unwrap();
+        assert_eq!(body.matches("<w:footnoteReference ").count(), 6);
+        assert_eq!(
+            notes.matches("<w:footnote ").count(),
+            6,
+            "six normal owners, no growth"
+        );
+        document = Document::from_bytes(&bytes).unwrap();
+        let fields = document.evaluate_fields(&Default::default()).unwrap();
+        assert_eq!(fields.len(), expected.len());
+        for (field, (instruction, value, label)) in fields.iter().zip(expected) {
+            assert_eq!(field.instruction.trim(), instruction, "{label}");
+            assert_eq!(field.cached_result, value, "{label}");
+        }
+        let layout = document.layout_deterministic().unwrap();
+        let painted = layout
+            .layout
+            .pages
+            .iter()
+            .map(|page| f252_page_text(page))
+            .collect::<String>();
+        for label in [
+            "BODY-BOX-WHOLE",
+            "HEADER-WHOLE",
+            "HEADER-BOX-WHOLE",
+            "FOOTER-WHOLE",
+            "FOOTER-BOX-WHOLE",
+        ] {
+            assert!(
+                painted.contains(&format!("{label} = FN-PRODUCER-SOURCE = ")),
+                "{label}: {painted}"
+            );
+        }
     }
 }
