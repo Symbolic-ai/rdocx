@@ -311,6 +311,19 @@ or rewriting a guessed owner. Cover selected nested controls, identical
 alternate branches, locked parent fields, zero counter advancement and failure
 atomicity in existing entrypoints.
 
+The selected DrawingML projection in existing drawing.rs must preserve
+significant text before source binding. parse_alternate_content and the
+scoped inline and anchor NsReaders in CT_Drawing::from_xml_with_prefixes
+currently trim instruction and literal text while capturing shape contents.
+Disable text trimming at these three projection sites, leaving geometry-only
+shape-property parsing unchanged. Original raw serializers remain the write
+authority. Prove instruction spaces and literal leading, trailing and internal
+whitespace in direct and selected alternate-content inline/anchor owners,
+unchanged raw producer serialization, locked field preservation and exact
+unlocked nested binding. Run applicable drawing/model and existing hash checks,
+and classify any intentional render change before accepting it. Do not weaken
+the raw-owner comparison to accommodate corrupted projection text.
+
 Each main event stores one successfully applied counter
 delta, including hidden increments and selected anchored boxes. Per-identifier
 indexes support predecessor lookup at an event boundary. Do not clone the entire
@@ -581,6 +594,7 @@ pass before completion and may not be replaced by guessed expectations.
 
 - `crates/rdocx/src/field.rs`
 - `crates/rdocx-oxml/src/text.rs`, checked accepted-view run insertion using the existing range-site resolver
+- `crates/rdocx-oxml/src/drawing.rs`, preserve significant selected-owner text in existing projection readers
 - `crates/rdocx/src/lib.rs`
 - `crates/rdocx/tests/regression_test.rs`
 - `crates/rdocx/src/document.rs`, if checked story insertion needs an existing-owner helper
