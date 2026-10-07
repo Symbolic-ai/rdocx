@@ -216,8 +216,20 @@ observed save lifecycle. Do not replace per-page expectations with one cache.
 
 The seven-field footnote control pins typed copied references and corresponding
 note content in `F280-ref-footnote-authenticated-20261007-01.json`. Marker-only
-results can have empty text and a nonempty typed reference. The separate rich
-copy probe must be authenticated before its expectations enter tests.
+results can have empty text and a nonempty typed reference. The authenticated inherited-Emphasis rich copy probe pins retained style
+references and copied note payload/media, with new drawing identities, removed
+copied internal bookmarks and flattened external hyperlink wrappers. Keep the
+original source note intact. This is bounded evidence for the captured payload,
+not permission to infer arbitrary annotation or relationship copying.
+
+Five caption and REF-f saved-output reopens retain all 134 field contracts and
+per-page PDF text. The three REF-f controls retain their rich payloads. In both
+caption cases Word removes explicit font properties from two heading REF
+caches, which then inherit the producer defaults. That is an observed
+formatting change, not strict or effective formatting equality. Classify this
+native lifecycle separately from library save/reopen preservation. Endnote
+and annotation REF-f probes are prepared but remain uncaptured and must not
+be presented as passing oracle evidence.
 
 These clarifications follow the [Microsoft SEQ reference](https://support.microsoft.com/en-us/word/field-codes-seq-sequence-field)
 and [Microsoft REF reference](https://support.microsoft.com/en-us/word/field-codes-ref-field).
