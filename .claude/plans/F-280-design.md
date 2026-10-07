@@ -728,3 +728,24 @@ It is not verified packaging evidence. Compilation, tests, docs, lint and
 verified publish dry runs retain the healthy target directory. Complete the
 four affected published archive verification dry runs with local patches and
 the ten MiB assertions separately, without substituting the measurement route.
+
+## Microscope malformed quoting rider
+
+Remediate the independently cited malformed producer SEQ boundary through a
+hidden concrete `FieldInstruction::quotes_are_balanced(&self) -> bool` in the
+existing `crates/rdocx-oxml/src/text.rs`. Move the existing escaped quote and
+backslash algorithm from facade `instruction_quotes_are_balanced` unchanged.
+Read the preserved raw instruction, without reparsing, normalization or mutation.
+The facade instruction-shape validator and shared sequence snapshot collector
+are two existing consumers. Validate before any snapshot event or counter
+mutation and before facade or renderer consumption. Retain the producer cache
+with the established unclosed-quoting diagnostic on failure.
+
+This is an additive hidden pre-1.0 XML API, with no new file, module, dependency,
+trait or wrapper. Document it and include all-target consumers, affected archive
+verification, README archive measurements and the ten MiB gate. Reuse the
+approved HLD impact list. Test an unclosed quoted SEQ followed by a valid
+increment through pure evaluation, update, saved reopen and actual deterministic
+painting. The malformed event must not advance the counter. Include escaped
+quotes and backslashes and keep the genuinely measured optional bookmark
+operand valid. Do not restore the old one-argument SEQ shape restriction.
