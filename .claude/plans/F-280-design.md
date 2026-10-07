@@ -646,6 +646,15 @@ their behavior, and fresh Word evidence is pinned to 16.113.2 build
 locale recorded explicitly. Technical ownership probes in the test plan must
 pass before completion and may not be replaced by guessed expectations.
 
+## Capability ownership verification rider
+
+Update the existing `scripts/test_sprint_workflow.py` expected capability owner
+set when DOCX-047 is verified complete and its HLD owner becomes `-`. The
+existing F-278 and F-279 exclusions establish the same boundary. Exclude F-280
+from that expected incomplete-owner set and retain the matrix classification
+and live-owner assertions. Do not change worker sprint ledgers to satisfy this
+test. Run the existing workflow tests against the completed HLD contract.
+
 ## Exclusive resources
 
 - `crates/rdocx/src/field.rs`
@@ -663,6 +672,7 @@ pass before completion and may not be replaced by guessed expectations.
 - Existing LayoutInput constructors, only for initialization of the additive field
 - `crates/oxml-layout/src/output.rs`, neutral structural context and repeat classifications
 - Existing neutral and render consumers, only for required exhaustive classification or structural-marker propagation
+- `scripts/test_sprint_workflow.py`, expected incomplete capability owner reconciliation
 - The named HLD sections in the impact list
 - Hash baseline only if an individually reviewed intentional delta is proven
 
