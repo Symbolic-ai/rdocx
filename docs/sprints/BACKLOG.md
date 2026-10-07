@@ -39,9 +39,9 @@ regenerated, never hand-edited.
 | M21, Presentation depth                        | 15 | 15 | 0 | 0  |
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
 | M23, From-scratch business documents           | 24 | 24 | 0 | 0 |
-| M24, Modern DOCX authoring completeness        | 54 | 21 | 0 | 33 |
+| M24, Modern DOCX authoring completeness        | 54 | 21 | 1 | 32 |
 | X, Cross-cutting (opportunistic)              | 189 | 184 | 0 | 1 |
-| **Total** | **514** | **455** | **0** | **55** |
+| **Total** | **514** | **455** | **1** | **54** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -504,7 +504,7 @@ regenerated, never hand-edited.
 | F-277 | Glossary and building-block creation | S89 | L | done |
 | F-278 | General simple and complex field builder | S90 | L | done |
 | F-279 | Pagination field materialization across stories | S90 | L | done |
-| F-280 | Captions, sequences, and complete cross-references | S90 | M | pending |
+| F-280 | Captions, sequences, and complete cross-references | S90 | M | in-progress |
 | F-281 | Indexes and tables of figures and authorities | S90 | L | pending |
 | F-282 | Citations and bibliography authoring | S90 | L | pending |
 | F-283 | Complete numbering-aware navigation fields | S90 | L | pending |
