@@ -177,6 +177,15 @@ same-run controls, nested caches and no-op serialization. The current concrete
 consumer is captured annotation REF-f copy materialization. No new type, file,
 trait or generic is introduced.
 
+A hidden read-only Field::cached_result_comment_ranges slice getter exposes
+owned cached CommentRangeMarker values to the facade target-range extractor
+and layout comment-anchor discovery. These are two existing concrete consumers.
+Keep marker boundary positions in semantic field equality and source-aware
+nested cache projections. Prove parsed simple and complex caches retain their
+typed Field ownership, preserve no-op source bytes and render actual annotation
+anchors and callouts after reopening. Mere XML well-formedness or typed run
+presence does not establish the annotation rendering contract.
+
 The existing no-marker setter remains the ordinary typed-run operation.
 The marker operation owns validation and sibling serialization rather than
 only forwarding. Prove empty and literal ranges, exact outer instructions and
@@ -194,11 +203,18 @@ Main-body references allocate four typed note copies. The measured body box and
 ordinary header keep bookmarked literal text and allocate no notes. These
 partial stages are retained in /private/tmp/S90-F280-ref-owner-controls with
 source fingerprint 850f3e823b02dc1c20aed0cb684a90f2be150b1e4f6b7a9d06b45e6e6b2b2758.
-Word moves default furniture to different package parts during header save.
-Follow section relationships rather than treating emptied former parts as lost
-fields. Header boxes, footer owners and footer boxes remain unmeasured here,
-as do reopening and rendering. An explicit retention diagnostic for those
-unmeasured cases remains a checkpoint rather than completion evidence.
+The completed native probe also explicitly updates the ordinary footer and
+selected header and footer boxes. All five measured new contexts retain empty
+MARK and literal-only WHOLE results without typed references or additional
+notes. Word moves default furniture between package parts during editing and
+collapses it again during export and save. Follow section relationships rather
+than treating emptied former parts as lost fields. All 31 rich field contracts
+survive the distinct no-F9 reopen. The two one-page Word PDFs retain exact text
+and 96dpi pixels. This supports the captured plain target and shapes, not a
+universal rich copy policy or Rust rendering parity. The context-note cache
+changes between the footer-box update snapshot and offline export/save, before
+close and reopen, with no explicit note F9 in that interval. Keep this bounded
+automatic lifecycle separate from library leave-alone save behavior.
 
 Use the existing sequence traversal with explicit story ownership. Main-body
 and selected anchored text-box fields participate in the captured document
@@ -412,9 +428,18 @@ per-page PDF text. The three REF-f controls retain their rich payloads. In both
 caption cases Word removes explicit font properties from two heading REF
 caches, which then inherit the producer defaults. That is an observed
 formatting change, not strict or effective formatting equality. Classify this
-native lifecycle separately from library save/reopen preservation. Endnote
-and annotation REF-f probes are prepared but remain uncaptured and must not
-be presented as passing oracle evidence.
+native lifecycle separately from library save/reopen preservation. The authenticated endnote control retains all seven instructions and four
+typed copied owners, with note-context literal results and no recursive copies.
+Its distinct no-F9 reopen retains rich caches and identical one-page PDF text
+and pixels. The authenticated annotation control copies the WHOLE comment
+range and owner in body context, but retains literal content in the annotation
+context without allocating another owner. Word removes its marker-only target
+bookmark during the body update, so those missing-target errors do not establish
+unsupported annotation copying. Its reopened rich caches remain exact apart
+from recorded editing metadata, while the PDF retains text with a qualified
+54-pixel anchor-outline difference. The original source, stages and audits are
+retained in /private/tmp/S90-F280-note-annotation-controls. These are bounded
+native captures, not implementation parity or a completed differential gate.
 
 These clarifications follow the [Microsoft SEQ reference](https://support.microsoft.com/en-us/word/field-codes-seq-sequence-field)
 and [Microsoft REF reference](https://support.microsoft.com/en-us/word/field-codes-ref-field).
