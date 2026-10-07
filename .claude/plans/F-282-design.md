@@ -169,6 +169,14 @@ Ordered CitationSourceOptions retain per-source switch association. This is requ
 
 Citation order is document-wide and deterministic, with physical-story ownership used for patches. Discover all sources and result owners before changing a candidate. Compute citations and structured bibliography entries, patch caches and parts, serialize and reparse, then commit once and invalidate layout caches once. Stale positions, duplicate identity, ambiguous ownership and dangling relationships leave complete bytes unchanged. Normal save remains leave alone. Referenced source deletion is rejected across supported physical stories and safely classified preserved CITATION instructions. Ambiguous preserved references make deletion fail closed.
 
+The locale preflight also starts from the 223 documented Office bibliography
+LCIDs in [MS-OE376, Part 4 Section 7.6.2.39](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/6c085406-a698-4e12-9d4d-c3b0ee3dbc4a).
+This published catalogue contains 23 values absent from the installed dictionary.
+Source LCID 0 denotes runtime selection. Probe the union of this catalogue,
+installed candidates and any additional engine-discovered values. Published
+membership is candidate evidence, not observed acceptance by the pinned build.
+
+
 ## Rejected alternatives
 
 - Conventional part filenames miss noncanonical producers.
