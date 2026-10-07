@@ -76,7 +76,7 @@ pub struct CrossReferenceOptions {
     pub hyperlink: bool,
     pub omit_non_numeric_text: bool,
     pub delimiter: Option<String>,
-    pub footnote_number: bool,
+    pub copy_referenced_notes: bool,
 }
 
 impl Document {
@@ -125,18 +125,30 @@ owns the private checked insertion helper in field.rs. Use the existing
 ContentLocation and StoryRunPosition ownership checks, staged package patching,
 prepare-and-reopen validation and single commit_staged_mutation publication.
 
-Keep sequence counters isolated by physical story. Implement increment,
-repeat, explicit restart, heading restart, hidden result and supported
+Use the existing sequence traversal with explicit story ownership. Main-body
+and selected anchored text-box fields participate in the captured document
+sequence context. Alternate fallback representations must not increment it
+again. Related-story repeats read the document context at their reference or
+furniture placement. Header, footer, footnote and endnote increments return
+the captured `Error! Main Document Only.` without changing that context.
+Physical story identity alone is not an independent writable counter.
+Implement repeat, explicit restart, heading restart, hidden result and supported
 formatting with validated switches. Evaluate an inserted caption through the
-same sequence traversal as producer-authored fields. Insertion before an
-existing caption changes the later result only when the caller explicitly
-updates fields. Save remains a leave-alone operation.
+same traversal as producer-authored fields. Insertion before an existing
+caption changes the later result only when the caller explicitly updates
+fields. Save remains a leave-alone operation. Shared header and footer cache
+values and per-page rendered repeats are distinct observations.
 
 Map reference choices to REF text, level, relative and full-context switches.
 Position, hyperlink and text-omission choices retain their instruction
-semantics. Add validated delimiter and footnote-number handling rather than
-silently discarding those switches. Reject mutually exclusive numbering modes
-and malformed switch operands.
+semantics. Add validated delimiter and referenced-note copying through the
+`\f` switch. Its result is typed note-reference content with a corresponding
+allocated note, not a number string. Preserve bookmarked literal content and
+stage the reference, copied note and its relationship closure in the same
+atomic package mutation. Rich runs, bookmark identities, hyperlink and image
+relationships require captured copy evidence. The measured note-context
+restriction retains literal content without allocating another note.
+Reject mutually exclusive numbering modes and malformed switch operands.
 
 Resolve bookmark position using physical story identity, accepted paragraph
 order and accepted run boundaries. This fixes references before and after a
@@ -172,6 +184,8 @@ second counter engine or repurpose pagination as an independent evaluator.
 | unit | `sequence_options_validate_and_preserve_switch_semantics` | Increment, repeat, restart, heading restart, hidden result, formatting and malformed combinations behave as specified. |
 | regression | `ref_position_distinguishes_same_paragraph_run_boundaries` | Before-target and after-target references return the pinned Word position values. |
 | regression | `ref_switches_preserve_number_context_delimiters_and_links` | Numbering modes, delimiter, text omission, position and hyperlink semantics compose without losing the field. |
+| differential | `sequence_story_context_matches_pinned_word` | Main and selected text-box sequence traversal avoids fallback duplication, related increments report the captured error, and note or furniture repeats resolve the applicable document context. |
+| differential | `ref_note_copy_matches_pinned_word_typed_content` | Body references allocate typed note references and copied notes atomically, rich content and relationship targets match captured source-note semantics, and note-context references do not allocate recursive copies. |
 | round-trip | `caption_reference_round_trip_preserves_producer_xml` | Instruction shape, cached run order, styles, markers, unrelated XML and relationships survive save and reopen. |
 | regression | `caption_and_reference_failure_is_atomic` | Invalid names, stale locations, ambiguous targets and malformed fields leave the receiver and package unchanged. |
 
@@ -191,6 +205,24 @@ bookmark targets and hyperlink destinations. Record exact semantic records
 in the existing test file only after capture. Keep generated DOCX and PDF
 files ignored. An unavailable live capture is a failed or incomplete
 differential gate, not a reason to label generated expectations as Word data.
+
+## Captured contract clarification
+
+The fresh sequence controls retain all 33 authored fields. Body increments,
+related-story errors, note repeats and the selected text-box values are pinned
+in `F280-sequence-controls-snapshot-audit.json`. Shared furniture renders 14
+on page one and 16 on page two, while its saved cache changes across the
+observed save lifecycle. Do not replace per-page expectations with one cache.
+
+The seven-field footnote control pins typed copied references and corresponding
+note content in `F280-ref-footnote-authenticated-20261007-01.json`. Marker-only
+results can have empty text and a nonempty typed reference. The separate rich
+copy probe must be authenticated before its expectations enter tests.
+
+These clarifications follow the [Microsoft SEQ reference](https://support.microsoft.com/en-us/word/field-codes-seq-sequence-field)
+and [Microsoft REF reference](https://support.microsoft.com/en-us/word/field-codes-ref-field).
+They replace the earlier independent-story counter and number-string reading.
+They do not reduce the approved caption or cross-reference scope.
 
 ## HLD impact
 
@@ -246,6 +278,7 @@ pass before completion and may not be replaced by guessed expectations.
 - `crates/rdocx/tests/regression_test.rs`
 - `crates/rdocx/src/document.rs`, if checked story insertion needs an existing-owner helper
 - `crates/rdocx/src/comments.rs`, if paired-target publication needs an existing-owner helper
+- `crates/rdocx-layout/src/engine.rs`, if per-page reference display needs the existing layout owner
 - The named HLD sections in the impact list
 - Hash baseline only if an individually reviewed intentional delta is proven
 
