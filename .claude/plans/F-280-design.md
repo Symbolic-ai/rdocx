@@ -201,6 +201,18 @@ operation explicitly selects a context. The measured normal-close value 16 and
 reopened value 14 are separate lifecycle evidence, not a universal final-context
 cache policy. Library save/reopen does not simulate Word's later recomputation.
 
+Share numeric formatting in the existing layout engine through concrete
+format_numeric_field_picture(value, picture) and
+format_numeric_field_general(instruction, value) functions returning
+Result<String, String>. The facade preserves the established order: numeric
+picture, its existing date-time picture branch, then general switches. Shared
+SEQ uses the same numeric and general phases, with date-time pictures rejected
+by instruction validation. Preserve PAGE-family repeated-letter alphabetic
+formatting and existing errors. These additive functions replace divergent
+formatters, with facade and sequence rendering as current consumers. Their
+public documentation, existing format regressions and archive consumers join
+the scoped gate. Date-time parsing stays in its existing owner.
+
 Propagate the immutable snapshot through one hidden public
 LayoutInput::sequence_snapshot field of type Option<Arc<WordSequenceSnapshot>>.
 Existing constructors initialize it to None. Complete layout entry points
