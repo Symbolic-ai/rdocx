@@ -186,7 +186,14 @@ pub fn evaluate_sequence_fields(
 ```
 
 The snapshot exposes main_events, source_node, source_id, field_value and
-context_value lookups. Each main event stores one successfully applied counter
+context_value lookups. For selected anchored-box cache updates it also retains
+the existing registry field_source_xml and text_box_owner_indices projections,
+with hidden source_field_xml(FieldSource) and text_box_owner_index(&WordStory)
+lookups matching WordLayoutResult. These bind the same physical owner without
+text matching, guessed child indices or a pagination pass. Include the retained
+projections in semantic snapshot equality and test selected alternate-content
+owners with identical displayed text, nested tables and locked caches.
+Each main event stores one successfully applied counter
 delta, including hidden increments and selected anchored boxes. Per-identifier
 indexes support predecessor lookup at an event boundary. Do not clone the entire
 counter map per event or derive chronological order from HashMap iteration.
