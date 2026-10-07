@@ -149,6 +149,65 @@ caption changes the later result only when the caller explicitly updates
 fields. Save remains a leave-alone operation. Shared header and footer cache
 values and per-page rendered repeats are distinct observations.
 
+### Shared sequence snapshot
+
+Move sequence interpretation into one concrete, font-independent operation in
+the existing rdocx-layout engine. Both facade evaluation and rendering consume
+its results. It neither shapes text nor paginates. Reuse SourceRegistry::for_input
+and its physical WordSourcePath registration so source IDs stay consistent
+with the existing immutable layout result. Do not invent another owner inventory.
+
+```rust
+pub struct WordSequenceEvent {
+    pub source: oxml_layout::FieldSource,
+    pub accepted_run: usize,
+    pub identifier: String,
+    pub value: i64,
+}
+pub struct WordSequenceSnapshot {
+    // Private source registry projections, field outcomes, ordered events
+    // and per-identifier event indexes.
+}
+pub fn evaluate_sequence_fields(
+    input: &LayoutInput,
+) -> Result<WordSequenceSnapshot>;
+```
+
+The snapshot exposes main_events, source_node, source_id, field_value and
+context_value lookups. Each main event stores one successfully applied counter
+delta, including hidden increments and selected anchored boxes. Per-identifier
+indexes support predecessor lookup at an event boundary. Do not clone the entire
+counter map per event or derive chronological order from HashMap iteration.
+REF target text can consume the same resolved SEQ segments during one explicit
+update, without another increment pass or stale caption-cache lookup.
+
+Hidden events need genuine zero-width structural placement through the existing
+neutral FieldKind and substitution machinery. SequenceContext carries a main
+event index. A repeat uses its existing FieldSource to identify its resolved
+request. Preserve exact text provenance separately and prove hidden-only, table
+and control markers create no glyph or extra layout space. Cached replay must
+retain or rebind the correct physical source identity. Generated and copied
+result caches must not manufacture sequence sources. Preserve ancestor locks.
+The public neutral classification changes require exhaustive consumer checks
+and verified archive consumers, with documented pre-1.0 enum impact.
+
+Pure evaluation and ordinary update_fields retain furniture repeat caches with
+ordered diagnostics when no unique physical context exists. Unique note
+references supply their source context. Per-page rendering uses structural
+placements and the same event table. An existing explicit layout-backed update
+may use an unambiguous supported placement without another pagination pass.
+Divergent shared placements retain the stored cache with a diagnostic unless an
+operation explicitly selects a context. The measured normal-close value 16 and
+reopened value 14 are separate lifecycle evidence, not a universal final-context
+cache policy. Library save/reopen does not simulate Word's later recomputation.
+
+Accepted run insertion retains the existing boundary marker attachment. At an
+end boundary the inserted run can remain inside an existing bookmark end. Test
+that paired ownership and atomic behavior explicitly. The authenticated
+same-paragraph AFTER discriminator has an ordinary literal run after its target
+before the REF field. Do not claim an end-boundary insert is outside the target
+or change marker attachment to make that test pass.
+
 Map reference choices to REF text, level, relative and full-context switches.
 Position, hyperlink and text-omission choices retain their instruction
 semantics. Add validated delimiter and referenced-note copying through the
@@ -197,6 +256,8 @@ second counter engine or repurpose pagination as an independent evaluator.
 | differential | `sequence_story_context_matches_pinned_word` | Main and selected text-box sequence traversal avoids fallback duplication, related increments report the captured error, and note or furniture repeats resolve the applicable document context. |
 | differential | `ref_note_copy_matches_pinned_word_typed_content` | Body references allocate typed note references and copied notes atomically, rich content and relationship targets match captured source-note semantics, and note-context references do not allocate recursive copies. |
 | round-trip | `caption_reference_round_trip_preserves_producer_xml` | Instruction shape, cached run order, styles, markers, unrelated XML and relationships survive save and reopen. |
+| regression | `sequence_snapshot_reuses_source_identity_and_linear_events` | Shared source registration, hidden deltas, selected branches and indexed contexts remain consistent without quadratic retained state. |
+| regression | `hidden_sequence_markers_do_not_paint_or_shift_layout` | Body, table and control event placement retains source identity without extra glyphs or layout space. |
 | regression | `caption_and_reference_failure_is_atomic` | Invalid names, stale locations, ambiguous targets and malformed fields leave the receiver and package unchanged. |
 
 **Test gate**: differential. Figure, table, equation, and numbered-heading
@@ -301,7 +362,10 @@ pass before completion and may not be replaced by guessed expectations.
 - `crates/rdocx/tests/regression_test.rs`
 - `crates/rdocx/src/document.rs`, if checked story insertion needs an existing-owner helper
 - `crates/rdocx/src/comments.rs`, if paired-target publication needs an existing-owner helper
-- `crates/rdocx-layout/src/engine.rs`, if per-page reference display needs the existing layout owner
+- `crates/rdocx-layout/src/engine.rs`, shared sequence event evaluation and per-page reference display
+- `crates/rdocx-layout/src/lib.rs`, concrete sequence snapshot and event records
+- `crates/oxml-layout/src/output.rs`, neutral structural context and repeat classifications
+- Existing neutral and render consumers, only for required exhaustive classification or structural-marker propagation
 - The named HLD sections in the impact list
 - Hash baseline only if an individually reviewed intentional delta is proven
 
