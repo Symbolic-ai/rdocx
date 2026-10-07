@@ -135,6 +135,28 @@ on failure. This existing-file cross-crate helper avoids synthetic marker
 round trips and adds no new type, trait or generic. Its pre-1.0 public surface
 joins the low-level model tests, documentation and verified archive riders.
 
+Typed REF-f copies require a hidden concrete Field::set_cached_runs(Vec<CT_R>)
+operation in the existing text.rs owner. Validate an unpublished cloned candidate
+with validate_cached_field_runs and checked serialization, refuse a locally
+locked field, and leave the original unchanged on failure. Ancestor locks remain
+the facade source-inventory responsibility. Keep scalar cached_result consistent
+with ordered typed runs and remove superseded cache children. Retain original
+form, source identity, span, instruction, dirty and lock values and control XML.
+
+The source-aware simple and complex writers replace only the outer result
+payload through namespace-aware field-depth boundaries. Same-run complex fields
+split the original run wrapper around that payload, retain rPr and attributes on
+preserved controls and outside text, and emit supplied sibling runs without
+nested w:r. Preserve instruction operands and propagate a modified nested cache
+through its owning field. A private typed override participates in unchanged,
+child projection and display checks only while its scalar projection agrees.
+The current consumers are typed footnote, endnote and annotation REF-f copies.
+Facade mutation remains staged and validates prepare/reopen before publication.
+Cover empty results, simple and complex forms, same-run prefix/suffix, nested
+rich caches, locks, alternate prefixes and malformed-cache failure atomicity in
+the existing low-level entrypoint. Include this additive hidden mutation in the
+low-level documentation, all-target consumers and verified archive riders.
+
 Use the existing sequence traversal with explicit story ownership. Main-body
 and selected anchored text-box fields participate in the captured document
 sequence context. Alternate fallback representations must not increment it
