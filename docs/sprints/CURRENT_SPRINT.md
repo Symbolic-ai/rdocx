@@ -23,7 +23,7 @@ the full pinned Word bibliography source, style and locale catalogue.
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
 | F-278 | General simple and complex field builder | L | done | - |
-| F-279 | Pagination field materialization across stories | L | in-progress | codex |
+| F-279 | Pagination field materialization across stories | L | done | - |
 | F-280 | Captions, sequences, and complete cross-references | M | pending | - |
 | F-281 | Indexes and tables of figures and authorities | L | pending | - |
 | F-282 | Citations and bibliography authoring | L | pending | - |

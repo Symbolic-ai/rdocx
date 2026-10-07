@@ -17572,3 +17572,78 @@ No package was uploaded. The validated handoff was consumed. The handoff-only
 commit follows an immutable reviewed source commit to avoid a self-referential
 SHA. Issue 264 remains excluded. Later stories require genuine fresh Word
 captures, not the prepared temporary input packages alone.
+
+
+### F-279, Pagination field materialization across stories
+
+**Sprint.** S90
+**Completed.** 2026-10-07
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** PAGE, NUMPAGES, SECTION, SECTIONPAGES and PAGEREF
+materialization now consumes one immutable deterministic layout with physical
+story, field, section and bookmark target identity. Modeled tables, controls,
+notes, text boxes and referenced furniture participate without flattened owner
+guesses. Pure field evaluation defers layout-dependent values. Python reports
+expose both section counters while retaining existing constructor defaults.
+
+**Non-obvious choices.** Stored Word furniture caches and dynamic page rendering
+have different measured behavior. Note fields retain printed physical pages
+while displayed page and section ownership follow their unique body reference.
+Generated note glyphs carry structural ownership separately from exact text
+provenance. Accepted revision projection preserves physical anchor order and
+opaque predecessor occurrences. Nested cache ancestry retains intermediate
+locks. Header and footer inheritance follows modeled control-owned sections.
+
+**Deviations from the design plan.** Approved existing-file riders cover
+continuous note compatibility, rich story cache identity, namespace-preserving
+field writes, neutral constructor consumers and actual archive measurements.
+DOCX-046 is complete for modeled stories with explicit opaque, unsupported,
+unplaced and locked cache retention. The valid producer local w:drawing wrapper
+namespace serialization limitation is pre-existing and remains fail-closed.
+It is recorded in the plan and is not represented as repaired.
+
+**Spec sections touched.** HLD 02 capability DOCX-046, HLD 03 immutable staged
+field evaluation and source identity, HLD 08 page, section and note ownership,
+HLD 10 native and Python reports, and HLD 12 authenticated differential gates.
+All five files match the approved HLD impact list.
+
+**Tests.** pagination_field_caches_match_pinned_word_across_stories,
+continuous_furniture_and_restart_caches_match_authenticated_word and
+continuous_note_caches_follow_authenticated_reference_owners pass. The
+companion snapshot gate failed at the claim base because its APIs and counters
+were absent. Discriminating namespace, nested-lock and control furniture
+regressions failed before their repairs. The affected native evidence includes
+499 facade unit, 360 integration, 811 regression, 306 layout and 616 XML model
+passes with doctests, plus the neutral and PPTX constructor consumer suites.
+The isolated rebuilt wheel passed 175 Python cases with one existing warning.
+These full native and Python results belong to the candidate preceding the
+final concrete traversal replacement. That minimal structural change passed
+its inheritance regression, all-target check and all-feature lint, and received
+a fresh zero-finding review. No full-suite repetition after that change is
+claimed. Final-source documentation, README consumers, format, lint, prose,
+generated skills and 140 policy tests pass with two existing skips.
+
+All 22 locally patched publication dry-runs verified their archives without
+uploading. Maximum archive size is 4,634,419 bytes. All 195 Rust-source and README
+members in each actual temporary package and registry archive set match the
+reviewed source. These verified consumer builds are distinct from archive
+measurement recording. Implementation microscope pass 5 and incremental
+integration pass 1 have zero defects, smells and nitpicks. Three focused
+integrated capability-policy checks pass. All 18 genuine no-F9 Word reopens
+retain 957 fields and pass 180 source checks with zero cache or flag changes,
+pinned to Word 16.113.2 build 16.113.26092012. Partial initial update scopes and
+OLD caches remain explicit.
+
+**Hash harness.** Unchanged, all 49 deterministic entries match. The integrated
+316-file source and consumer graph matches reviewed worker source da79898eddf9.
+Full integrated verification, no-default and WASM union riders and sprint
+review remain due after later waves.
+
+**Notes for future sessions.** Source commit da79898eddf9 precedes validated
+handoff-only commit 904fe1b5b375. Integration b62ad734 consumes that handoff.
+Retain work/f-279-codex through sprint close. The authentic pass-5 patch is
+retained, while no original pass-4 full snapshot exists. Review records state
+that evidence limit rather than fabricate historical byte equality. Later
+fields reuse immutable physical source records and authoritative numbering.
+Issue 264 remains excluded. No push, main merge, tag or GitHub closure occurred.
