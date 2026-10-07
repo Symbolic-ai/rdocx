@@ -698,3 +698,14 @@ interpreter or join fields by displayed instruction text. Test deleted-before-
 visible physical inventory, accepted revision/control/hyperlink TOC prefixes,
 inherited locks and exclusion of generated cache fields. Correct any earlier
 unit that pinned revision-source omission to the actual registered inventory.
+
+The existing `text.rs` may add hidden concrete
+`CT_P::source_runs(&self) -> Vec<&CT_R>` for physical identity registration.
+Traverse existing boundary owners and typed direct, control, hyperlink and
+revision runs in exact physical order. Include deleted revision runs for
+identity, while accepted selection remains caller-owned. Preserve existing
+`CT_P::runs` behavior for unrelated callers. The two current consumers are
+layout source registration and collection, and facade evaluation and raw
+updating. Reuse this borrowed inventory rather than duplicating traversal.
+Document the additive hidden getter and cover all-target consumers, verified
+archives, physical order, deleted-before-visible registration and unchanged XML.
