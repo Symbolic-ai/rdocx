@@ -256,8 +256,13 @@ measured complex form, while reading preserves existing producer forms.
 Actual no-F9 reopens for both corrected INDEX cases and initial authorities
 retain exact rich XML and per-page PDF text and raster pixels. Native All and
 category controls also have authenticated reopen audits. Mutated authorities
-and both figure-table reopens remain pending. Native capture records are
-bounded evidence, rather than a completed Rust differential comparison.
+retain byte-identical saved DOCX and eight-page PDF text and raster pixels.
+Both figure-table reopens retain all 27 and 28 instructions, rich result content,
+source bookmark ranges, relationships and media, with identical five-page PDF
+text and raster pixels. Recorded producer rsid and textId metadata, proofing
+state, zoom, timestamps and statistics change. The complete 15-case audit queue
+is retained in /private/tmp/S90-F280-F281-F283-reopen/manifest.json. Native capture
+records are bounded evidence, rather than a completed Rust differential comparison.
 Missing capture, unavailable locale or a failed comparison blocks completion.
 Do not manufacture Word expectations from the implementation output.
 
