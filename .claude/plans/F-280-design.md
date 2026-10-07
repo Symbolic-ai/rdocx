@@ -749,3 +749,27 @@ increment through pure evaluation, update, saved reopen and actual deterministic
 painting. The malformed event must not advance the counter. Include escaped
 quotes and backslashes and keep the genuinely measured optional bookmark
 operand valid. Do not restore the old one-argument SEQ shape restriction.
+
+## Qualified bookmark numbering projection rider
+
+The existing `WordLayoutResult` may expose hidden concrete
+`bookmark_numbering(&self, name: &str) -> Option<&ResolvedNumbering>` in the
+existing `crates/rdocx-layout/src/lib.rs`. Project existing resolved bookmark
+numbering from the single `NumberingState`, with exact registered source IDs
+and the same separated physical story inventory. Admit only a uniquely paired
+accepted physical bookmark context. Duplicate names, malformed ranges and
+unavailable contexts yield no projection. Preserve established flattened main
+story entries, including nested tables and controls. Do not reconstruct a
+source path from facade owner indexes or introduce another numbering engine.
+
+The actual facade REF consumer and existing renderer use the same resolved
+numbering state. This derived result projection replaces the newly attempted
+facade location reconstruction, with no new file, module, dependency, trait or
+wrapper. It is an additive hidden pre-1.0 layout API. Document the getter,
+reconcile the approved HLD impact files and cover all-target consumers,
+warnings-denied docs, affected verified archives, actual README archive
+measurements and the ten MiB gate. Test numbered related nested-table targets,
+selected text boxes with no SEQ, controls, uniquely paired ordinary related
+text, duplicate physical name refusal and unchanged main-table numbering.
+Cross-story relative position remains unavailable with complete cache retention
+and a diagnostic, including combined number and position requests.
