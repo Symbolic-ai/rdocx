@@ -60,8 +60,17 @@ Do not replace these distinct outcomes with one missing-marker fallback.
 Shared furniture STYLEREF selects by physical placement. In the captured
 first page without a qualifying heading, both first and last modes search
 forward to the first qualifying source. Later pages use their own first and
-last sources. Saved shared-part caches reflect the last explicit update
-placement and do not stand for every page's rendered value. The equal H2
+last sources. The initial saved shared-part caches reflect the last explicit update
+placement and do not stand for every page's rendered value. Native reopen,
+offline PDF export, save and close without F9 retained every baseline header
+cache but changed all eight mutated header STYLEREF caches. The mutated
+stored last-heading value became 2.4 while the PDF still rendered 2.1 on
+page one, 2.4 on page two and 7.2 on page three. No intermediate snapshot
+identifies which operation changed the caches. Do not infer a universal
+placement policy from that lifecycle or require native Word to retain all
+stored cache bytes. Ordinary library save/reopen retains its own published
+caches, while Word oracle comparisons assert the captured lifecycle and
+per-placement render separately. The equal H2
 n, r and w results in this capture do not prove wider switch equivalence.
 Retain discriminating mode tests over the shared authoritative facts.
 
@@ -89,12 +98,14 @@ across visible markers, navigation structures, references, and saved caches.
 | regression | suppressed_paragraphs_do_not_invent_navigation_markers | numId=0, direct outline body text, hidden markers, deleted content and paragraph-mark joins remain distinct |
 | regression | styleref_number_modes_share_authoritative_counter | Level, relative, full and literal-free modes reuse authoritative values |
 | regression | generated_results_are_not_navigation_sources | Old TOC, TOF, TOA and bibliography results create no new heading/sequence source |
-| round-trip | numbered_navigation_caches_reopen_without_change | Field ownership, bookmarks, switches and caches survive repeated save/reopen |
+| round-trip | numbered_navigation_caches_reopen_without_change | Library save/reopen retains ownership, bookmarks, switches and caches. Native Word lifecycle cache changes are separately classified against per-placement rendering |
 | integration | navigation_updates_are_atomic | Stale paths, ambiguous targets and invalid dependencies preserve full bytes |
 | differential | navigation_switches_match_fresh_word_record | Narrow STYLEREF page-selection and numbering/suppression cases match independently captured Word updates |
 | differential | navigation_selectors_keep_distinct_suppression_rules | TOC o/u, o-only and custom-style selection distinguish outline suppression, numId=0 and page omission while numbered REF retains the measured zero result |
 
-Extend existing tests, with no new binary fixture or integration binary. Use public dependency APIs to build the primary regression document. Assert marker values through source paths, not duplicated text matching. Pin fresh rider evidence to Microsoft Word for Mac 16.113.2 build 16.113.26092012, en-US and source fingerprint. Capture actual update, save and reopen before/after mutation, field values, style and numbering records, targets and entry order. Existing F-248 observations are supporting evidence only. Missing fresh switch evidence remains a failed rider.
+Extend existing tests, with no new binary fixture or integration binary. Use public dependency APIs to build the primary regression document. Assert marker values through source paths, not duplicated text matching. Classify native Word normalization rather than asserting strict package equality. The captured navigation reopen remaps three bookmark IDs and removes a row property exception in both cases. The mutated case also adds grammar markers and splits six REF cached runs without changing their text. Assert equivalent ranges, effective formatting and generated TOC content independently from these changes.
+
+Pin fresh rider evidence to Microsoft Word for Mac 16.113.2 build 16.113.26092012, en-US and source fingerprint. Capture actual update, save and reopen before/after mutation, field values, style and numbering records, targets and entry order. Existing F-248 observations are supporting evidence only. Missing fresh switch evidence remains a failed rider.
 
 Use deterministic fonts. Run cargo +1.97.1 in the isolated sprint target, scoped rdocx and rdocx-layout checks/tests, scoped verify and risk riders. Full sprint gate runs once after integration.
 
