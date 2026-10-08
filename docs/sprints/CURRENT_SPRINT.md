@@ -66,6 +66,15 @@ source and hash-baseline waves, then resume it before F-283. Each rendering
 delta is separately declared and reviewed. Issue 264 remains excluded.
 PR 279 supplies F-X182. PR 280 is stacked on it and supplies F-X183, including new Issue 278 for unset side margins. Validate both complete issue sets before contributor disposition.
 
+Issue [281](https://github.com/tensorbee/rdocx/issues/281), raised by `hadim`,
+adds roadmap feedback to this sprint intake. Record its unified CLI/Python
+workflow, template filling, preservation-safe edits and rendering needs in the
+existing F-184 decision at S95. Answer the scheduling and staged-delivery
+questions against that gate during sprint-close contributor reconciliation.
+Keep the discussion open for the F-184 decision. S90 delivers the documented
+assessment, while spreadsheet implementation retains its affirmative decision
+barrier.
+
 ## Definition of done for this sprint
 
 - Simple, complex and nested fields reopen with identical instruction semantics and ordered cached content.
@@ -79,3 +88,5 @@ PR 279 supplies F-X182. PR 280 is stacked on it and supplies F-X183, including n
 - Cell border precedence and table-cell break handling satisfy Issues 272 and 273 against the pinned Word oracle.
 
 - Direct table alignment and compatibility-mode positioning satisfy Issues 277 and 276 against pinned Word controls.
+
+- Issue 281 has a documented roadmap assessment and a disposition linked to F-184.

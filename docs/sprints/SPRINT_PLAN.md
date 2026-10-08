@@ -2029,6 +2029,16 @@ source and hash-baseline waves, then resume it before F-283. Each rendering
 delta is separately declared and reviewed. Issue 264 remains excluded.
 PR 279 supplies F-X182. PR 280 is stacked on it and supplies F-X183, including new Issue 278 for unset side margins. Validate both complete issue sets before contributor disposition.
 
+
+Issue [281](https://github.com/tensorbee/rdocx/issues/281), raised by `hadim`,
+adds roadmap feedback to this sprint intake. Record its unified CLI/Python
+workflow, template filling, preservation-safe edits and rendering needs in the
+existing F-184 decision at S95. Answer the scheduling and staged-delivery
+questions against that gate during sprint-close contributor reconciliation.
+Keep the discussion open for the F-184 decision. S90 delivers the documented
+assessment, while spreadsheet implementation retains its affirmative decision
+barrier.
+
 #### Sprint S91, Templates, controls, and forms
 
 **Goal**: freeze the container-wide template grammar, create and bind content
@@ -2136,6 +2146,14 @@ F-184 is a true go or no-go gate. It reassesses Calamine,
 then classifies each proposed feature as preserved, modeled and editable, or
 executable. If the ecosystem provides the complete required lifecycle by then,
 M19 is archived rather than implemented.
+
+[Issue 281](https://github.com/tensorbee/rdocx/issues/281) supplies user demand
+for a unified CLI/Python workflow, template filling, preservation-safe edits
+and rendering. Include integration, installation and maintenance costs in
+F-184, including reuse of a maintained engine behind a consistent facade.
+S95 through S98 stage reading and loss-aware editing before calculation and
+pivots. Rendering and distribution retain the S104 boundary. An earlier
+distributable reader/editor requires a reviewed roadmap and release decision.
 
 #### Sprint S96, Styles, tables and structured references
 

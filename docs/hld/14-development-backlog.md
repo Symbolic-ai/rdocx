@@ -1633,6 +1633,14 @@ publish the preserve, model, and execute classification for every advanced
 feature in this milestone. Compare the planned boundary with `calamine`,
 `rust_xlsxwriter`, `umya-spreadsheet`, `xls`, and any credible successor without
 claiming that simple read or write support is a differentiator.
+Assess the concrete demand in [Issue 281](https://github.com/tensorbee/rdocx/issues/281)
+from `hadim`: template filling, small preservation-safe edits and a consistent
+CLI/Python workflow with rendering. Compare integration, installation,
+maintenance and release costs, including reuse behind a consistent facade.
+Evaluate the utility and limits of a reader/editor stage before calculation
+and pivots, retaining formula and pivot state with explicit stale-result
+diagnostics when edits cannot be recalculated. The existing S104 distribution
+boundary remains until a separate reviewed roadmap decision changes it.
 **Depends on**: none.
 **Test gate**: regression. The scope document and capability matrix state one
 non-contradictory boundary, and every scheduled spreadsheet story maps to a
@@ -6546,9 +6554,11 @@ Record reporter provenance and full acceptance for sprint close.
 ### F-X183, Correct table margins and legacy positioning (M)
 
 Resolve every reported variant of [Issue 276](https://github.com/tensorbee/rdocx/issues/276) and [Issue 278](https://github.com/tensorbee/rdocx/issues/278), reported by `hadim`, through PR 280 at `795b29d78d5c2ca49c1b414c9818de201fe36b4e`, stacked on PR 279.
-Absent side margins resolve to zero, while authored and inherited defaults remain authoritative.
+Absent side margins resolve to zero consistently in measurement and layout.
+Retain authored and inherited margins, with the separately qualified built-in
+TableNormal native behavior and effects-only default fallback.
 Pre-15 and absent compatibility modes position eligible top-level tables
-using resolved first-cell left or last-cell right margins. Preserve modern,
+using the measured first-cell left margin and resolved indent context. Preserve modern,
 centered and nested placement, and distinguish bidi and floating contexts.
 **Depends on**: F-X182.
 **Test gate**: regression. Source-built reported variants match fresh pinned
