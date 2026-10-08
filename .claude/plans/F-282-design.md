@@ -243,6 +243,11 @@ projection remains absent with diagnostics, while internal lexical formatting
 remains supported. This formatting-l evidence does not establish lexical-f
 filter semantics or an exhaustive accepted-alias set. Keep producer source
 normalization separate from library byte-preservation assertions.
+Preserve an explicit source LCID0 in raw XML, but treat it as no source locale
+override during formatting. The measured source0 field1033 and field1036
+owners select English and French respectively after Word removes source0.
+Resolve the field locale next. An absent or0 field locale then requires the
+explicit application-default context under the existing runtime contract.
 
 An owned existing source mutation replaces only selected modeled property spans. Retain original unknown root attributes, namespace declarations, style settings, locale data, nonstandard source types, producer contributor extensions, unknown child subtrees and unrelated custom XML bytes. Metadata inside a replaced standard simple-text property is not silently discarded, such input is rejected as an ambiguous owned property. A no-op operation preserves package bytes.
 
