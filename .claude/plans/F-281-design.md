@@ -36,6 +36,18 @@ range targets and cache formatting that retain their dynamic fields.
 Add concrete source-marker and table option types in the existing field module.
 Use existing TabLeader and paragraph/run property types.
 
+Extend the existing shared instruction grammar in
+`crates/rdocx-oxml/src/text.rs` for measured generated-table operands.
+INDEX accepts z, f, h, e, l, g, k and s operands, XE accepts f, r and t,
+TA accepts l, s, c and r, TOA accepts c, e, l and g, and caption-selected
+TOC accepts c and a. INDEX r and TOA h are flags. Preserve each other opcode's
+operand and flag policy, exact original instructions and unknown extensions.
+Bare and quoted operands must resolve through this existing grammar rather
+than a second field interpreter. Focused parser tests must distinguish bare
+numeric categories and LCIDs, caption labels, quoted separators and flag versus
+operand collisions. Include rdocx-oxml in scoped test, lint, documentation and
+publish evidence. This is necessary source discovery for the approved APIs.
+
 ```rust
 pub struct IndexEntry {
     pub levels: Vec<String>,
@@ -317,6 +329,7 @@ pass before completion and may not be replaced by guessed expectations.
 ## Exclusive resources
 
 - `crates/rdocx/src/field.rs`
+- `crates/rdocx-oxml/src/text.rs`, shared generated-table operand and flag grammar
 - `crates/rdocx/src/lib.rs`
 - `crates/rdocx/tests/regression_test.rs`
 - `crates/rdocx/src/document.rs`, if shared checked insertion or retained target access needs an existing-owner helper
