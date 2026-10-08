@@ -528,10 +528,20 @@ Use cargo +1.97.1 with the sprint isolated target directory. Run focused rdocx c
 - `docs/hld/10-bindings-spec.md`
 - `docs/hld/15-build-and-toolchain.md`
 
+IEEE label measurement reuses the existing layout engine font resolver. Promote
+`engine::WordFontSlot` and `engine::resolve_font_family` without changing their
+algorithm. The caller supplies effective, already cascaded run properties using
+the existing style cascade. The resolver handles script slots and theme lookup,
+not inheritance. No forwarding wrapper, new type, module or dependency is needed.
+Existing layout callers and bibliography measurement share this implementation.
+Public documentation states the input contract. Retain existing slot and theme
+regressions and verify inherited and explicit IEEE label font measurements.
+
 ## Risk routing
 
 - Parser/serializer: read packaging and PresentationML conventions, prove schema particles, namespace ownership and byte-preserved opaque subtrees.
 - Published API: read bindings spec and structural rules, state additive pre-1.0 impact, run canonical packaging dry run and 10 MiB archive gate.
+- Shared layout font API: focused existing slot/theme tests, public API documentation, IEEE caller font coverage and unchanged hash harness. No layout algorithm change.
 - External oracle: read differential-testing, assert exact Word version and retain capture provenance.
 - Dependency/data: execute the concrete collation rider, exact resolved and packaged constraints, fresh bundled-data provenance, MSRV, WASM, no-default, supply-chain and archive gates.
 - New file/module: bibliography.rs and its module were explicitly approved by the user. No new trait, generic, crate or feature flag.
@@ -548,6 +558,7 @@ Expected unchanged. Existing samples do not invoke citation/bibliography authori
 - `Cargo.lock`, reviewed resolved graph
 - `scripts/readme_doctests.py` and affected README footprint rows, measured archive metadata only
 
+- `crates/rdocx-layout/src/engine.rs`, existing font resolver visibility and public documentation only
 - `crates/rdocx/src/bibliography.rs`, creation approved
 - `crates/rdocx/src/lib.rs`
 - `crates/rdocx/src/field.rs`, only shared structured-result/patch integration
