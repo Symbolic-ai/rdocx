@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 23 | 1 | 30 |
-| X, Cross-cutting | 197 | 185 | 4 | 4 |
-| **Total** | **522** | **458** | **5** | **55** |
+| X, Cross-cutting | 197 | 186 | 3 | 4 |
+| **Total** | **522** | **459** | **4** | **55** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -737,7 +737,7 @@ regenerated, never hand-edited.
 | F-X181 | Ignore page and column breaks inside table cells | S90 | S | in-progress |
 | F-X182 | Honor direct table alignment | S90 | M | done |
 | F-X183 | Correct table margins and legacy positioning | S90 | M | in-progress |
-| F-X184 | Safe comment ownership during content removal | S90 | L | in-progress |
+| F-X184 | Safe comment ownership during content removal | S90 | L | done |
 | F-X185 | Expose comment anchor text and story location | S90 | M | pending |
 | F-X186 | Move comment anchors without losing threads | S90 | M | pending |
 | F-X187 | Scoped paragraph and cell text replacement | S90 | M | pending |

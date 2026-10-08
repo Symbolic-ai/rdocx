@@ -17835,3 +17835,78 @@ to freeze interval is19m57s, excluding earlier reading and root native work.
 Backlog summary counts were regenerated from actual feature rows, removing
 previously counted table headers. Issue264 remains excluded. No push, main
 merge, tag, publication or GitHub closure occurred.
+
+
+### F-X184, Safe comment ownership during content removal
+
+**Sprint.** S90
+**Completed.** 2026-10-08
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** Destructive Word edits stage complete comment ownership
+before publishing. Whole owned threads remove roots, replies, grandchildren
+and selectively linked commentsExtended, commentsIds and commentsExtensible
+rows. Partial cuts and commented fragment detaches refuse atomically. Native
+fallible content removal supplies the Python route, while the legacy bool
+returns false on refusal. Document-owned cell text, table rows, notes,
+section-story pruning and revision resolution share the checked lifecycle.
+CLI validate diagnoses orphan roots across actual source stories while
+accepting reference-only points and linked replies. This addresses
+[Issue 282](https://github.com/tensorbee/rdocx/issues/282), reported by
+Hadrien Mary (`hadim`), including its Google wrapper and three removal paths.
+
+**Non-obvious choices.** Unchanged or increased marker counts retain existing
+producer metadata. Decreased undefined markers retain established behavior
+only after actual qualified raw definitions prove absence. Decreased defined
+ids require strict closure. Opaque data, relocated companion targets and
+namespace aliases are preserved, with malformed or ambiguous ownership
+refused. Borrowed cell cleanup removes only a proven plain empty paragraph
+when another direct paragraph remains. RTF callers add replacements first.
+Inverse removal restores retained source only after complete canonical
+serialization equality and bounded namespace checks, then prepare/reopen.
+
+**Deviations from the design plan.** None. Root-approved implementation
+clarifications and compatibility boundaries are explicit in the completed
+plan. Namespace-invalid legacy edits now refuse before publication, retaining
+their original diagnostic and unchanged observable state.
+
+**Spec sections touched.** Exactly HLD03 facade conventions, HLD04 package
+ownership, HLD10 binding mutation and HLD12 regression strategy.
+
+**Tests.** Current facade501 units,364 integrations,883 regressions and two
+doctests pass, with21 existing ignores. CLI3 units and59 integrations pass.
+Fourteen focused ownership tests and original comparison-policy and rich-clone
+controls pass. Genuine compiled Base gates fail whole-thread and partial-cut
+cases, plus row, pop, cell and CLI orphan cases. The final named gate passes.
+Final rebuilt Python has85 core and two pinned Poppler/concurrency passes,
+strict mypy2.3.0 and stubtest success. The earlier173-test runtime result is
+qualified to its earlier source and is not a final full176-test claim.
+Affected all-target checks, all-feature denied-warning Clippy, denied-warning
+docs and both WASM checks pass. Corrected README checking validates27 README
+files,22 inventories and four affected Rust examples. Workflow140 passes
+with two existing skips. Prose,26 adapters and fmt pass. A temporary README
+adapter assertion remains preserved and is superseded by its corrected run.
+
+Measured facade archive1537667 compressed bytes,8510610 normalized member
+bytes and36 members, CLI70770/313667/8. Actual verified locally patched
+publication dry runs retain1537666 and70772 compressed bytes respectively,
+with exact normalized member tuples and source/test contents. Differences
+satisfy existing64-byte compression policy. Both are below10MiB. No upload.
+Independent ALL pass1 reports zero defects, smells and nitpicks, binding21
+tracked files and62 artifacts. Root independently authenticates all source,
+review, receipt and archive identities. Integration is conflict-free and all22
+reviewed paths exactly equal worker CodeHead, with no source reconciliation.
+
+**Hash harness.** All49 worker entries unchanged. Integrated source and
+baseline are byte-identical to the verified prefix. Final integrated full
+verification and sprint review remain due after the remaining waves.
+
+**Notes for future sessions.** CodeHead4c1a9c07 precedes handoff-onlyf7d7056c.
+Integration8ec41437 consumes validated handoffdd8f57261ab5. Freeze8cecb351
+and ALLreview940dfc77 retain source and evidence provenance. The local
+integration commit was corrected before proceeding to consume its staged
+handoff. This scoped dependency checkpoint completes F-X184 so F-X185 may
+start. Keep work/f-x184-codex through sprint close and remove only its clean
+integrated worktree. Issue264 remains excluded. GitHub reconciliation and
+contributor thanks wait for verified `/close-sprint`. No push, main merge,
+tag or GitHub closure occurred.

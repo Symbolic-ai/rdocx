@@ -575,6 +575,8 @@ defended.
 
 | F-X182 | S90 | M | 2 | 1 | 2026-10-08 | Integrated hadim PR279 for Issue277, 480 alignment combinations, clean delta and ALL reviews, five explained hash changes and invoice-only golden delta |
 
+| F-X184 | S90 | L | 5 | 1 | 2026-10-08 | Safe complete-thread removal and atomic partial-cut refusal for hadim Issue282, clean ALL review, native1750 and final rebuilt Python85+2, hash49 unchanged |
+
 ## Velocity
 
 Recalculated at each sprint close. The backlog assumes about 2 stories per week
