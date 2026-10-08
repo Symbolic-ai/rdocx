@@ -109,6 +109,23 @@ already integrated. Read the exact contribution and preserve contributor
 attribution, with PR reconciliation only after complete integrated acceptance
 at verified sprint close. No additional F-ID or scope reduction is introduced.
 
+Issues [288](https://github.com/tensorbee/rdocx/issues/288) and
+[289](https://github.com/tensorbee/rdocx/issues/289), reported by `hadim` on
+2026-10-08 at 16:18 UTC, are included in S90 acceptance assessment. Issue288
+covers note removal, all header and footer replacement variants, shared story
+references and building-block removal with complete comment thread and
+companion preservation or atomic refusal. Compare every criterion with the
+completed F-X184 implementation and add any missing implementation and tests
+through the feature lifecycle before acceptance. Issue289 requires nested
+block-control paragraph snapshots to carry accepted text and XML, including
+comment anchor endpoints and other checked two-segment path consumers. Assess
+it under F-X185's existing checked paragraph snapshot contract. Nested
+paragraph enumeration is optional in that issue and does not change the
+ordinary story inventory contract. Neither issue is closed from similarity to
+an existing fix. Exact integrated evidence and full issue acceptance remain
+required. The seven observed PR heads remain unchanged. Issue264 remains
+excluded.
+
 ## Definition of done for this sprint
 
 - Simple, complex and nested fields reopen with identical instruction semantics and ordered cached content.
