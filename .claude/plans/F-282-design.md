@@ -164,7 +164,7 @@ updates are concrete consumers. No context wrapper, trait or generic is needed.
 Test equivalent explicit/default resolution, override precedence, zero and
 invalid context rejection, preserved XML and atomic cache retention.
 
-Use existing ContentLocation and StoryRunPosition. No new trait, generic, builder wrapper, runtime XSLT engine or dependency is proposed. Private source parsing and result formatting live together in bibliography.rs so a reader can identify the executing logic locally. All sixteen schema contributor roles are modeled. Source author data follows the Sources/Source tree, contributor-role Author structure, NameList/Person records and Corporate choices permitted by the schema. Repeated name/property members retain their sequence. The explicit property enum avoids ambiguous publication mappings and covers every standard source text property. Tag, Guid, SourceType, LCID and Author are modeled separately. Validate every property's schema cardinality, simple-type bound and role choice before authoring. Unknown producer extensions remain preserved outside these modeled members.
+Use existing ContentLocation and StoryRunPosition. No new trait, generic, builder wrapper or runtime XSLT engine is proposed. The concrete collation dependency rider below defines the selected facade dependency contract. Private source parsing and result formatting live together in bibliography.rs so a reader can identify the executing logic locally. All sixteen schema contributor roles are modeled. Source author data follows the Sources/Source tree, contributor-role Author structure, NameList/Person records and Corporate choices permitted by the schema. Repeated name/property members retain their sequence. The explicit property enum avoids ambiguous publication mappings and covers every standard source text property. Tag, Guid, SourceType, LCID and Author are modeled separately. Validate every property's schema cardinality, simple-type bound and role choice before authoring. Unknown producer extensions remain preserved outside these modeled members.
 
 The normative transitional schema in the [official ECMA-376 Part 4 archive](https://ecma-international.org/wp-content/uploads/ECMA-376-4_5th_edition_december_2016.zip)
 clarifies the actual particles. Source members and outer Author contributor
@@ -321,6 +321,50 @@ style-specific collection substitutions. Remaining styles and source kinds
 need their own evidence before these bounded rules become implementation
 contracts. Full catalogue scope and the differential gate remain unchanged.
 
+## Concrete collation dependency rider
+
+The full bibliography catalogue uses the concrete ICU4X collator candidate in
+the already approved bibliography.rs. Add normal dependency edges only from
+rdocx, with exact constraints icu_collator=2.3.1 and icu_locale_core=2.3.0
+for the actual comparison and dynamic locale parser consumers. Disable default
+features, enable collator compiled_data and locale-core alloc. Five additional
+normal facade edges intentionally constrain publication, icu_collator_data,
+icu_normalizer, icu_normalizer_data, icu_locale_fallback and
+icu_locale_fallback_data all exactly2.3.0 with default features disabled.
+These constrain the named collation, normalization and fallback engines and
+three bundled datasets across publication. They do not promise a frozen whole
+consumer graph, feature union or compiled artifact. Incompatible consumer exact
+constraints may produce a resolver error. No unused workspace-only entries or
+verification-only patches stand in for published constraints.
+
+The bundled datasets identify CLDR48.2.1 and ICU export release-78.1rc. Before
+fresh dependency compilation, require ICU4X_DATA_DIR absent and inspect Cargo
+configuration and flags for a manually selected custom-data cfg. Use a unique
+scoped temporary target to establish provenance without cargo clean or changing
+repository configuration. Record actual resolved versions, feature union and
+normalized packaged facade constraints. Check Rust1.93 separately from1.97.1,
+the facade WASM targets and no-default paths, cargo deny, verified22-package
+publication dry run and each10MiB archive bound. Measure comparable native,
+Python and WASM linked artifact deltas. Additional registry dependencies remain
+separate packages, rather than vendored copies in every workspace archive.
+
+ICU defaults, successful constructor fallback and LCID-to-language parsing do
+not prove Word acceptance or ordering. Concrete comparison options and style
+key assembly must match independent native controls for case, accents, scripts,
+punctuation, compatibility, numeric strings, tailored locales and independent
+source/citation tie reversals. Retain original spelling and grouping identity.
+Do not persist ICU sort keys as source identity. If this candidate cannot match
+a measured catalogue case, investigate the concrete divergence before claiming
+materialization. No standard catalogue owner may fall back to an unsupported
+cache path. This rider does not alter F-281's completed ASCII boundary.
+
+The primary manifest archives and the read-only proposal are authenticated in
+/private/tmp/S90-F282-collation-dependency-decision-readiness.md, SHA256
+c8cd6345eb7d8726c24627537ec21873ca3b8aaa436e3e67bdd5e36e3febf901.
+[Cargo resolution rules](https://doc.rust-lang.org/cargo/reference/resolver.html)
+define the exact-constraint intersection. Actual build, license, packaging and
+Word equivalence riders remain required results, not research passes.
+
 ## Rejected alternatives
 
 - Conventional part filenames miss noncanonical producers.
@@ -364,12 +408,15 @@ Use cargo +1.97.1 with the sprint isolated target directory. Run focused rdocx c
 - `docs/hld/04-opc-and-packaging.md`
 - `docs/hld/12-testing-strategy.md`
 - `docs/hld/14-development-backlog.md`
+- `docs/hld/10-bindings-spec.md`
+- `docs/hld/15-build-and-toolchain.md`
 
 ## Risk routing
 
 - Parser/serializer: read packaging and PresentationML conventions, prove schema particles, namespace ownership and byte-preserved opaque subtrees.
 - Published API: read bindings spec and structural rules, state additive pre-1.0 impact, run canonical packaging dry run and 10 MiB archive gate.
 - External oracle: read differential-testing, assert exact Word version and retain capture provenance.
+- Dependency/data: execute the concrete collation rider, exact resolved and packaged constraints, fresh bundled-data provenance, MSRV, WASM, no-default, supply-chain and archive gates.
 - New file/module: bibliography.rs and its module were explicitly approved by the user. No new trait, generic, crate or feature flag.
 
 ## Hash harness
@@ -377,6 +424,10 @@ Use cargo +1.97.1 with the sprint isolated target directory. Run focused rdocx c
 Expected unchanged. Existing samples do not invoke citation/bibliography authoring or updates. No baseline movement is allocated.
 
 ## Exclusive file claims
+
+- `crates/rdocx/Cargo.toml`, seven concrete collation and publication constraint edges
+- `Cargo.lock`, reviewed resolved graph
+- `scripts/readme_doctests.py` and affected README footprint rows, measured archive metadata only
 
 - `crates/rdocx/src/bibliography.rs`, creation approved
 - `crates/rdocx/src/lib.rs`
