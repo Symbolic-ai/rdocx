@@ -2163,6 +2163,23 @@ S95 through S98 stage reading and loss-aware editing before calculation and
 pivots. Rendering and distribution retain the S104 boundary. An earlier
 distributable reader/editor requires a reviewed roadmap and release decision.
 
+The reporter's [follow-up](https://github.com/tensorbee/rdocx/issues/281#issuecomment-6063901190)
+defines a Google Sheets review workflow: read and change cell text, edit a
+shared-formula column and preserve reviewer comments. Ordinary spreadsheet
+reading is already covered in that workflow. The differentiators are one
+CLI/Python shape and installation, Rust performance and safety, loss-aware
+editing and later rendering without Excel. The requested first cut preserves
+all unmodeled parts, including threaded comments and `commentsmeta*`, data
+validation, conditional formatting and defined names. It reads values and
+types, shared strings, formats and styles, merged ranges, formulas and cached
+results. Edits include values, formulas and styles, rows and columns, sheets,
+widths and heights, frozen panes and auto-filters, with atomic output. Shared
+formula structure must survive. The decision must choose explicit stale-cache
+invalidation and recalculate-on-load, or a separately bounded evaluator for
+arithmetic, references, SUM, AVERAGE, MIN, MAX and IF. Chart authoring is not a
+requested first-cut need. Rendering is a desired second step. These are inputs
+to F-184, not S90 implementation or an approved earlier release boundary.
+
 #### Sprint S96, Styles, tables and structured references
 
 **Goal**: model the indexed formatting and structured data semantics that

@@ -825,3 +825,14 @@ adds integration and release tradeoffs to that decision. The existing
 answers those questions and invites concrete workflows and preservation needs.
 Keep the discussion open for F-184 and reconcile this existing response during
 verified S90 sprint close.
+
+The [reporter follow-up](https://github.com/tensorbee/rdocx/issues/281#issuecomment-6063901190)
+adds concrete Google Sheets review requirements: byte-preserve unmodeled
+comment metadata, validation, conditional formatting and names, read typed
+cells and formula caches, edit with styles and atomic output, and keep shared
+formulas intact. Explicit stale-cache handling is required. The first-cut
+alternatives are recalculate-on-load or a bounded basic evaluator. Unified
+installation and API shape, Rust performance and safety, and later rendering
+are the differentiators. Chart authoring is not requested. HLD14 and the S95
+plan retain these inputs without starting conditional spreadsheet work in S90
+or changing the reviewed release boundary. Keep Issue281 open for F-184.
