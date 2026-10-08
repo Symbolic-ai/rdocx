@@ -349,8 +349,13 @@ separately retains the all-options composition and isolated modifier contrasts.
 These records distinguish a counted boundary from a locale-switch reset or
 an unconditional field-wide first-modifier rule.
 Keep standard general-field-format application separate from numeric operand
-selection. Its behavior at this boundary requires its own formatting controls,
-not an inferred cutoff from the numeric member and page vectors.
+selection. The independent general-format index
+502744857443f1c203d75a2b981413a56593e653713e941590ab78b61c0fcbd5
+places p and Upper at positions9/10 and10/11. Both numeric styles retain the
+page and uppercase its P label in both cases. Reuse the existing concrete
+general-format helper over the preserved instruction for this measured Upper
+behavior. Do not infer a generic formatting cutoff, another style's boundary
+or other late-format behavior from these two controls.
 
 Numeric reference encounter discovery uses that same effective switch prefix.
 The independent hidden-member index
