@@ -228,7 +228,7 @@ A bibliography part has application/xml content type and an internal customXml s
 
 Authored tags and GUIDs are validated and unique in the collection. Caller GUIDs are explicit so source-built oracle identifiers can be compared exactly. Replace identifies by tag, retains existing GUID and rejects an identity change. Preserve unsupported source records and all unowned XML. Parsing is namespace-qualified and prefix-tolerant. Writing uses fixed prefixes for new XML with schema-valid child particles.
 
-Imported locale spelling is preserved independently of the numeric facade projection. A valid lexical language tag such as es-ES can map to both documented LCIDs 1034 and 3082. Do not choose the first table row or invent a numeric identity. When no independently grounded unique mapping exists, BibliographySourceInfo.supported is None and its diagnostics names the non-lossless locale projection. Internal formatting still supports the lexical locale and must never use unsupported-cache fallback for this projection limitation. Preserve the source XML exactly and reject an ambiguous typed source replacement atomically. Tests distinguish explicit 1034, explicit 3082 and imported es-ES, prove byte-preserving inspection and fail-closed mutation, and retain full formatter coverage. The added diagnostics field is additive public API and earns existing README, public API and packaging checks.
+Imported locale spelling is preserved independently of the numeric facade projection. The documented locale table alone can associate es-ES with both1034 and3082, so never choose the first row or invent a numeric identity. Independently discriminated pinned-engine source filtering establishes the measured operational mapping es-ES to3082 and es-ES_tradnl to1034. Project those measured spellings accordingly while preserving their raw XML and byte-identical no-op replacement. When no independently grounded unique mapping exists, BibliographySourceInfo.supported is None and its diagnostics names the non-lossless locale projection. Internal formatting still supports a valid lexical locale and must never use unsupported-cache fallback for this projection limitation. Reject an ambiguous typed source replacement atomically. Tests distinguish explicit1034, explicit3082, imported es-ES and es-ES_tradnl, prove exact source inspection, filter membership and no-op replacement, and retain full formatter coverage. The added diagnostics field is additive public API and earns existing README, public API and packaging checks.
 
 Imported formatting-locale operands also support independently measured lexical
 language values. The native source and field discriminator at index
@@ -238,9 +238,9 @@ an absent-source Patent. Preserve original operand spelling and apply the
 measured final-l selection and explicit source-locale precedence. Numeric1034
 normalizes to es-ES_tradnl in this producer, while3082 normalizes to es-ES.
 Support that measured traditional spelling distinctly without inferring
-modern and traditional collation equality. The ambiguous public es-ES numeric
-projection remains absent with diagnostics, while internal lexical formatting
-remains supported. This formatting-l evidence does not establish lexical-f
+modern and traditional collation equality. The public numeric projection uses
+the independently measured operational identity for those exact spellings,
+while still ambiguous unmeasured aliases retain projection diagnostics. This formatting-l evidence does not establish lexical-f
 filter semantics or an exhaustive accepted-alias set. Keep producer source
 normalization separate from library byte-preservation assertions.
 Preserve an explicit source LCID0 in raw XML, but treat it as no source locale
@@ -248,6 +248,19 @@ override during formatting. The measured source0 field1033 and field1036
 owners select English and French respectively after Word removes source0.
 Resolve the field locale next. An absent or0 field locale then requires the
 explicit application-default context under the existing runtime contract.
+
+The unique-source bibliography filter discriminator at index
+1b614161d3dccd5d292175188a5679813dde39b0f0ffb8a9bd4896273fbde03e
+measures matching numeric and lexical filter membership. f1033 and fen-US
+select sources03 and07, f1036 and ffr-FR select04 and08, f1034 and
+fes-ES_tradnl select05 only, and f3082 and fes-ES select06 and09. Sources01
+and02, with omitted and original0 locales, remain in the full bibliography
+but are excluded from all tested explicit filters. Preserve raw selector
+operands and source XML independently of these effective filter identities.
+Both contrasting and reversed f/l pairs retain French-source selection and
+French display. Explicit source-locale override already explains that display,
+so those pairs alone do not prove a new formatting f-over-l precedence rule.
+Retain any unresolved alignment or alias cases without inventing membership.
 
 An owned existing source mutation replaces only selected modeled property spans. Retain original unknown root attributes, namespace declarations, style settings, locale data, nonstandard source types, producer contributor extensions, unknown child subtrees and unrelated custom XML bytes. Metadata inside a replaced standard simple-text property is not silently discarded, such input is rejected as an ambiguous owned property. A no-op operation preserves package bytes.
 
