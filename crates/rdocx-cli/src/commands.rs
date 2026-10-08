@@ -1349,28 +1349,76 @@ fn middle_snake(
     unreachable!("two non-empty ranges always meet within half their total length of edits")
 }
 
+fn comment_position_json(
+    document: &Document,
+    position: &rdocx::StoryRunPosition,
+    items: &mut HashMap<rdocx::ContentLocation, rdocx::StoryItemSnapshot>,
+) -> Result<Value> {
+    if !items.contains_key(&position.location) {
+        items.insert(
+            position.location.clone(),
+            document.story_range_paragraph_snapshot(&position.location)?,
+        );
+    }
+    let snapshot = &items[&position.location];
+    let location = snapshot.location();
+    Ok(json!({
+        "story_kind": story_kind_name(location.story().kind()),
+        "part_name": location.story().part_name(),
+        "owner_index": location.story().owner_index(),
+        "item_kind": "paragraph",
+        "index_path": location.index_path(),
+        "run_index": position.run_index,
+        "direct_body_index": snapshot.direct_body_index(),
+    }))
+}
+
 /// List Word comments in their package order.
 pub fn comment_list(file: &Path, json_output: bool) -> Result<()> {
     let doc = Document::open(file)?;
     let comments = doc.comments();
+    let mut anchors = if json_output {
+        doc.comment_anchor_snapshots()?
+    } else {
+        Default::default()
+    };
+    let mut items = if json_output {
+        doc.story_item_snapshots()?
+            .into_iter()
+            .map(|item| (item.location().clone(), item))
+            .collect::<HashMap<_, _>>()
+    } else {
+        HashMap::new()
+    };
     let records = comments
         .iter()
-        .map(|comment| {
-            json!({
-                "id": comment.id(),
-                "author": comment.author(),
-                "initials": comment.initials(),
-                "date": comment.date(),
-                "text": comment.text(),
-                "parent_id": comment.parent_id(),
-                "resolved": comment.resolved(),
-            })
+        .map(|comment| -> Result<Value> {
+            let (range, anchor_text) = if json_output {
+                anchors
+                    .remove(&comment.id())
+                    .ok_or_else(|| io::Error::other("checked comment ownership record missing"))?
+            } else {
+                (None, None)
+            };
+            let anchor = range
+                .map(|range| -> Result<Value> {
+                    Ok(json!({
+                        "start": comment_position_json(&doc, &range.start, &mut items)?,
+                        "end": comment_position_json(&doc, &range.end, &mut items)?,
+                    }))
+                })
+                .transpose()?;
+            Ok(json!({
+                "id": comment.id(), "author": comment.author(), "initials": comment.initials(),
+                "date": comment.date(), "text": comment.text(), "parent_id": comment.parent_id(),
+                "resolved": comment.resolved(), "anchor_text": anchor_text, "anchor": anchor,
+            }))
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>>>()?;
     let mut stdout = io::stdout().lock();
     if json_output {
         print_json(json!({
-            "scope": "main",
+            "scope": "all_stories",
             "comments": records,
         }))?;
     } else if comments.is_empty() {

@@ -8824,7 +8824,24 @@ fn scan_story_control_paragraphs(xml: &[u8], control: &StoryItemSpan) -> Result<
                 }
                 stack.push((is_word, name, before));
             }
-            Event::Empty(_) => {}
+            Event::Empty(element) => {
+                let direct_content = stack
+                    .last()
+                    .is_some_and(|(word, parent, _)| *word && parent.as_slice() == b"sdtContent");
+                let owning_control = stack
+                    .iter()
+                    .rev()
+                    .find(|(word, local, _)| *word && local.as_slice() == b"sdt");
+                if before >= control.full.start
+                    && before < control.full.end
+                    && is_word
+                    && element.local_name().as_ref() == b"p"
+                    && direct_content
+                    && owning_control.is_some_and(|(_, _, start)| *start == control.full.start)
+                {
+                    paragraphs.push(before..after);
+                }
+            }
             Event::End(_) => {
                 stack.pop();
             }
@@ -15693,7 +15710,10 @@ impl Document {
                     ))
                     .is_ok_and(|(_, control)| !control.direct_owner_child)
         });
-        if start.story.kind() == StoryKind::Body
+        // Multiple paragraphs must be qualified before either endpoint changes
+        // the owner's fingerprint. The raw path below publishes both spans once.
+        if start == end
+            && start.story.kind() == StoryKind::Body
             && (start.index_path.len() == 2 || end.index_path.len() == 2)
             && !nested_body_control
         {
@@ -16188,6 +16208,40 @@ impl Document {
             *ordinal += 1;
         }
         Ok(result)
+    }
+
+    /// Snapshot one checked range paragraph, including a paragraph within a block control.
+    /// This does not expand the ordinary story-item inventory.
+    #[doc(hidden)]
+    pub fn story_range_paragraph_snapshot(
+        &self,
+        location: &ContentLocation,
+    ) -> Result<StoryItemSnapshot> {
+        let (source, item) = self.story_range_paragraph_source(location)?;
+        let scope = story_namespace_scope_at(source.xml.as_ref(), item.full.start)?;
+        let xml = close_content_fragment_namespaces(&source.xml.as_ref()[item.full], &scope)?;
+        let text = CT_P::from_xml_fragment(&xml)?.accepted_text();
+        let containing = if let [control, _] = location.index_path() {
+            ContentLocation::new(
+                location.story().clone(),
+                StoryItemKind::ContentControl,
+                vec![*control],
+            )
+        } else {
+            location.clone()
+        };
+        let direct_body_index = StoryItemRef {
+            document: self,
+            location: containing,
+        }
+        .direct_body_index()?;
+        Ok(StoryItemSnapshot {
+            location: location.clone(),
+            direct_body_index,
+            direct_child: location.index_path().len() == 1,
+            text: Some(text),
+            xml,
+        })
     }
 
     pub(crate) fn story_range_paragraphs(&self) -> Result<Vec<(ContentLocation, Vec<u8>)>> {

@@ -346,14 +346,36 @@ impl BookmarkRef {
 }
 
 /// Read-only view of a comment and its thread metadata.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct CommentRef<'a> {
+    document: &'a Document,
     inner: &'a CT_Comment,
     extension: Option<&'a CT_CommentEx>,
     parent_id: Option<i32>,
 }
 
+impl std::fmt::Debug for CommentRef<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CommentRef")
+            .field("inner", self.inner)
+            .field("extension", &self.extension)
+            .field("parent_id", &self.parent_id)
+            .finish()
+    }
+}
+
 impl CommentRef<'_> {
+    /// Checked accepted-view range, without an invented parent range for replies.
+    pub fn anchor(&self) -> Result<Option<StoryRunRange>> {
+        self.document.comment_anchor(self.id())
+    }
+
+    /// Checked accepted span text. A point is empty and a known orphan is absent.
+    pub fn anchor_text(&self) -> Result<Option<String>> {
+        self.document.comment_anchor_text(self.id())
+    }
+
     pub fn id(&self) -> i32 {
         self.inner.id
     }
@@ -983,6 +1005,7 @@ impl Document {
                     .and_then(|entry| entry.para_id_parent.as_deref())
                     .and_then(|para_id| by_para_id.get(para_id).copied());
                 CommentRef {
+                    document: self,
                     inner: comment,
                     extension,
                     parent_id,
@@ -1078,7 +1101,8 @@ impl Document {
                 "comment story range start must not follow its end".to_owned(),
             ));
         }
-        if range.start.location.index_path().len() == 2
+        if range.start.location != range.end.location
+            || range.start.location.index_path().len() == 2
             || range.end.location.index_path().len() == 2
             || matches!(
                 range.start.location.story().kind(),
@@ -2497,6 +2521,168 @@ fn comment_part_entries(
 }
 
 impl Document {
+    /// Return a selected comment's exact accepted-view run range.
+    /// Unknown or malformed ownership and unrepresentable endpoints are errors.
+    /// Known orphans and reference-only points have no paired range.
+    pub fn comment_anchor(&self, id: i32) -> Result<Option<StoryRunRange>> {
+        Ok(self
+            .comment_anchor_snapshots_selected(Some(id))?
+            .remove(&id)
+            .ok_or_else(|| Error::Other(format!("unknown comment {id}")))?
+            .0)
+    }
+
+    /// Return accepted span text, empty for a reference-only point and absent
+    /// for a known orphan or a reply without its own source markers.
+    pub fn comment_anchor_text(&self, id: i32) -> Result<Option<String>> {
+        Ok(self
+            .comment_anchor_snapshots_selected(Some(id))?
+            .remove(&id)
+            .ok_or_else(|| Error::Other(format!("unknown comment {id}")))?
+            .1)
+    }
+
+    /// Build checked owned anchor snapshots with one source inventory for listings.
+    #[doc(hidden)]
+    #[allow(clippy::type_complexity)] // Concrete shared range and text listing contract.
+    pub fn comment_anchor_snapshots(
+        &self,
+    ) -> Result<BTreeMap<i32, (Option<StoryRunRange>, Option<String>)>> {
+        self.comment_anchor_snapshots_selected(None)
+    }
+
+    #[allow(clippy::type_complexity)] // Same concrete payload as the public batch accessor.
+    fn comment_anchor_snapshots_selected(
+        &self,
+        selected: Option<i32>,
+    ) -> Result<BTreeMap<i32, (Option<StoryRunRange>, Option<String>)>> {
+        let mut source = self.clone_for_staging();
+        source.flush_to_package()?;
+        let ownership = source.comment_owned_graph()?;
+        if let Some(id) = selected
+            && !ownership.parents.contains_key(&id)
+        {
+            return Err(Error::Other(format!("unknown comment {id}")));
+        }
+        let counts = CommentOwnership::marker_counts(&ownership.markers);
+        let paragraphs = source
+            .story_range_paragraphs()?
+            .into_iter()
+            .map(|(location, xml)| {
+                let ids = comment_source_markers(&xml)?
+                    .into_iter()
+                    .map(|marker| marker.id)
+                    .collect::<HashSet<_>>();
+                Ok((location, CT_P::from_xml_fragment(&xml)?, ids))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut marker_paragraphs = HashMap::<i32, Vec<usize>>::new();
+        let mut owner_paragraphs = HashMap::<crate::StoryId, Vec<usize>>::new();
+        for (index, (location, _, ids)) in paragraphs.iter().enumerate() {
+            owner_paragraphs
+                .entry(location.story().clone())
+                .or_default()
+                .push(index);
+            for &id in ids {
+                marker_paragraphs.entry(id).or_default().push(index);
+            }
+        }
+        let mut snapshots = BTreeMap::new();
+        for &id in ownership
+            .parents
+            .keys()
+            .filter(|id| selected.is_none_or(|selected| selected == **id))
+        {
+            let count = counts.get(&id).copied().unwrap_or_default();
+            if count == [0; 3] {
+                snapshots.insert(id, (None, None));
+                continue;
+            }
+            if count == [0, 0, 1] {
+                snapshots.insert(id, (None, Some(String::new())));
+                continue;
+            }
+            if count[0] != 1 || count[1] != 1 || count[2] > 1 {
+                return Err(Error::Other(format!(
+                    "comment {id} has duplicate or unmatched source markers"
+                )));
+            }
+            let mut start = None::<StoryRunPosition>;
+            let mut end = None::<StoryRunPosition>;
+            let mut open = false;
+            let mut text = String::new();
+            let mut first_paragraph = None;
+            for &index in marker_paragraphs.get(&id).into_iter().flatten() {
+                let (_, paragraph, _) = &paragraphs[index];
+                let (_, _, first, last) = paragraph.accepted_comment_projection(id, false)?;
+                if first.is_some() || last.is_some() {
+                    first_paragraph = Some(index);
+                    break;
+                }
+            }
+            let first_paragraph = first_paragraph.ok_or_else(|| Error::Other(format!(
+                "comment {id} source cannot be projected faithfully on the existing accepted run axis"
+            )))?;
+            let owner = &owner_paragraphs[paragraphs[first_paragraph].0.story()];
+            let offset = owner
+                .binary_search(&first_paragraph)
+                .expect("registered owner paragraph");
+            for &index in &owner[offset..] {
+                let (location, paragraph, ids) = &paragraphs[index];
+                let was_open = open;
+                let (contribution, next_open, first, last) = if ids.contains(&id) {
+                    paragraph.accepted_comment_projection(id, open)?
+                } else {
+                    (paragraph.accepted_text(), open, None, None)
+                };
+                if let Some(index) = first {
+                    if start.is_some() {
+                        return Err(Error::Other(format!(
+                            "comment {id} has duplicate projected starts"
+                        )));
+                    }
+                    start = Some(StoryRunPosition {
+                        location: location.clone(),
+                        run_index: index,
+                    });
+                }
+                if was_open || first.is_some() {
+                    if was_open {
+                        text.push('\n');
+                    }
+                    text.push_str(&contribution);
+                }
+                if let Some(index) = last {
+                    if end.is_some() {
+                        return Err(Error::Other(format!(
+                            "comment {id} has duplicate projected ends"
+                        )));
+                    }
+                    end = Some(StoryRunPosition {
+                        location: location.clone(),
+                        run_index: index,
+                    });
+                }
+                open = next_open;
+                if end.is_some() {
+                    break;
+                }
+            }
+            let (Some(start), Some(end)) = (start, end) else {
+                return Err(Error::Other(format!(
+                    "comment {id} source cannot be projected faithfully on the existing accepted run axis"
+                )));
+            };
+            if open || start.location.story() != end.location.story() {
+                return Err(Error::Other(format!(
+                    "comment {id} range has no ordered end in the same story owner"
+                )));
+            }
+            snapshots.insert(id, (Some(StoryRunRange { start, end }), Some(text)));
+        }
+        Ok(snapshots)
+    }
+
     fn comment_relationship_part(&self, relationship_type: &str) -> Result<Option<String>> {
         let mut target = None;
         for relationship in self
@@ -2570,26 +2756,26 @@ impl Document {
         Ok(Some((part, entries)))
     }
 
-    fn comment_ownership(&self) -> Result<CommentOwnership> {
+    fn comment_owned_graph(&self) -> Result<CommentOwnership> {
         let mut ownership = CommentOwnership {
             markers: self.comment_source_inventory()?,
             parents: BTreeMap::new(),
             entries: BTreeMap::new(),
         };
-        let Some((part, entries)) = self.comment_definition_entries()? else {
-            if !CommentOwnership::marker_counts(&ownership.markers).is_empty() {
-                return Err(Error::Other(
-                    "comment markers have no owned definitions part".into(),
-                ));
-            }
-            return Ok(ownership);
+        let source_definitions = self.comment_definition_entries()?;
+        let comments = if let Some((part, _)) = &source_definitions {
+            CT_Comments::from_xml(self.package.get_part(part).expect("checked part"))?
+        } else {
+            CT_Comments::new()
         };
-        let xml = self.package.get_part(&part).expect("checked part");
-        let comments = CT_Comments::from_xml(xml)?;
         let mut by_para = BTreeMap::new();
         let mut by_parent_para = BTreeMap::new();
         let mut definitions = Vec::new();
-        for entry in entries {
+        for entry in source_definitions
+            .as_ref()
+            .into_iter()
+            .flat_map(|(_, entries)| entries)
+        {
             let id = entry
                 .attributes
                 .get("id")
@@ -2600,7 +2786,7 @@ impl Document {
                     "comment {id} has duplicate definitions"
                 )));
             }
-            definitions.push((id, entry.span));
+            definitions.push((id, entry.span.clone()));
         }
         if comments.comments.len() != definitions.len() {
             return Err(Error::Other(
@@ -2633,7 +2819,9 @@ impl Document {
                 ));
             }
         }
-        ownership.entries.insert(part, definitions);
+        if let Some((part, _)) = source_definitions {
+            ownership.entries.insert(part, definitions);
+        }
         const IDS_REL: &str =
             "http://schemas.microsoft.com/office/2016/09/relationships/commentsIds";
         const EXTENSIBLE_REL: &str =
@@ -2736,7 +2924,22 @@ impl Document {
                 ancestor = ownership.parents[&current];
             }
         }
-        for id in CommentOwnership::marker_counts(&ownership.markers).keys() {
+        Ok(ownership)
+    }
+
+    fn comment_ownership(&self) -> Result<CommentOwnership> {
+        let ownership = self.comment_owned_graph()?;
+        let counts = CommentOwnership::marker_counts(&ownership.markers);
+        if !counts.is_empty()
+            && self
+                .comment_relationship_part(oxml_opc::relationship::rel_types::COMMENTS)?
+                .is_none()
+        {
+            return Err(Error::Other(
+                "comment markers have no owned definitions part".into(),
+            ));
+        }
+        for id in counts.keys() {
             if !ownership.parents.contains_key(id) {
                 return Err(Error::Other(format!(
                     "comment {id} has markers but no definition"

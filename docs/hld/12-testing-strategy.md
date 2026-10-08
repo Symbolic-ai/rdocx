@@ -3697,3 +3697,17 @@ Stated plainly, because they are why two shipped defects went unnoticed:
   seven commands.
 - **PDF and PNG output is only checked for non-emptiness**, so layout
   regressions are invisible. The hash harness closes this.
+
+### Checked Word comment anchor projections
+
+The existing native regression entrypoint exercises exact accepted-view comment
+text and reusable story ranges across body and related owners. Controls cover
+Google block and inline content controls, accepted revisions, field cache text,
+empty intervening paragraphs, namespace-qualified endpoints and source-order
+boundaries. Reads and reopen preserve package source. Point, orphan and reply
+states stay distinct. Duplicate, reversed, unmatched and unrepresentable raw
+ranges return checked errors. A wrapper-only zero-run interval is refused when
+its coordinates cannot re-anchor the selected display. Python runtime and
+strict typing cover optional frozen fields, typed snapshots and stale range
+reuse. CLI JSON asserts complete typed endpoint locations and null versus empty
+text. These source-built API checks do not claim native Word render parity. Issue 289 is covered by block-control paragraph endpoints with accepted text and nonempty XML, exact two-segment paths and containing body indices before and after reopen.

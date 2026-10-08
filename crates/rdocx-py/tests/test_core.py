@@ -3636,3 +3636,159 @@ def test_comment_removal_paths_preserve_atomicity_and_revisions():
         document.remove_content(0)
     assert document.to_bytes() == before
     assert held.text == "first"
+
+
+def test_comment_anchor_fields_preserve_constructor_compatibility():
+    import rdocx
+
+    detached = rdocx.Comment(id=7, author="Ada", initials=None, date=None,
+                             text="Review", parent_id=None, resolved=False)
+    assert detached.anchor_text is None
+    assert detached.anchor is None
+    document = rdocx.Document()
+    document.add_paragraph("Alpha stays.")
+    document.add_paragraph("Delta goes away.")
+    document.add_comment(rdocx.RunRange(
+        start=rdocx.RunPosition(body_index=1, run_index=0),
+        end=rdocx.RunPosition(body_index=1, run_index=1),
+    ), author="Ada", text="Review Delta")
+    comment = document.comments[0]
+    assert comment.anchor_text == "Delta goes away."
+    assert isinstance(comment.anchor, rdocx.StoryRunRange)
+    assert comment.anchor.start.item.direct_body_index == 1
+
+    with pytest.raises(AttributeError):
+        comment.anchor_text = "changed"
+    explicit = rdocx.Comment(id=8, author=None, initials=None, date=None,
+                             text="detached", parent_id=None, resolved=False,
+                             anchor_text=comment.anchor_text, anchor=comment.anchor)
+    assert explicit.anchor == comment.anchor
+    assert explicit.anchor_text == comment.anchor_text
+    preserved = comment.anchor_text
+    document.add_comment(comment.anchor, author="Ben", text="Same span")
+    assert document.comments[-1].anchor_text == preserved
+    assert comment.anchor_text == preserved
+    with pytest.raises(rdocx.StaleElementError, match="document revision"):
+        document.add_comment(comment.anchor, author="Ben", text="Stale span")
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert [item.anchor_text for item in reopened.comments] == [preserved, preserved]
+
+
+@pytest.mark.parametrize("kind", ["body", "table_cell", "header", "footer"])
+def test_comment_anchor_typed_related_ranges_are_owned_and_reusable(kind):
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("body anchor")
+    document.add_table(1, 1).cell(0, 0).text = "cell anchor"
+    document.set_header("header anchor")
+    document.set_footer("footer anchor")
+    item = next(item for item in document.story_items
+                if item.story.kind == kind and item.kind == "paragraph")
+    span = rdocx.StoryRunRange(
+        start=rdocx.StoryRunPosition(item=item, run_index=0),
+        end=rdocx.StoryRunPosition(item=item, run_index=1))
+    document.add_comment(span, author="Ada", text="Review")
+    before = document.to_bytes()
+    comment = document.comments[0]
+    assert comment.anchor_text == item.text
+    assert comment.anchor.start.item.story.kind == kind
+    assert comment.anchor.start.item.direct_body_index == (0 if kind == "body" else None)
+    assert document.to_bytes() == before
+    document.add_comment(comment.anchor, author="Ben", text="Same span")
+    assert document.comments[-1].anchor_text == comment.anchor_text
+
+
+@pytest.mark.parametrize("multi", [False, True])
+def test_comment_anchor_block_control_paragraph_endpoints_are_real_typed_ranges(multi):
+    import rdocx
+
+    seed = rdocx.Document()
+    seed.add_paragraph("seed")
+    identity = seed.add_comment(rdocx.RunRange(
+        start=rdocx.RunPosition(body_index=0, run_index=0),
+        end=rdocx.RunPosition(body_index=0, run_index=1)), author="Ada", text="Review")
+    middle = "</w:p><w:p/><w:p>" if multi else ""
+    body = (f'<w:sdt><w:sdtPr><w:tag w:val="goog_rdk_test"/></w:sdtPr><w:sdtContent>'
+            f'<w:p><w:commentRangeStart w:id="{identity}"/><w:r><w:t>A</w:t></w:r>'
+            f'{middle}<w:r><w:t>B</w:t></w:r><w:commentRangeEnd w:id="{identity}"/>'
+            f'<w:r><w:commentReference w:id="{identity}"/></w:r></w:p></w:sdtContent></w:sdt>')
+    document = _replace_document_body(seed, body)
+    before = document.to_bytes()
+    comment = document.comments[0]
+    assert comment.anchor_text == ("A\n\nB" if multi else "AB")
+    assert comment.anchor.start.item.index_path == (0, 0)
+    assert comment.anchor.end.item.index_path == (0, 2 if multi else 0)
+    assert comment.anchor.start.item.direct_body_index == 0
+    assert comment.anchor.start.item.kind == "paragraph"
+    assert isinstance(comment.anchor.start.item.xml, bytes)
+    assert document.to_bytes() == before
+    document.add_comment(comment.anchor, author="Ben", text="Same source")
+    assert document.comments[-1].anchor_text == comment.anchor_text
+
+    # Issue289: every path2 endpoint carries the actual paragraph snapshot.
+    import xml.etree.ElementTree as ET
+    prefixed = _replace_document_body(seed,
+        '<w:p><w:r><w:t>Plain paragraph.</w:t></w:r></w:p>' + body)
+    original = prefixed.to_bytes()
+    for current in [prefixed, rdocx.Document.from_bytes(original)]:
+        bounds = current.comments[0].anchor
+        for endpoint, path, text in [
+            (bounds.start, (1, 0), "A" if multi else "AB"),
+            (bounds.end, (1, 2 if multi else 0), "B" if multi else "AB"),
+        ]:
+            item = endpoint.item
+            assert item.story.kind == "body" and item.kind == "paragraph"
+            assert item.index_path == path and item.direct_body_index == 1
+            assert item.text == text and item.xml
+            assert ET.fromstring(item.xml).tag == (
+                "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}p")
+        held = current.paragraphs[1]
+        position = rdocx.StoryRunPosition(paragraph=held, run_index=0)
+        assert position.item == bounds.start.item
+        assert position.item.text == ("A" if multi else "AB")
+        assert position.item.xml
+        assert current.to_bytes() == original
+        current.add_paragraph("Revision changes")
+        with pytest.raises(rdocx.StaleElementError, match="document revision"):
+            rdocx.StoryRunPosition(paragraph=held, run_index=0)
+
+
+def test_comment_anchor_header_block_control_preserves_nonbody_identity():
+    import rdocx
+
+    seed = rdocx.Document()
+    seed.add_paragraph("body")
+    seed.set_header("header")
+    identity = seed.add_comment(rdocx.RunRange(
+        start=rdocx.RunPosition(body_index=0, run_index=0),
+        end=rdocx.RunPosition(body_index=0, run_index=1)), author="Ada", text="Review")
+    header = next(story for story in seed.stories if story.kind == "header")
+    body = _document_xml(seed)
+    for local in ["commentRangeStart", "commentRangeEnd", "commentReference"]:
+        body = body.replace(f'<w:{local} w:id="{identity}"/>'.encode(), b"")
+    xml = (f'<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+           f'<w:sdt><w:sdtPr><w:tag w:val="goog_rdk_header"/></w:sdtPr><w:sdtContent>'
+           f'<w:p><w:commentRangeStart w:id="{identity}"/><w:r><w:t>HEADER</w:t></w:r>'
+           f'<w:commentRangeEnd w:id="{identity}"/><w:r><w:commentReference w:id="{identity}"/>'
+           f'</w:r></w:p></w:sdtContent></w:sdt></w:hdr>').encode()
+    result = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(seed.to_bytes())) as archive, zipfile.ZipFile(result, "w") as output:
+        for info in archive.infolist():
+            data = archive.read(info.filename)
+            if info.filename == "word/document.xml":
+                data = body
+            elif info.filename == header.part_name.lstrip("/"):
+                data = xml
+            output.writestr(info, data)
+    document = rdocx.Document.from_bytes(result.getvalue())
+    before = document.to_bytes()
+    comment = document.comments[0]
+    assert comment.anchor_text == "HEADER"
+    assert comment.anchor.start.item.index_path == (0, 0)
+    assert comment.anchor.start.item.story.kind == "header"
+    assert comment.anchor.start.item.story.part_name == header.part_name
+    assert comment.anchor.start.item.direct_body_index is None
+    assert document.to_bytes() == before
+    document.add_comment(comment.anchor, author="Ben", text="Same header")
+    assert document.comments[-1].anchor_text == "HEADER"

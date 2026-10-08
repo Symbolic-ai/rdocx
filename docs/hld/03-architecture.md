@@ -1826,6 +1826,23 @@ content. `Document` validates both endpoints before mutation, allocates
 collision-free comment and paragraph ids, updates the comment parts and all
 three anchors together, then invalidates layout once. `CommentRef` is a
 read-only view over the typed comment and its comments-extended thread entry.
+Its checked `anchor()` and `anchor_text()` accessors share the document's
+qualified comment ownership proof. `Document::comment_anchor` returns an
+accepted-view `StoryRunRange`, and `comment_anchor_text` returns exactly the
+selected accepted display, with one newline between paragraphs. A known
+orphan returns no range or text, and a reference-only point returns no paired
+range with empty text. Replies do not inherit a fabricated parent range.
+Unknown identities and malformed, ambiguous or unprojectable selected sources
+return errors. Listing validates all owned definitions and companions, while
+raw marker ids proven absent from qualified definitions do not invent records
+or block established comparison reads. Strict deletion and CLI ownership
+validation still reject those undefined markers, and reads preserve their XML. Source-order temporary projections reuse the existing paragraph
+parser and accepted run axis without changing source XML. An interval around
+only a raw wrapper can display text while having zero accepted runs. Such an
+interval is explicitly unsupported when re-anchoring those coordinates cannot
+represent it faithfully. Supported controls, revisions and ordinary field
+caches retain accepted-view semantics. Multi-paragraph insertion qualifies both
+source endpoints before publishing either, retaining stale-owner checks.
 `StoryRunPosition` and `StoryRunRange` add checked `ContentLocation` ownership
 for body and table-cell paragraphs without changing `RunPosition`. A body
 location can also name a paragraph inside a block content control with a

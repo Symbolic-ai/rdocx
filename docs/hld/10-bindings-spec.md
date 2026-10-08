@@ -376,7 +376,8 @@ field cache update operations. `RunPosition` and
 paragraph inside a block content control yields an item with the two-segment
 path of `Document::paragraph_story_location`, the control's story item index
 then the paragraph's position among the control's paragraphs, which only
-comment positions accept.
+comment positions accept. Both paragraph-handle positions and returned comment
+endpoints carry checked accepted paragraph text and nonempty paragraph XML.
 `Document.add_comment` accepts either range form.
 `Document.add_comment_on_text` comments on the zero-based occurrence of an
 exact text in the main story without run index bookkeeping. The original
@@ -1674,8 +1675,23 @@ parts are in other runs, or part of a tracked move destination is refused
 without change. A field whose parts are all in the
 paragraph is one run and is removed whole. A removal advances the binding
 revision. `CommentRef` exposes
-comment metadata, text, parent identity, and resolved state without permitting
-part-local mutation. `rdocx-cli comment` lists, adds, replies to, resolves, and
+comment metadata, text, parent identity, resolved state and checked accepted-view
+anchor access without permitting part-local mutation. Frozen Python `Comment`
+snapshots retain the seven original keyword arguments and add optional
+`anchor_text` and `anchor` values, both defaulting to `None` for manually
+constructed records. Equality retains the original seven metadata fields, since
+derived revision-bound locations are not comment metadata identity. Document
+listing materializes real `StoryRunRange`
+endpoints with checked story identity, paragraph path and revision. Paragraphs
+inside block controls retain their two-segment path and actual containing body
+index. Non-body owners never acquire a body index. Snapshots remain readable
+after mutation, while reuse of their stale range refuses. Listing propagates
+extraction errors instead of converting unsupported sources to orphans.
+CLI `comment list --json` retains metadata and adds nullable `anchor_text` and
+`anchor`, with explicit start/end story kind, part, owner index, paragraph kind,
+index path, run index and containing body index. Its scope is `all_stories`.
+Empty point text differs from orphan null text, and replies have no invented
+parent range. `rdocx-cli comment` lists, adds, replies to, resolves, and
 removes comments. Add ranges use explicit zero-based, half-open body paragraph
 and run coordinates, and the run coordinates count the runs that `text --json`
 lists. `comment add --anchor TEXT`, with an optional zero-based

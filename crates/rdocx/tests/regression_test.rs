@@ -57981,3 +57981,692 @@ fn comment_removal_dangling_reference_comparison_keeps_existing_lifecycle() {
     assert!(xml.contains(r#"commentReference w:id="7""#));
     assert!(!xml.contains(r#"commentReference w:id="8""#));
 }
+
+#[test]
+fn comment_anchor_helper_matches_accepted_story_spans() {
+    // Existing helper fallback must not substitute deleted/foreign text for accepted display.
+    let xml = br#"<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="urn:foreign"><w:commentRangeStart w:id="7"/><w:r><w:t>Delta</w:t><w:tab/><w:br/></w:r><w:del w:id="8"><w:r><w:delText>REMOVED</w:delText></w:r></w:del><x:opaque><x:t>FOREIGN</x:t></x:opaque><w:commentRangeEnd w:id="7"/></w:p>"#;
+    let paragraph = rdocx_oxml::text::CT_P::from_xml_fragment(xml).unwrap();
+    assert_eq!(paragraph.accepted_text(), "Delta\t\n");
+    let projected = paragraph.accepted_comment_projection(7, false).unwrap();
+    assert_eq!(projected, ("Delta\t\n".to_owned(), false, Some(0), Some(1)));
+}
+
+#[test]
+fn comment_anchor_wrapper_only_axis_fidelity_control() {
+    let xml = br#"<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:commentRangeStart w:id="7"/><w:smartTag><w:r><w:t>WRAPPER</w:t></w:r></w:smartTag><w:commentRangeEnd w:id="7"/></w:p>"#;
+    let mut paragraph = rdocx_oxml::text::CT_P::from_xml_fragment(xml).unwrap();
+    assert_eq!(paragraph.accepted_text(), "WRAPPER");
+    assert_eq!(paragraph.accepted_run_paths().len(), 0);
+    paragraph
+        .anchor_accepted_range(Some(0), Some(0), rdocx_oxml::text::RangeAnchor::Comment(8))
+        .unwrap();
+    println!(
+        "Original paired text {:?}, re-added zero-axis text {:?}",
+        paragraph.comment_range_text(7),
+        paragraph.comment_range_text(8)
+    );
+    assert_eq!(paragraph.comment_range_text(7).as_deref(), Some("WRAPPER"));
+}
+
+#[test]
+fn comment_anchor_exact_projection_reuses_fields_wrappers_and_source_order() {
+    for content in [
+        r#"<w:r><w:t>A</w:t></w:r><w:smartTag><w:r><w:t>WRAP</w:t></w:r></w:smartTag><w:r><w:t>B</w:t></w:r>"#,
+        r#"<w:r><w:t>A</w:t></w:r><w:fldSimple w:instr="PAGE"><w:r><w:t>ONE</w:t></w:r><w:r><w:t>TWO</w:t></w:r></w:fldSimple><w:r><w:t>B</w:t></w:r>"#,
+        r#"<w:r><w:t>A</w:t></w:r><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>ONE</w:t></w:r><w:r><w:t>TWO</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r><w:r><w:t>B</w:t></w:r>"#,
+        r#"<w:r><w:t>A</w:t></w:r><w:ins w:id="9"><w:r><w:t>INSERT</w:t></w:r></w:ins><w:r><w:t>B</w:t></w:r>"#,
+    ] {
+        let xml = format!(
+            r#"<w:p xmlns:w="{W_NS}"><w:commentRangeStart w:id="7"/>{content}<w:commentRangeEnd w:id="7"/></w:p>"#
+        );
+        let paragraph = rdocx_oxml::text::CT_P::from_xml_fragment(xml.as_bytes()).unwrap();
+        let expected = paragraph.accepted_text();
+        let projected = paragraph.accepted_comment_projection(7, false).unwrap();
+        assert_eq!(projected.0, expected);
+        assert_eq!(projected.2, Some(0));
+        assert_eq!(projected.3, Some(paragraph.accepted_run_paths().len()));
+    }
+    let xml = format!(
+        r#"<w:p xmlns:w="{W_NS}"><w:commentRangeStart w:id="7"/><w:smartTag><w:r><w:t>WRAPPER</w:t></w:r></w:smartTag><w:commentRangeEnd w:id="7"/></w:p>"#
+    );
+    let paragraph = rdocx_oxml::text::CT_P::from_xml_fragment(xml.as_bytes()).unwrap();
+    assert!(
+        paragraph
+            .accepted_comment_projection(7, false)
+            .unwrap_err()
+            .to_string()
+            .contains("cannot faithfully represent")
+    );
+}
+
+#[test]
+fn comment_anchor_snapshots_match_accepted_story_spans() {
+    for kind in [
+        StoryKind::Body,
+        StoryKind::TableCell,
+        StoryKind::Header,
+        StoryKind::Footer,
+        StoryKind::Footnote,
+        StoryKind::Endnote,
+    ] {
+        let mut document = Document::new();
+        document.add_paragraph("unselected");
+        document.add_paragraph("Delta\t\n");
+        document
+            .add_table(1, 1)
+            .cell(0, 0)
+            .unwrap()
+            .set_text("cell");
+        document.set_header("header");
+        document.set_footer("footer");
+        document.add_footnote("footnote");
+        let body_location = document.paragraph_story_location(0).unwrap().unwrap();
+        let endnote_id = document.create_endnote(&body_location, "endnote").unwrap();
+        let story = if kind == StoryKind::Endnote {
+            document.endnote_story(endnote_id).unwrap().unwrap()
+        } else {
+            f254_story(&document, kind)
+        };
+        let location = document
+            .story_items(&story)
+            .unwrap()
+            .into_iter()
+            .filter(|item| item.kind() == StoryItemKind::Paragraph)
+            .nth(usize::from(kind == StoryKind::Body))
+            .unwrap()
+            .location()
+            .clone();
+        let source = document.story_range_paragraph_snapshot(&location).unwrap();
+        let expected = source.text().unwrap().to_owned();
+        let run_count = CT_P::from_xml_fragment(source.xml())
+            .unwrap()
+            .accepted_run_paths()
+            .len();
+        let original = StoryRunRange {
+            start: StoryRunPosition {
+                location: location.clone(),
+                run_index: 0,
+            },
+            end: StoryRunPosition {
+                location,
+                run_index: run_count,
+            },
+        };
+        let id = document
+            .add_story_comment(original, "Ada", Some("A"), "note")
+            .unwrap();
+        let before = document.to_bytes().unwrap();
+        let range = document.comment_anchor(id).unwrap().unwrap();
+        assert_eq!(range.start.location.story().kind(), kind);
+        assert_eq!(
+            document.comment_anchor_text(id).unwrap().as_deref(),
+            Some(expected.as_str()),
+            "{kind:?}"
+        );
+        let snapshot = document
+            .story_range_paragraph_snapshot(&range.start.location)
+            .unwrap();
+        assert!(snapshot.is_direct_child());
+        assert_eq!(
+            snapshot.direct_body_index(),
+            (kind == StoryKind::Body).then_some(1)
+        );
+        let reference = document.comments()[0];
+        assert_eq!(reference.anchor().unwrap(), Some(range.clone()));
+        assert_eq!(
+            reference.anchor_text().unwrap().as_deref(),
+            Some(expected.as_str())
+        );
+        assert!(format!("{reference:?}").contains("CommentRef"));
+        assert_eq!(
+            document.to_bytes().unwrap(),
+            before,
+            "reads must preserve bytes"
+        );
+        let stale = range.clone();
+        let copied = document
+            .add_story_comment(range, "Ben", None, "same span")
+            .unwrap();
+        assert_eq!(
+            document.comment_anchor_text(copied).unwrap().as_deref(),
+            Some(expected.as_str())
+        );
+        let unchanged = document.to_bytes().unwrap();
+        assert!(
+            document
+                .add_story_comment(stale, "Cy", None, "stale source")
+                .is_err()
+        );
+        assert_eq!(document.to_bytes().unwrap(), unchanged);
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(
+            reopened.comment_anchor_text(id).unwrap().as_deref(),
+            Some(expected.as_str())
+        );
+        assert!(reopened.comment_anchor(i32::MAX).is_err());
+    }
+}
+
+#[test]
+fn comment_anchor_point_orphan_and_reply_states_remain_distinct() {
+    let mut document = Document::new();
+    document.add_paragraph("root");
+    let root = document
+        .add_comment(
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "root note",
+        )
+        .unwrap();
+    let reply = document.reply_to(root, "Ben", "reply").unwrap();
+    assert_eq!(document.comment_anchor(reply).unwrap(), None);
+    assert_eq!(document.comment_anchor_text(reply).unwrap(), None);
+    let bytes = document.to_bytes().unwrap();
+    for point in [true, false] {
+        let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+        let xml = format!(
+            r#"<w:p><w:r><w:t>root</w:t>{}</w:r></w:p>"#,
+            if point {
+                format!(r#"<w:commentReference w:id="{root}"/>"#)
+            } else {
+                String::new()
+            }
+        );
+        package.set_part("/word/document.xml", wrap_word_body(&xml).into_bytes());
+        let mut output = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut output).unwrap();
+        let mut imported = Document::from_bytes(output.get_ref()).unwrap();
+        let before = imported.to_bytes().unwrap();
+        assert_eq!(imported.comment_anchor(root).unwrap(), None);
+        assert_eq!(
+            imported.comment_anchor_text(root).unwrap(),
+            point.then(String::new)
+        );
+        assert_eq!(imported.comment_anchor_text(reply).unwrap(), None);
+        assert_eq!(imported.to_bytes().unwrap(), before);
+        let reopened = Document::from_bytes(&before).unwrap();
+        assert_eq!(
+            reopened.comment_anchor_text(root).unwrap(),
+            point.then(String::new)
+        );
+    }
+}
+
+#[test]
+fn comment_anchor_source_projection_keeps_controls_revisions_and_empty_paragraphs() {
+    let mut seed = Document::new();
+    seed.add_paragraph("seed");
+    let id = seed
+        .add_comment(
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "source",
+        )
+        .unwrap();
+    let seed = seed.to_bytes().unwrap();
+    for (body, expected, path) in [
+        (
+            format!(
+                r#"<w:p><w:commentRangeStart w:id="{id}"/><w:r><w:t>A</w:t></w:r></w:p><w:p/><w:p><w:r><w:t>B</w:t></w:r><w:commentRangeEnd w:id="{id}"/><w:r><w:commentReference w:id="{id}"/></w:r></w:p>"#
+            ),
+            "A\n\nB",
+            vec![0],
+        ),
+        (
+            format!(
+                r#"<w:sdt><w:sdtPr><w:tag w:val="goog_rdk_multi"/></w:sdtPr><w:sdtContent><w:p><w:commentRangeStart w:id="{id}"/><w:r><w:t>A</w:t></w:r></w:p><w:p/><w:p><w:r><w:t>B</w:t></w:r><w:commentRangeEnd w:id="{id}"/><w:r><w:commentReference w:id="{id}"/></w:r></w:p></w:sdtContent></w:sdt>"#
+            ),
+            "A\n\nB",
+            vec![0, 0],
+        ),
+        (
+            format!(
+                r#"<w:sdt><w:sdtPr><w:tag w:val="goog_rdk_0"/></w:sdtPr><w:sdtContent><w:p><w:commentRangeStart w:id="{id}"/><w:r><w:t>BLOCK</w:t></w:r><w:commentRangeEnd w:id="{id}"/><w:r><w:commentReference w:id="{id}"/></w:r></w:p></w:sdtContent></w:sdt>"#
+            ),
+            "BLOCK",
+            vec![0, 0],
+        ),
+        (
+            format!(
+                r#"<w:p><w:commentRangeStart w:id="{id}"/><w:r><w:t>A</w:t></w:r><w:sdt><w:sdtPr><w:tag w:val="goog_rdk_1"/></w:sdtPr><w:sdtContent><w:r><w:t>INLINE</w:t></w:r></w:sdtContent></w:sdt><w:ins w:id="21"><w:r><w:t>INSERT</w:t></w:r></w:ins><w:del w:id="22"><w:r><w:delText>DELETE</w:delText></w:r></w:del><w:r><w:tab/><w:br/><w:t>Ω</w:t></w:r><w:commentRangeEnd w:id="{id}"/><w:r><w:commentReference w:id="{id}"/></w:r></w:p>"#
+            ),
+            "AINLINEINSERT\t\nΩ",
+            vec![0],
+        ),
+        (
+            format!(
+                r#"<w:p><w:commentRangeStart w:id="{id}"/><w:r><w:t>A</w:t></w:r><w:fldSimple w:instr="PAGE"><w:r><w:t>ONE</w:t></w:r><w:r><w:t>TWO</w:t></w:r></w:fldSimple><w:r><w:t>B</w:t></w:r><w:commentRangeEnd w:id="{id}"/><w:r><w:commentReference w:id="{id}"/></w:r></w:p>"#
+            ),
+            "AONETWOB",
+            vec![0],
+        ),
+    ] {
+        let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&seed)).unwrap();
+        package.set_part("/word/document.xml", wrap_word_body(&body).into_bytes());
+        let mut output = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut output).unwrap();
+        let mut document = Document::from_bytes(output.get_ref()).unwrap();
+        let before = document.to_bytes().unwrap();
+        assert_eq!(
+            document.comment_anchor_text(id).unwrap().as_deref(),
+            Some(expected)
+        );
+        let range = document.comment_anchor(id).unwrap().unwrap();
+        assert_eq!(range.start.location.index_path(), path);
+        let snapshot = document
+            .story_range_paragraph_snapshot(&range.start.location)
+            .unwrap();
+        assert_eq!(snapshot.is_direct_child(), path.len() == 1);
+        assert_eq!(snapshot.direct_body_index(), Some(0));
+        assert_eq!(document.to_bytes().unwrap(), before);
+        let copied = document
+            .add_story_comment(range, "Ben", None, "same source")
+            .unwrap();
+        assert_eq!(
+            document.comment_anchor_text(copied).unwrap().as_deref(),
+            Some(expected)
+        );
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(
+            reopened.comment_anchor_text(id).unwrap().as_deref(),
+            Some(expected)
+        );
+    }
+}
+
+#[test]
+fn comment_anchor_refuses_malformed_or_unrepresentable_without_losing_source() {
+    let mut seed = Document::new();
+    seed.add_paragraph("seed");
+    let id = seed
+        .add_comment(
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "source",
+        )
+        .unwrap();
+    let seed = seed.to_bytes().unwrap();
+    let start = format!(r#"<w:commentRangeStart w:id="{id}"/>"#);
+    let end = format!(r#"<w:commentRangeEnd w:id="{id}"/>"#);
+    for content in [
+        format!("{start}{start}<w:r><w:t>A</w:t></w:r>{end}"),
+        format!("{start}<w:r><w:t>A</w:t></w:r>"),
+        format!("{end}<w:r><w:t>A</w:t></w:r>{start}"),
+        format!("{start}<w:smartTag><w:r><w:t>WRAPPER</w:t></w:r></w:smartTag>{end}"),
+    ] {
+        let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&seed)).unwrap();
+        package.set_part(
+            "/word/document.xml",
+            wrap_word_body(&format!("<w:p>{content}</w:p>")).into_bytes(),
+        );
+        let mut output = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut output).unwrap();
+        let mut document = Document::from_bytes(output.get_ref()).unwrap();
+        let before = document.to_bytes().unwrap();
+        assert!(document.comment_anchor(id).is_err(), "{content}");
+        assert!(document.comment_anchor_text(id).is_err(), "{content}");
+        assert!(document.comment_anchor_snapshots().is_err(), "{content}");
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+    // Foreign lookalikes never supply an endpoint or contribute accepted text.
+    let body = format!(
+        r#"<w:p xmlns:x="urn:foreign">{start}<w:r><w:t>TRUE</w:t></w:r><x:commentRangeStart x:id="{id}"/><x:t>FOREIGN</x:t>{end}</w:p>"#
+    );
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&seed)).unwrap();
+    package.set_part("/word/document.xml", wrap_word_body(&body).into_bytes());
+    let mut output = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut output).unwrap();
+    let mut document = Document::from_bytes(output.get_ref()).unwrap();
+    let before = document.to_bytes().unwrap();
+    assert_eq!(
+        document.comment_anchor_text(id).unwrap().as_deref(),
+        Some("TRUE")
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn comment_anchor_related_block_paths_aliases_and_cross_owner_refusal() {
+    let mut seed = Document::new();
+    seed.add_paragraph("seed");
+    seed.set_header("header");
+    let id = seed
+        .add_comment(
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "source",
+        )
+        .unwrap();
+    let header = f254_story(&seed, StoryKind::Header);
+    let bytes = seed.to_bytes().unwrap();
+    for cross_owner in [false, true] {
+        let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+        let mut main =
+            String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+        if !cross_owner {
+            main = main.replace(&format!(r#"<w:commentRangeStart w:id="{id}"/>"#), "");
+        }
+        main = main
+            .replace(&format!(r#"<w:commentRangeEnd w:id="{id}"/>"#), "")
+            .replace(&format!(r#"<w:commentReference w:id="{id}"/>"#), "");
+        package.set_part("/word/document.xml", main.into_bytes());
+        let first = if cross_owner {
+            String::new()
+        } else {
+            format!(r#"<q:commentRangeStart q:id="{id}"/>"#)
+        };
+        let raw = format!(
+            r#"<q:hdr xmlns:q="{W_NS}" xmlns:x="urn:foreign"><q:sdt><q:sdtPr><q:tag q:val="goog_rdk_header"/></q:sdtPr><q:sdtContent><q:p>{first}<q:r><q:t>HEADER</q:t></q:r><x:commentRangeEnd x:id="{id}"/><q:commentRangeEnd q:id="{id}"/><q:r><q:commentReference q:id="{id}"/></q:r><x:opaque token="exact"/></q:p></q:sdtContent></q:sdt></q:hdr>"#
+        );
+        package.set_part(header.part_name(), raw.into_bytes());
+        let mut output = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut output).unwrap();
+        let mut document = Document::from_bytes(output.get_ref()).unwrap();
+        let before = document.to_bytes().unwrap();
+        if cross_owner {
+            assert!(document.comment_anchor(id).is_err());
+            assert!(document.comment_anchor_text(id).is_err());
+        } else {
+            assert_eq!(
+                document.comment_anchor_text(id).unwrap().as_deref(),
+                Some("HEADER")
+            );
+            let range = document.comment_anchor(id).unwrap().unwrap();
+            assert_eq!(range.start.location.story().kind(), StoryKind::Header);
+            assert_eq!(range.start.location.index_path(), [0, 0]);
+            let snapshot = document
+                .story_range_paragraph_snapshot(&range.start.location)
+                .unwrap();
+            assert_eq!(snapshot.direct_body_index(), None);
+            assert!(!snapshot.is_direct_child());
+            let copied = document
+                .add_story_comment(range, "Ben", None, "same header")
+                .unwrap();
+            assert_eq!(
+                document.comment_anchor_text(copied).unwrap().as_deref(),
+                Some("HEADER")
+            );
+            assert!(document_xml(&mut document).contains("seed"));
+        }
+        if cross_owner {
+            assert_eq!(document.to_bytes().unwrap(), before);
+        }
+    }
+}
+
+#[test]
+fn comment_anchor_opaque_selected_boundaries_are_not_empty_accepted_ranges() {
+    for content in [
+        r#"<x:opaque><w:commentRangeStart w:id="7"/><w:r><w:t>hidden</w:t></w:r><w:commentRangeEnd w:id="7"/></x:opaque>"#,
+        r#"<w:commentRangeStart w:id="7"><x:opaque token="exact"/></w:commentRangeStart><w:r><w:t>visible</w:t></w:r><w:commentRangeEnd w:id="7"/>"#,
+        r#"<w:unknown><w:commentRangeStart w:id="7"/><w:r><w:t>hidden</w:t></w:r><w:commentRangeEnd w:id="7"/></w:unknown>"#,
+        r#"<w:r><w:commentRangeStart w:id="7"/><w:t>midrun</w:t><w:commentRangeEnd w:id="7"/></w:r>"#,
+    ] {
+        let xml = format!(r#"<w:p xmlns:w="{W_NS}" xmlns:x="urn:producer">{content}</w:p>"#);
+        let paragraph = CT_P::from_xml_fragment(xml.as_bytes()).unwrap();
+        let mut before = Vec::new();
+        paragraph
+            .to_xml(&mut quick_xml::Writer::new(&mut before))
+            .unwrap();
+        assert!(
+            paragraph.accepted_comment_projection(7, false).is_err(),
+            "{content}"
+        );
+        let mut after = Vec::new();
+        paragraph
+            .to_xml(&mut quick_xml::Writer::new(&mut after))
+            .unwrap();
+        assert_eq!(after, before);
+    }
+}
+
+#[test]
+fn comment_anchor_nested_cell_and_selected_text_box_ranges_reuse_source_identity() {
+    let mut document = Document::new();
+    document.add_paragraph("body");
+    document
+        .add_table(1, 1)
+        .cell(0, 0)
+        .unwrap()
+        .add_table(1, 1)
+        .cell(0, 0)
+        .unwrap()
+        .set_text("nested cell");
+    let zero = Length::pt(0.0);
+    document
+        .add_text_box_to_story(
+            &f254_story(&document, StoryKind::Body),
+            "selected box",
+            rdocx::TextBoxOptions {
+                width: Length::pt(144.0),
+                height: Length::pt(54.0),
+                anchor: rdocx::PictureAnchor {
+                    horizontal_relative_from: rdocx::DrawingHorizontalRelativeFrom::Column,
+                    horizontal_offset: zero,
+                    horizontal_alignment: None,
+                    vertical_relative_from: rdocx::DrawingVerticalRelativeFrom::Paragraph,
+                    vertical_offset: zero,
+                    vertical_alignment: None,
+                    wrap: rdocx::DrawingWrap::TopAndBottom,
+                    distance_top: zero,
+                    distance_bottom: zero,
+                    distance_left: zero,
+                    distance_right: zero,
+                    relative_height: 1,
+                    behind_text: false,
+                },
+                rotation_degrees: 0.0,
+                text_direction: rdocx::TextBoxDirection::Horizontal,
+                fill_color: None,
+            },
+        )
+        .unwrap();
+    for (kind, expected) in [
+        (StoryKind::TableCell, "nested cell"),
+        (StoryKind::TextBox, "selected box"),
+    ] {
+        let location = document
+            .story_item_snapshots()
+            .unwrap()
+            .into_iter()
+            .find(|item| item.location().story().kind() == kind && item.text() == Some(expected))
+            .unwrap()
+            .location()
+            .clone();
+        let id = document
+            .add_story_comment(
+                StoryRunRange {
+                    start: StoryRunPosition {
+                        location: location.clone(),
+                        run_index: 0,
+                    },
+                    end: StoryRunPosition {
+                        location,
+                        run_index: 1,
+                    },
+                },
+                "Ada",
+                None,
+                "source",
+            )
+            .unwrap();
+        let before = document.to_bytes().unwrap();
+        assert_eq!(
+            document.comment_anchor_text(id).unwrap().as_deref(),
+            Some(expected)
+        );
+        let range = document.comment_anchor(id).unwrap().unwrap();
+        assert_eq!(range.start.location.story().kind(), kind);
+        assert_eq!(
+            document
+                .story_range_paragraph_snapshot(&range.start.location)
+                .unwrap()
+                .direct_body_index(),
+            None
+        );
+        assert_eq!(document.to_bytes().unwrap(), before);
+        let copied = document
+            .add_story_comment(range, "Ben", None, "same exact owner")
+            .unwrap();
+        assert_eq!(
+            document.comment_anchor_text(copied).unwrap().as_deref(),
+            Some(expected)
+        );
+    }
+}
+
+#[test]
+fn comment_anchor_listing_proves_absence_without_weakening_owned_graph() {
+    let mut seed = Document::new();
+    seed.add_paragraph("owned");
+    let id = seed
+        .add_comment(
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "owned note",
+        )
+        .unwrap();
+    let bytes = seed.to_bytes().unwrap();
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let main = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap()
+        .replacen("</w:p>", r#"<w:r><w:commentReference w:id="77"/></w:r><w:bookmarkStart w:id="88" w:name="unrelated-unpaired"/></w:p>"#, 1);
+    package.set_part("/word/document.xml", main.into_bytes());
+    let mut output = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut output).unwrap();
+    let mut document = Document::from_bytes(output.get_ref()).unwrap();
+    let before = document.to_bytes().unwrap();
+    let snapshots = document.comment_anchor_snapshots().unwrap();
+    assert_eq!(snapshots.keys().copied().collect::<Vec<_>>(), vec![id]);
+    assert_eq!(snapshots[&id].1.as_deref(), Some("owned"));
+    assert!(document.comment_anchor(77).is_err());
+    assert!(document.validate_comment_ownership().is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let mut undefined = document_with_content_controls(&wrap_word_body(
+        r#"<w:p><w:r><w:commentReference w:id="77"/></w:r></w:p>"#,
+    ));
+    let before = undefined.to_bytes().unwrap();
+    assert!(undefined.comment_anchor_snapshots().unwrap().is_empty());
+    assert!(undefined.comment_anchor(77).is_err());
+    assert!(
+        undefined
+            .validate_comment_ownership()
+            .unwrap_err()
+            .to_string()
+            .contains("no owned definitions part")
+    );
+    assert_eq!(undefined.to_bytes().unwrap(), before);
+    for failure in [
+        "missing",
+        "external",
+        "ambiguous",
+        "foreign-root",
+        "duplicate-id",
+    ] {
+        let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+        match failure {
+            "missing" => {
+                package.parts.remove("/word/comments.xml");
+            }
+            "external" => {
+                let rel = package
+                    .get_or_create_part_rels("/word/document.xml")
+                    .items
+                    .iter_mut()
+                    .find(|rel| rel.rel_type == oxml_opc::relationship::rel_types::COMMENTS)
+                    .unwrap();
+                rel.target_mode = Some("External".into());
+            }
+            "ambiguous" => {
+                let rels = package.get_or_create_part_rels("/word/document.xml");
+                let mut rel = rels
+                    .items
+                    .iter()
+                    .find(|rel| rel.rel_type == oxml_opc::relationship::rel_types::COMMENTS)
+                    .unwrap()
+                    .clone();
+                rel.id = "rIdDuplicateComments".into();
+                rels.items.push(rel);
+            }
+            "foreign-root" => {
+                let source =
+                    String::from_utf8(package.get_part("/word/comments.xml").unwrap().to_vec())
+                        .unwrap()
+                        .replace(W_NS, "urn:foreign-comments");
+                package.set_part("/word/comments.xml", source.into_bytes());
+            }
+            "duplicate-id" => {
+                let source =
+                    String::from_utf8(package.get_part("/word/comments.xml").unwrap().to_vec())
+                        .unwrap()
+                        .replace(
+                            "</w:comments>",
+                            &format!(r#"<w:comment w:id="{id}"><w:p/></w:comment></w:comments>"#),
+                        );
+                package.set_part("/word/comments.xml", source.into_bytes());
+            }
+            _ => unreachable!(),
+        }
+        let mut output = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut output).unwrap();
+        if let Ok(mut invalid) = Document::from_bytes(output.get_ref()) {
+            let before = invalid.to_bytes();
+            assert!(invalid.comment_anchor_snapshots().is_err(), "{failure}");
+            assert!(invalid.comment_anchor(id).is_err(), "{failure}");
+            assert!(invalid.validate_comment_ownership().is_err(), "{failure}");
+            if let Ok(before) = before {
+                assert_eq!(invalid.to_bytes().unwrap(), before);
+            }
+        }
+    }
+}

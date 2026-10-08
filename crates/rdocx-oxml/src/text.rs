@@ -5365,6 +5365,225 @@ fn append_accepted_text(paragraph: &CT_P, output: &mut String) {
     }
 }
 
+struct CommentTextProjection {
+    text: String,
+    open: bool,
+    start: Option<usize>,
+    end: Option<usize>,
+    start_offset: Option<usize>,
+    end_offset: Option<usize>,
+    markers: Vec<std::ops::Range<usize>>,
+}
+
+fn comment_projection_paragraph(
+    xml: &[u8],
+    runs: &[std::ops::Range<usize>],
+    fields: &[std::ops::Range<usize>],
+    window: std::ops::Range<usize>,
+) -> Result<CT_P> {
+    let kept = |span: &std::ops::Range<usize>| window.start <= span.start && span.end <= window.end;
+    let mut removed = runs
+        .iter()
+        .filter(|span| !kept(span))
+        .cloned()
+        .collect::<Vec<_>>();
+    removed.extend(
+        fields
+            .iter()
+            .filter(|field| {
+                !kept(field)
+                    && !runs
+                        .iter()
+                        .any(|run| field.start <= run.start && run.end <= field.end && kept(run))
+            })
+            .cloned(),
+    );
+    removed.sort_by_key(|span| (span.start, std::cmp::Reverse(span.end)));
+    let mut outer = Vec::<std::ops::Range<usize>>::new();
+    for span in removed {
+        if outer
+            .last()
+            .is_some_and(|previous| span.end <= previous.end)
+        {
+            continue;
+        }
+        outer.push(span);
+    }
+    let mut projected = xml.to_vec();
+    for span in outer.into_iter().rev() {
+        projected.drain(span);
+    }
+    CT_P::from_xml_fragment(&projected)
+}
+
+fn project_comment_text(xml: &[u8], id: i32, incoming: bool) -> Result<CommentTextProjection> {
+    let invalid = |reason: &str| OxmlError::InvalidValue(format!("comment {id}: {reason}"));
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut stack = Vec::<(Vec<u8>, bool, usize, Option<usize>)>::new();
+    let mut runs = Vec::new();
+    let mut fields = Vec::new();
+    let mut markers = Vec::<(bool, std::ops::Range<usize>)>::new();
+    let mut buffer = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (namespace, event) = reader.read_resolved_event_into(&mut buffer)?;
+        let word = matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == crate::namespace::W_NS.as_bytes());
+        drop(namespace);
+        let after = reader.buffer_position() as usize;
+        match event {
+            Event::Start(ref element) | Event::Empty(ref element) => {
+                let local = element.local_name().as_ref().to_vec();
+                let mut marker = None;
+                if word && matches!(local.as_slice(), b"commentRangeStart" | b"commentRangeEnd") {
+                    let mut selected_id = None;
+                    for attribute in element.attributes() {
+                        let attribute = attribute?;
+                        let (namespace, name) = reader.resolver().resolve_attribute(attribute.key);
+                        if name.as_ref() == b"id"
+                            && matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == crate::namespace::W_NS.as_bytes())
+                        {
+                            if selected_id.is_some() {
+                                return Err(invalid("duplicate identity attribute"));
+                            }
+                            selected_id = Some(
+                                attribute
+                                    .decoded_and_normalized_value(
+                                        XmlVersion::Implicit1_0,
+                                        reader.decoder(),
+                                    )?
+                                    .parse::<i32>()
+                                    .map_err(|_| invalid("invalid marker id"))?,
+                            );
+                        }
+                    }
+                    if selected_id == Some(id)
+                        && !stack
+                            .iter()
+                            .any(|(name, word, _, _)| *word && name == b"txbxContent")
+                    {
+                        if stack.iter().any(|(name, word, _, _)| {
+                            *word
+                                && matches!(name.as_slice(), b"del" | b"moveFrom" | b"txbxContent")
+                        }) {
+                            return Err(invalid(
+                                "selected source is outside the accepted paragraph view",
+                            ));
+                        }
+                        if stack.iter().any(|(name, word, _, _)| *word && name == b"r") {
+                            return Err(invalid(
+                                "existing accepted run axis cannot faithfully represent a mid-run source boundary",
+                            ));
+                        }
+                        if stack.iter().any(|(name, word, _, _)| {
+                            !*word
+                                || !matches!(
+                                    name.as_slice(),
+                                    b"p" | b"sdt"
+                                        | b"sdtContent"
+                                        | b"hyperlink"
+                                        | b"ins"
+                                        | b"moveTo"
+                                        | b"smartTag"
+                                        | b"customXml"
+                                        | b"fldSimple"
+                                )
+                        }) {
+                            return Err(invalid(
+                                "selected source has an unsupported opaque owner outside the accepted paragraph view",
+                            ));
+                        }
+                        markers.push((local == b"commentRangeStart", before..after));
+                        marker = Some(markers.len() - 1);
+                    }
+                }
+                if matches!(event, Event::Start(_)) {
+                    stack.push((local, word, before, marker));
+                } else if word && local == b"r" {
+                    runs.push(before..after);
+                } else if word && local == b"fldSimple" {
+                    fields.push(before..after);
+                }
+            }
+            Event::End(_) => {
+                if let Some((name, word, start, marker)) = stack.pop() {
+                    if let Some(index) = marker {
+                        if !xml[markers[index].1.end..before]
+                            .iter()
+                            .all(u8::is_ascii_whitespace)
+                        {
+                            return Err(invalid(
+                                "selected range marker has unsupported child content",
+                            ));
+                        }
+                        markers[index].1.end = after;
+                    }
+                    if word && name == b"r" {
+                        runs.push(start..after);
+                    }
+                    if word && name == b"fldSimple" {
+                        fields.push(start..after);
+                    }
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    let mut open = incoming;
+    let mut start_span = None;
+    let mut end_span = None;
+    for (start, span) in &markers {
+        if *start {
+            if open || start_span.is_some() {
+                return Err(invalid("duplicate or reversed selected start"));
+            }
+            start_span = Some(span.clone());
+            open = true;
+        } else {
+            if !open || end_span.is_some() {
+                return Err(invalid("unmatched or reversed selected end"));
+            }
+            end_span = Some(span.clone());
+            open = false;
+        }
+    }
+    let prefix = |at: usize| -> Result<(usize, usize)> {
+        let p = comment_projection_paragraph(xml, &runs, &fields, 0..at)?;
+        Ok((p.accepted_run_paths().len(), p.accepted_text().len()))
+    };
+    let start = start_span
+        .as_ref()
+        .map(|span| prefix(span.start))
+        .transpose()?;
+    let end = end_span
+        .as_ref()
+        .map(|span| prefix(span.start))
+        .transpose()?;
+    let text = if incoming || start_span.is_some() {
+        comment_projection_paragraph(
+            xml,
+            &runs,
+            &fields,
+            start_span.as_ref().map_or(0, |span| span.end)
+                ..end_span.as_ref().map_or(xml.len(), |span| span.start),
+        )?
+        .accepted_text()
+    } else {
+        String::new()
+    };
+    Ok(CommentTextProjection {
+        text,
+        open,
+        start: start.map(|value| value.0),
+        end: end.map(|value| value.0),
+        start_offset: start.map(|value| value.1),
+        end_offset: end.map(|value| value.1),
+        markers: markers.into_iter().map(|(_, span)| span).collect(),
+    })
+}
+
 fn accepted_paragraph_run_paths(paragraph: &CT_P) -> Vec<AcceptedRunPath> {
     let mut output = Vec::new();
     let mut prefix = Vec::new();
@@ -5694,6 +5913,61 @@ impl CT_P {
         let mut text = String::new();
         append_accepted_text(self, &mut text);
         text
+    }
+
+    /// Project one selected comment span through the existing accepted text and run axis.
+    /// Returns display, continuation state and optional start/end run boundaries.
+    /// Original source is untouched. Unrepresentable source endpoints are errors.
+    #[doc(hidden)]
+    pub fn accepted_comment_projection(
+        &self,
+        id: i32,
+        open_at_start: bool,
+    ) -> Result<(String, bool, Option<usize>, Option<usize>)> {
+        if self.comment_ranges.iter().any(|marker| match marker {
+            CommentRangeMarker::Start {
+                id: marker_id,
+                has_child_content,
+                ..
+            }
+            | CommentRangeMarker::End {
+                id: marker_id,
+                has_child_content,
+                ..
+            } => *marker_id == id && *has_child_content,
+        }) {
+            return Err(OxmlError::InvalidValue(format!(
+                "comment {id}: selected range marker has unsupported child content"
+            )));
+        }
+        let mut raw = Vec::new();
+        self.to_xml(&mut Writer::new(&mut raw))?;
+        let raw = raw_with_root_word_binding(&raw, crate::namespace::W_NS)?;
+        let selected = project_comment_text(&raw, id, open_at_start)?;
+        if !selected.markers.is_empty() {
+            // Remove only this selected pair before asking the existing checked
+            // writer to place the same endpoints. No temporary identity is allocated.
+            let mut unmarked = raw;
+            for span in selected.markers.iter().rev() {
+                unmarked.drain(span.clone());
+            }
+            let mut probe = CT_P::from_xml_fragment(&unmarked)?;
+            probe.anchor_accepted_range(selected.start, selected.end, RangeAnchor::Comment(id))
+                .map_err(|error| OxmlError::InvalidValue(format!("comment {id}: existing accepted run axis cannot faithfully represent selected source: {error}")))?;
+            let mut raw = Vec::new();
+            probe.to_xml(&mut Writer::new(&mut raw))?;
+            let raw = raw_with_root_word_binding(&raw, crate::namespace::W_NS)?;
+            let placed = project_comment_text(&raw, id, open_at_start)?;
+            if selected.text != placed.text
+                || selected.start_offset != placed.start_offset
+                || selected.end_offset != placed.end_offset
+            {
+                return Err(OxmlError::InvalidValue(format!(
+                    "comment {id}: existing accepted run axis cannot faithfully represent selected source"
+                )));
+            }
+        }
+        Ok((selected.text, selected.open, selected.start, selected.end))
     }
 
     /// Return the accepted view as a paragraph of plain runs, for the
