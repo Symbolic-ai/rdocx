@@ -503,6 +503,24 @@ szCs=24 versus their absence on the interior full entry are real context
 formatting and must be asserted separately. Preserve imported cache XML until
 an explicit update. Do not synthesize Word pagination markers in the formatter.
 
+The independently classified Lithuanian full bibliography ElectronicSource
+entry earns the same narrowly identified comparison projection. Bound owner
+701, cache node 8, entry body block 1511, splits its suffix after
+"Cambridge, England, " and before "United Kingdom: Publisher15" with an actual
+lastRenderedPageBreak at the PDF boundary from page 81 to page 82.
+Classification SHA256
+236bdc2f6f873d27f86247426caad08f5bb3fd93985e42ca5cc60505ab855031 in
+/private/tmp/S90-F282-APA6-Lithuanian-ElectronicSource-pageboundary-classification
+retains four raw runs and their exact xml:space allocation. Only this entry's
+identified marker may be removed for comparison and its two adjacent suffix
+text runs joined after asserting identical raw run properties and attributes.
+Retain the raw four-run record beside the three-run projection and assert its
+actual paragraph context separately. No selected Lithuanian counterpart was
+captured, and an English selected control supplies no Lithuanian evidence.
+Do not broaden this into general coalescing, marker ignoring, formatter marker
+synthesis or a claim of Rust pagination parity. Imported caches remain intact
+until explicit update. Full catalogue and rendering gates remain due.
+
 ## Concrete collation dependency rider
 
 The full bibliography catalogue uses the concrete ICU4X collator candidate in
