@@ -37,11 +37,13 @@ A direct main merge bypasses sprint closure. Broadly shifting all tables breaks 
 
 ## HLD impact
 
+- `docs/hld/04-opc-and-packaging.md`
 - `docs/hld/08-rendering-spec.md`
 
 ## Risk routing
 
 - Layout and pagination: read HLD08. Use deterministic bundled fonts, exact table/text offsets and unchanged controls. Declare every hash delta before recording it.
+- Parser and package styles: read HLD04 and HLD06. Source-built main-style and stylesWithEffects-only defaults must retain ordered source XML and every opaque part. When the rendered style default exists only in the effects part, consume the proven fallback without replacing authored main styles or rewriting either part. Test missing, malformed, conflicting and unrelated effects content through save/reopen.
 - External oracle: apply `.claude/skills/differential-testing.md`. Pin Word for Mac 16.113.2 and authenticate actual input, saved DOCX and offline printing PDF hashes. Compare relative geometry, with no absolute Arial versus Caladea metric parity claim.
 - Published API: read HLD10. If LayoutInput gains a required public struct field, document the pre-1.0 source compatibility impact, update every struct literal and run affected binding/WASM checks.
 - Published behavior: corrective pre-1.0 rendering change. Re-measure affected archives, validate README inventory and run locally patched publish dry runs without upload.
