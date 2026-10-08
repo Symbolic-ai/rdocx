@@ -274,6 +274,19 @@ operands and source XML independently of these effective filter identities.
 Both contrasting and reversed f/l pairs retain French-source selection and
 French display. Explicit source-locale override already explains that display,
 so those pairs alone do not prove a new formatting f-over-l precedence rule.
+
+The filter closure control at index
+b1f85c1cc0ebbb517689214ad04f77721e55a06a0d89c01fa42c08d9076ddbe5
+retains the same nine source locale shapes and independently unique Patent
+numbers. An absent filter includes all nine sources. Bare f and explicit f0
+select the omitted and zero source locales, sources01 and02. Repeated f uses
+the final operand in this discriminated vector, including zero before or after
+1033 and1036. Preserve every imported switch and operand in its original order
+while evaluating that effective final filter. Do not infer an application
+language identity from the omitted and zero membership. Native source locale
+normalization remains a producer difference, not permission to rewrite source
+XML. Regressions assert actual membership, raw instruction retention, source
+preservation, repeat and reopen for these boundary and repeated-switch cases.
 Retain any unresolved alignment or alias cases without inventing membership.
 
 An owned existing source mutation replaces only selected modeled property spans. Retain original unknown root attributes, namespace declarations, style settings, locale data, nonstandard source types, producer contributor extensions, unknown child subtrees and unrelated custom XML bytes. Metadata inside a replaced standard simple-text property is not silently discarded, such input is rejected as an ambiguous owned property. A no-op operation preserves package bytes.
