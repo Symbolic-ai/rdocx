@@ -87,6 +87,6 @@ barrier.
 
 - Cell border precedence and table-cell break handling satisfy Issues 272 and 273 against the pinned Word oracle.
 
-- Direct table alignment and compatibility-mode positioning satisfy Issues 277 and 276 against pinned Word controls.
+- Direct table alignment, absent cell margins and compatibility-mode positioning satisfy Issues 277, 278 and 276 against pinned Word controls.
 
 - Issue 281 has a documented roadmap assessment and a disposition linked to F-184.
