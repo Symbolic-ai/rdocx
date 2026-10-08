@@ -764,6 +764,22 @@ valid.
 
 ## Native Word facade stability
 
+Native Rust adds `IndexEntry`, `AuthorityEntry`, `IndexOptions`,
+`TableOfFiguresOptions`, `TableOfAuthoritiesOptions` and
+`GeneratedTablesReport`. `Document::insert_index_entry` and
+`insert_authority_entry` author checked complex source markers.
+`insert_index`, `insert_table_of_figures` and `insert_table_of_authorities`
+insert dynamic generated owners at checked story boundaries.
+`rebuild_generated_tables` atomically rebuilds supported caches.
+These are additive pre-1.0 APIs with no Python, WASM or CLI additions.
+
+Authority category `None` inserts separate numbered fields for every populated
+category in native order and returns the first checked location. It never
+encodes All as zero or as an omitted category. INDEX hyperlink authoring retains
+its formatting request in the paragraph mark's Hyperlink character style and
+in the generated label caches. Entry hyperlinks point to checked internal
+bookmarks. Requested leaders and existing producer styles remain intact.
+
 The pre-1.0 `rdocx-layout::TableRow` projection carries a public
 `cant_split: bool` alongside its header and height facts. Direct and
 style-resolved `w:cantSplit` values therefore reach pagination. External Rust
@@ -2926,3 +2942,8 @@ these target-specific archives without selecting source compilation or an
 unreviewed quick-install source. Native builds retain the CLI default system
 font feature. The static musl build disables host discovery and retains bundled
 fonts.
+
+Generated-table rebuild errors include checked target mutations that would
+require unsafe canonical serialization beneath conflicting retained namespace
+bindings. The error leaves the package and existing caches unchanged. Namespace
+aliases are accepted when the source projection and mutation are safe.

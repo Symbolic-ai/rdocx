@@ -1,6 +1,6 @@
 # F-281, Indexes and tables of figures and authorities
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S90
 **Size**: L
 **Depends on**: F-278 through F-280
@@ -167,6 +167,9 @@ fresh Word captures. Sort with an explicitly declared locale policy rather
 than Rust string ordering masquerading as Word collation. Preserve
 case-sensitive display text and source formatting separately from sort keys.
 
+Support repeated pages, range bookmark endpoints, cross-reference entries,
+nested index levels, category grouping and captured passim behavior.
+
 INDEX and authority ordering use the bounded captured en-US ASCII key policy.
 Case-sensitive display entries remain distinct, while ordering folds ASCII
 letters and places a distinct lowercase entry before its uppercase counterpart.
@@ -175,9 +178,6 @@ with a stable diagnostic, including when another supported table rebuilds.
 Caption text is not subject to this collation boundary. Tests cover both an
 isolated refusal and mixed supported and retained owners. This boundary does
 not claim general Unicode or other-locale collation.
-
-Support repeated pages, range bookmark endpoints, cross-reference entries,
-nested index levels, category grouping and captured passim behavior.
 
 Authority authoring follows the authenticated native producer. A numbered
 category authors one TOA field. `category: None` authors separate numbered
@@ -317,17 +317,18 @@ separately. Do not re-record an unexplained baseline.
 
 ## Implementation checklist
 
-- [ ] Complete F-278, F-279 and F-280 through dependency-prefix checkpoints.
-- [ ] Add marker and generated-table option types in existing files.
-- [ ] Author checked XE, TA, INDEX, caption-selected TOC and TOA fields.
-- [ ] Extend owned-span discovery and accepted source traversal.
-- [ ] Implement hierarchy, caption selection, authority groups, range targets and formatting.
-- [ ] Reuse one post-insertion deterministic snapshot for all table page values.
-- [ ] Preserve producer content and reject unsafe publication atomically.
-- [ ] Capture fresh pinned Word ordering and page-target records.
-- [ ] Run focused tests, risk riders and scoped verification.
-- [ ] Obtain a zero-defect, zero-smell microscope review.
-- [ ] Prepare the structured worker handoff.
+- [x] Complete F-278, F-279 and F-280 through dependency-prefix checkpoints.
+- [x] Add marker and generated-table option types in existing files.
+- [x] Author checked XE, TA, INDEX, caption-selected TOC and TOA fields.
+- [x] Extend owned-span discovery and accepted source traversal.
+- [x] Implement hierarchy, caption selection, authority groups, range targets and formatting.
+- [x] Reuse one post-insertion deterministic snapshot for all table page values.
+- [x] Preserve producer content and reject unsafe publication atomically.
+- [x] Capture fresh pinned Word ordering and page-target records.
+- [x] Run focused tests, risk riders and scoped verification.
+- [x] Obtain a zero-defect, zero-smell microscope review.
+- [x] Prepare the structured worker handoff.
+
 
 ## Open questions
 

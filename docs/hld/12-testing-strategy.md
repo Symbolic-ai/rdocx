@@ -2270,6 +2270,23 @@ both pinned corpora before running Cargo tests.
 
 ## The private from-scratch DOCX conformance corpus
 
+Generated-table differential tests pin Microsoft Word 16.113.2 build
+16.113.26092012 and en-US source language. Source-built initial and mutated
+INDEX, authority and caption cases compare exact original instructions and
+ordered cache entries against independently authenticated native updates.
+The Chapter/k discriminator varies source counter restarts and range endpoint
+contexts. Category authoring checks separate populated numbered owners.
+Rich-cache tests check hierarchy styles and individual page-reference emphasis.
+Repeated rebuild, checked source ownership, locked and unsupported cache
+retention, namespace aliases, unknown XML and atomic target refusal have
+separate regression riders. The pagination rider inserts a table that moves
+source pages and checks every cached reference against the retained layout.
+
+Native no-F9 reopen evidence authenticates producer cache, PDF text, geometry,
+fonts and decoded pixels independently. It does not itself claim Rust render
+parity. Semantic runtime comparisons remain exact, and a source-built layout
+check does not become an external oracle expectation.
+
 M23 uses five client reference documents that are never committed, published,
 or fetched by repository automation. They live in a configured ignored private
 directory outside the tracked corpus tree. The repository must not contain the

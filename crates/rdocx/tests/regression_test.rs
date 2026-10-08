@@ -54285,3 +54285,1655 @@ fn ref_f_all_captured_story_owners_preserve_selected_and_fallback_graphs() {
         }
     }
 }
+
+#[test]
+fn generated_table_authoring_smoke_test() {
+    let mut document = Document::new();
+    document.add_paragraph("Alpha");
+    let story = f254_story(&document, StoryKind::Body);
+    let location = f254_item(&document, &story, 0);
+    let position = StoryRunPosition {
+        location: location.clone(),
+        run_index: 0,
+    };
+    document
+        .insert_index_entry(
+            &position,
+            &rdocx::IndexEntry {
+                levels: vec!["Alpha".into()],
+                identifier: None,
+                page_range_bookmark: None,
+                cross_reference: None,
+                bold_page_numbers: false,
+                italic_page_numbers: false,
+            },
+        )
+        .unwrap();
+    let story = f254_story(&document, StoryKind::Body);
+    let location = f254_item(&document, &story, 0);
+    document
+        .insert_index(&location, &rdocx::IndexOptions::default())
+        .unwrap();
+    let report = document.rebuild_generated_tables().unwrap();
+    assert_eq!(report.index_entries, 1);
+}
+
+fn f281_paragraph(d: &mut Document, index: &mut usize, text: &str, page: bool) -> usize {
+    let n = *index;
+    d.add_paragraph(text).set_page_break_before(page);
+    *index += 1;
+    n
+}
+fn f281_field(
+    d: &mut Document,
+    index: &mut usize,
+    label: &str,
+    instr: &str,
+    cache: &str,
+    hidden: bool,
+) -> rdocx::Result<usize> {
+    let n = *index;
+    let mut p = d.add_paragraph(label);
+    let mut r = p.add_run("");
+    r.set_hidden(hidden);
+    if hidden {
+        let mut cached = CT_R::new(cache);
+        cached.properties = Some(CT_RPr {
+            vanish: Some(true),
+            ..Default::default()
+        });
+        r.add_field_value(rdocx_oxml::text::Field::from_raw(
+            instr,
+            rdocx_oxml::text::FieldForm::Complex,
+            vec![cached],
+        )?)?;
+    } else {
+        r.add_field(instr, cache)?;
+    }
+    *index += 1;
+    Ok(n)
+}
+fn f281_output(d: &mut Document, index: &mut usize, label: &str, instr: &str) -> rdocx::Result<()> {
+    f281_paragraph(d, index, &format!("F281_OUTPUT_BEGIN_{label}"), false);
+    f281_field(
+        d,
+        index,
+        "",
+        instr,
+        &format!("OLD_F281_OUTPUT_{label}"),
+        false,
+    )?;
+    f281_paragraph(d, index, &format!("F281_OUTPUT_END_{label}"), false);
+    Ok(())
+}
+fn f281_save(mut d: Document) -> rdocx::Result<Document> {
+    for i in 0..d.paragraphs().len() {
+        if let Some(mut p) = d.paragraph_mut(i) {
+            for j in 0..p.run_count() {
+                if let Some(mut r) = p.run_mut(j) {
+                    r.set_language("en-US");
+                }
+            }
+        }
+    }
+    let bytes = d.to_bytes()?;
+    let mut reopened = Document::from_bytes(&bytes)?;
+    let _ = reopened.to_bytes()?;
+    Ok(reopened)
+}
+fn f281_index_probe(changed: bool) -> rdocx::Result<Document> {
+    f281_index_probe_with_chapters(changed, false)
+}
+fn f281_index_probe_with_chapters(changed: bool, chapters: bool) -> rdocx::Result<Document> {
+    let mut d = Document::new();
+    let mut n = 0;
+    f281_paragraph(
+        &mut d,
+        &mut n,
+        "F281 INDEX source probe. OLD caches are not Word evidence.",
+        false,
+    );
+    if chapters {
+        let value = if changed { 3 } else { 2 };
+        f281_field(
+            &mut d,
+            &mut n,
+            "F281_SEQ_CHAPTER_PAGE_1 ",
+            &format!("SEQ Chapter \\r {value}"),
+            &value.to_string(),
+            false,
+        )?;
+    }
+    f281_field(
+        &mut d,
+        &mut n,
+        "SRC_X01 ",
+        if changed {
+            r#"XE "Zebra renamed""#
+        } else {
+            r#"XE "Zebra""#
+        },
+        "OLD_XE_X01",
+        true,
+    )?;
+    f281_field(
+        &mut d,
+        &mut n,
+        "SRC_X02 ",
+        r#"XE "Alpha:Beta:Gamma" \b"#,
+        "OLD_XE_X02",
+        true,
+    )?;
+    f281_field(
+        &mut d,
+        &mut n,
+        "SRC_X03 ",
+        r#"XE "Alpha:Delta" \i"#,
+        "OLD_XE_X03",
+        true,
+    )?;
+    if !changed {
+        f281_field(
+            &mut d,
+            &mut n,
+            "SRC_X04 ",
+            r#"XE "Alpha:Beta:Gamma" \b"#,
+            "OLD_XE_X04",
+            true,
+        )?;
+    }
+    f281_field(
+        &mut d,
+        &mut n,
+        "SRC_X05 ",
+        r#"XE "Alias" \t "See Alpha""#,
+        "OLD_XE_X05",
+        true,
+    )?;
+    f281_field(
+        &mut d,
+        &mut n,
+        "SRC_X06 ",
+        r#"XE "Filtered A" \f "a""#,
+        "OLD_XE_X06",
+        true,
+    )?;
+    f281_field(
+        &mut d,
+        &mut n,
+        "SRC_X07 ",
+        r#"XE "Filtered B" \f "b""#,
+        "OLD_XE_X07",
+        true,
+    )?;
+    let start = f281_paragraph(&mut d, &mut n, "F281_RANGE_START", false);
+    f281_paragraph(&mut d, &mut n, "SOURCE_PAGE_2", true);
+    if chapters {
+        let value = if changed { 8 } else { 7 };
+        f281_field(
+            &mut d,
+            &mut n,
+            "F281_SEQ_CHAPTER_PAGE_2 ",
+            &format!("SEQ Chapter \\r {value}"),
+            &value.to_string(),
+            false,
+        )?;
+    }
+
+    f281_field(
+        &mut d,
+        &mut n,
+        "SRC_X08 ",
+        r#"XE "Alpha:Beta:Gamma" \i"#,
+        "OLD_XE_X08",
+        true,
+    )?;
+    f281_field(
+        &mut d,
+        &mut n,
+        "SRC_X09 ",
+        r#"XE "Range Alpha" \r F281IndexRange \b \i"#,
+        "OLD_XE_X09",
+        true,
+    )?;
+    f281_field(
+        &mut d,
+        &mut n,
+        "SRC_X10 ",
+        r#"XE "alpha""#,
+        "OLD_XE_X10",
+        true,
+    )?;
+    f281_paragraph(&mut d, &mut n, "SOURCE_PAGE_3", true);
+    if chapters {
+        let value = if changed { 12 } else { 11 };
+        f281_field(
+            &mut d,
+            &mut n,
+            "F281_SEQ_CHAPTER_PAGE_3 ",
+            &format!("SEQ Chapter \\r {value}"),
+            &value.to_string(),
+            false,
+        )?;
+    }
+
+    let end = f281_paragraph(&mut d, &mut n, "F281_RANGE_END", false);
+    d.add_bookmark(
+        "F281IndexRange",
+        RunRange {
+            start: RunPosition {
+                body_index: start,
+                run_index: 0,
+            },
+            end: RunPosition {
+                body_index: end,
+                run_index: 1,
+            },
+        },
+    )?;
+    if changed {
+        f281_field(
+            &mut d,
+            &mut n,
+            "SRC_MUT_X11 ",
+            r#"XE "Aardvark:Inserted" \b"#,
+            "OLD_XE_MUT_X11",
+            true,
+        )?;
+        f281_field(
+            &mut d,
+            &mut n,
+            "SRC_MUT_X12 ",
+            r#"XE "Zebra""#,
+            "OLD_XE_MUT_X12",
+            true,
+        )?;
+    }
+    f281_paragraph(&mut d, &mut n, "GENERATED_RESULTS_ONLY", true);
+    f281_output(&mut d, &mut n, "INDEX_DEFAULT", r#"INDEX \z 1033"#)?;
+    f281_output(
+        &mut d,
+        &mut n,
+        "INDEX_SEPARATORS",
+        r#"INDEX \z 1033 \h "A" \e " | " \l "; " \g " to " \k " => ""#,
+    )?;
+    f281_output(&mut d, &mut n, "INDEX_RUNIN", r#"INDEX \z 1033 \r"#)?;
+    f281_output(&mut d, &mut n, "INDEX_A", r#"INDEX \z 1033 \f "a""#)?;
+    if chapters {
+        f281_output(
+            &mut d,
+            &mut n,
+            "INDEX_CHAPTER_DEFAULT",
+            r#"INDEX \z 1033 \h "A" \e " | " \l "; " \g " to " \s Chapter"#,
+        )?;
+        f281_output(
+            &mut d,
+            &mut n,
+            "INDEX_CHAPTER_K",
+            r#"INDEX \z 1033 \h "A" \e " | " \l "; " \g " to " \s Chapter \k " => ""#,
+        )?;
+    }
+    f281_save(d)
+}
+fn f281_figure_probe(changed: bool) -> rdocx::Result<Document> {
+    let mut d = Document::new();
+    let mut n = 0;
+    d.add_style(StyleBuilder::paragraph("F281Caption", "F281 Caption"))?;
+    d.add_style(StyleBuilder::paragraph("F281Other", "F281 Other"))?;
+    f281_paragraph(
+        &mut d,
+        &mut n,
+        "F281 caption and style sources. All SEQ caches are OLD.",
+        false,
+    );
+    for (i, label, title, style, page) in [
+        (1, "Figure", "Mercury", "F281Caption", false),
+        (2, "Table", "Counts", "F281Caption", false),
+        (3, "Equation", "Energy", "F281Other", true),
+        (4, "Figure", "Venus", "F281Other", false),
+        (5, "Exhibit", "Custom label", "F281Caption", true),
+    ] {
+        if changed && label == "Table" {
+            continue;
+        }
+        let title = if changed && title == "Venus" {
+            "Venus renamed"
+        } else {
+            title
+        };
+        let mut p = d.add_paragraph(&format!("{label} "));
+        p.set_style(style);
+        p.set_page_break_before(page);
+        p.add_run("")
+            .add_field(&format!("SEQ {label} \\* ARABIC"), &format!("OLD_SEQ_{i}"))?;
+        p.add_run(&format!(": {title} [SRC_C{i:02}]"));
+        n += 1;
+    }
+    d.add_paragraph("Figure 99: Plain text decoy [SRC_C06]")
+        .set_style("F281Other");
+    n += 1;
+    d.add_paragraph("Styled text without a sequence [SRC_C07]")
+        .set_style("F281Caption");
+    n += 1;
+    if changed {
+        let mut p = d.add_paragraph("Figure ");
+        p.set_style("F281Caption");
+        p.add_run("")
+            .add_field("SEQ Figure \\* ARABIC", "OLD_SEQ_MUT_C08")?;
+        p.add_run(": Mars inserted [SRC_MUT_C08]");
+        n += 1;
+    }
+    f281_paragraph(&mut d, &mut n, "GENERATED_RESULTS_ONLY", true);
+    for (label, instr) in [
+        ("FIGURE_FULL", r#"TOC \c "Figure" \h"#),
+        ("FIGURE_TEXT", r#"TOC \a "Figure" \h"#),
+        ("TABLE", r#"TOC \c "Table" \h"#),
+        ("EQUATION", r#"TOC \c "Equation" \h"#),
+        ("EXHIBIT", r#"TOC \c "Exhibit" \h"#),
+        ("STYLE", r#"TOC \t "F281 Caption,1" \h"#),
+        ("FIGURE_STYLE", r#"TOC \c "Figure" \t "F281 Caption,1" \h"#),
+    ] {
+        f281_output(&mut d, &mut n, label, instr)?;
+    }
+    f281_save(d)
+}
+fn f281_authority_probe(changed: bool) -> rdocx::Result<Document> {
+    let mut d = Document::new();
+    let mut n = 0;
+    f281_paragraph(
+        &mut d,
+        &mut n,
+        "F281 authority sources. Show hidden text OFF before pagination.",
+        false,
+    );
+    let mut start = 0;
+    let mut end = 0;
+    for page in 1..=6 {
+        f281_paragraph(&mut d, &mut n, &format!("SOURCE_PAGE_{page}"), page > 1);
+        if page == 2 {
+            start = f281_paragraph(&mut d, &mut n, "F281_AUTH_RANGE_START", false);
+        }
+        f281_field(
+            &mut d,
+            &mut n,
+            &format!("SRC_TA_ALPHA_{page} "),
+            r#"TA \l "Alpha v. Zenith, 100 F.3d 200 (2000)" \s "Alpha" \c 1"#,
+            &format!("OLD_TA_ALPHA_{page}"),
+            true,
+        )?;
+        if page <= 4 {
+            f281_field(
+                &mut d,
+                &mut n,
+                &format!("SRC_TA_BETA_{page} "),
+                r#"TA \l "Beta v. Delta, 200 F.3d 300 (2001)" \s "Beta" \c 1"#,
+                &format!("OLD_TA_BETA_{page}"),
+                true,
+            )?;
+        }
+        if page == 1 {
+            f281_field(
+                &mut d,
+                &mut n,
+                "SRC_TA_DUPLICATE ",
+                r#"TA \l "Alpha v. Zenith, 100 F.3d 200 (2000)" \s "Alpha" \c 1 \b"#,
+                "OLD_TA_DUPLICATE",
+                true,
+            )?;
+            f281_field(
+                &mut d,
+                &mut n,
+                "SRC_TA_ZETA ",
+                if changed {
+                    r#"TA \l "Zeta renamed v. Able, 300 F.3d 400 (2002)" \s "Zeta renamed" \c 1 \i"#
+                } else {
+                    r#"TA \l "Zeta v. Able, 300 F.3d 400 (2002)" \s "Zeta" \c 1 \i"#
+                },
+                "OLD_TA_ZETA",
+                true,
+            )?;
+            f281_field(
+                &mut d,
+                &mut n,
+                "SRC_TA_STATUTE ",
+                r#"TA \l "F281 Statute section 12" \s "Section 12" \c 2"#,
+                "OLD_TA_STATUTE",
+                true,
+            )?;
+            f281_field(
+                &mut d,
+                &mut n,
+                "SRC_TA_TREATISE ",
+                r#"TA \l "F281 Treatise, chapter 9" \s "Treatise" \c 5"#,
+                "OLD_TA_TREATISE",
+                true,
+            )?;
+        }
+        if page == 3 {
+            f281_field(
+                &mut d,
+                &mut n,
+                "SRC_TA_RANGE ",
+                r#"TA \l "Range v. Pages, 400 F.3d 500 (2003)" \s "Range" \c 1 \r F281AuthorityRange \b \i"#,
+                "OLD_TA_RANGE",
+                true,
+            )?;
+        }
+        if page == 4 {
+            end = f281_paragraph(&mut d, &mut n, "F281_AUTH_RANGE_END", false);
+        }
+        if changed && page == 5 {
+            f281_field(
+                &mut d,
+                &mut n,
+                "SRC_MUT_TA_BETA_5 ",
+                r#"TA \l "Beta v. Delta, 200 F.3d 300 (2001)" \s "Beta" \c 1"#,
+                "OLD_TA_MUT_BETA_5",
+                true,
+            )?;
+            f281_field(
+                &mut d,
+                &mut n,
+                "SRC_MUT_TA_AARDVARK ",
+                r#"TA \l "Aardvark v. New, 500 F.3d 600 (2004)" \s "Aardvark" \c 1"#,
+                "OLD_TA_MUT_AARDVARK",
+                true,
+            )?;
+        }
+    }
+    d.add_bookmark(
+        "F281AuthorityRange",
+        RunRange {
+            start: RunPosition {
+                body_index: start,
+                run_index: 0,
+            },
+            end: RunPosition {
+                body_index: end,
+                run_index: 1,
+            },
+        },
+    )?;
+    f281_paragraph(&mut d, &mut n, "GENERATED_RESULTS_ONLY", true);
+    f281_output(&mut d, &mut n, "TOA_CASES", r#"TOA \c 1 \h"#)?;
+    f281_output(&mut d, &mut n, "TOA_PASSIM", r#"TOA \c 1 \h \p"#)?;
+    f281_output(
+        &mut d,
+        &mut n,
+        "TOA_SEPARATORS",
+        r#"TOA \c 1 \e " | " \l "; " \g " to ""#,
+    )?;
+    f281_output(&mut d, &mut n, "TOA_STATUTES", r#"TOA \c 2 \h"#)?;
+    f281_output(&mut d, &mut n, "TOA_TREATISES", r#"TOA \c 5 \h"#)?;
+    f281_save(d)
+}
+
+// Captured using Word 16.113.2 build 16.113.26092012, en-US source language.
+// Fresh F9 saves and independent no-F9 reopen receipts are retained under
+// /private/tmp/S90-F281-oracle and /private/tmp/S90-Word-captures.
+const WORD_F281_ORACLE: &str = "Microsoft Word 16.113.2 build 16.113.26092012";
+const WORD_F281_LOCALE: &str = "en-US";
+
+fn f281_cache_records(xml: &str) -> Vec<(String, Vec<String>)> {
+    let mut reader = XmlReader::from_str(xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut fields = Vec::<(String, bool, Vec<String>)>::new();
+    let mut instruction = false;
+    let mut text = false;
+    let mut paragraph = String::new();
+    let mut properties_depth = 0usize;
+    let mut result = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer).unwrap() {
+            XmlEvent::Start(start) => match start.local_name().as_ref() {
+                b"p" => paragraph.clear(),
+                b"pPr" | b"rPr" => properties_depth += 1,
+                b"instrText" => instruction = true,
+                b"t" => text = true,
+                _ => {}
+            },
+            XmlEvent::Empty(start) => match start.local_name().as_ref() {
+                b"fldChar" => {
+                    let kind = start
+                        .attributes()
+                        .flatten()
+                        .find(|attribute| attribute.key.local_name().as_ref() == b"fldCharType")
+                        .map(|attribute| String::from_utf8(attribute.value.into_owned()).unwrap());
+                    match kind.as_deref() {
+                        Some("begin") => fields.push((String::new(), false, Vec::new())),
+                        Some("separate") => {
+                            if let Some(field) = fields.last_mut() {
+                                field.1 = true;
+                            }
+                        }
+                        Some("end") => {
+                            if let Some(field) = fields.pop()
+                                && ["INDEX", "TOA", "TOC"].contains(
+                                    &rdocx_oxml::text::Field::new(&field.0, "")
+                                        .instruction
+                                        .name
+                                        .as_str(),
+                                )
+                            {
+                                if !paragraph.is_empty() {
+                                    let mut field = field;
+                                    field.2.push(std::mem::take(&mut paragraph));
+                                    result.push((field.0.trim().into(), field.2));
+                                } else {
+                                    result.push((field.0.trim().into(), field.2));
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                b"tab" if properties_depth == 0 && fields.iter().any(|field| field.1) => {
+                    paragraph.push('\t')
+                }
+                b"br" if properties_depth == 0 && fields.iter().any(|field| field.1) => {
+                    paragraph.push('\n')
+                }
+                _ => {}
+            },
+            XmlEvent::Text(value) => {
+                let value = quick_xml::escape::unescape(&value.decode().unwrap())
+                    .unwrap()
+                    .into_owned();
+                if instruction {
+                    if let Some(field) = fields.last_mut() {
+                        field.0.push_str(&value);
+                    }
+                } else if text && properties_depth == 0 && fields.iter().any(|field| field.1) {
+                    paragraph.push_str(&value);
+                }
+            }
+            XmlEvent::GeneralRef(reference) => {
+                let encoded = format!("&{};", reference.decode().unwrap());
+                let value = quick_xml::escape::unescape(&encoded).unwrap();
+                if instruction {
+                    if let Some(field) = fields.last_mut() {
+                        field.0.push_str(&value);
+                    }
+                } else if text && properties_depth == 0 && fields.iter().any(|field| field.1) {
+                    paragraph.push_str(&value);
+                }
+            }
+            XmlEvent::End(end) => match end.local_name().as_ref() {
+                b"pPr" | b"rPr" => properties_depth -= 1,
+                b"instrText" => instruction = false,
+                b"t" => text = false,
+                b"p" => {
+                    if !paragraph.is_empty()
+                        && let Some(field) = fields.iter_mut().find(|field| {
+                            field.1
+                                && ["INDEX", "TOA", "TOC"].contains(
+                                    &rdocx_oxml::text::Field::new(&field.0, "")
+                                        .instruction
+                                        .name
+                                        .as_str(),
+                                )
+                        })
+                    {
+                        field.2.push(std::mem::take(&mut paragraph));
+                    }
+                }
+                _ => {}
+            },
+            XmlEvent::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    assert!(fields.is_empty());
+    result
+}
+
+#[test]
+fn generated_tables_match_pinned_word_after_source_mutation() {
+    assert_eq!(
+        WORD_F281_ORACLE,
+        "Microsoft Word 16.113.2 build 16.113.26092012"
+    );
+    assert_eq!(WORD_F281_LOCALE, "en-US");
+    let mut document = f281_index_probe(false).unwrap();
+    let report = document.rebuild_generated_tables().unwrap();
+    assert!(report.diagnostics.is_empty(), "{:?}", report.diagnostics);
+    let expected = vec![
+        (
+            "INDEX \\z 1033".to_string(),
+            vec![
+                "Alias. See Alpha".to_string(),
+                "alpha, 2".to_string(),
+                "Alpha".to_string(),
+                "Beta".to_string(),
+                "Gamma, 1, 2".to_string(),
+                "Delta, 1".to_string(),
+                "Range Alpha, 1–3".to_string(),
+                "Zebra, 1".to_string(),
+            ],
+        ),
+        (
+            "INDEX \\z 1033 \\h \"A\" \\e \" | \" \\l \"; \" \\g \" to \" \\k \" => \"".to_string(),
+            vec![
+                "A".to_string(),
+                "Alias | See Alpha".to_string(),
+                "alpha | 2".to_string(),
+                "Alpha".to_string(),
+                "Beta".to_string(),
+                "Gamma | 1; 2".to_string(),
+                "Delta | 1".to_string(),
+                "R".to_string(),
+                "Range Alpha | 1 to 3".to_string(),
+                "Z".to_string(),
+                "Zebra | 1".to_string(),
+            ],
+        ),
+        (
+            "INDEX \\z 1033 \\r".to_string(),
+            vec![
+                "Alias. See Alpha".to_string(),
+                "alpha, 2".to_string(),
+                "Alpha: Beta; Gamma, 1, 2; Delta, 1".to_string(),
+                "Range Alpha, 1–3".to_string(),
+                "Zebra, 1".to_string(),
+            ],
+        ),
+        (
+            "INDEX \\z 1033 \\f \"a\"".to_string(),
+            vec!["Filtered A, 1".to_string()],
+        ),
+    ];
+    assert_eq!(
+        f281_cache_records(&document_xml(&mut document)),
+        expected,
+        "index-initial-complex"
+    );
+    let mut document = f281_index_probe(true).unwrap();
+    let report = document.rebuild_generated_tables().unwrap();
+    assert!(report.diagnostics.is_empty(), "{:?}", report.diagnostics);
+    let expected = vec![
+        (
+            "INDEX \\z 1033".to_string(),
+            vec![
+                "Aardvark".to_string(),
+                "Inserted, 3".to_string(),
+                "Alias. See Alpha".to_string(),
+                "alpha, 2".to_string(),
+                "Alpha".to_string(),
+                "Beta".to_string(),
+                "Gamma, 1, 2".to_string(),
+                "Delta, 1".to_string(),
+                "Range Alpha, 1–3".to_string(),
+                "Zebra, 3".to_string(),
+                "Zebra renamed, 1".to_string(),
+            ],
+        ),
+        (
+            "INDEX \\z 1033 \\h \"A\" \\e \" | \" \\l \"; \" \\g \" to \" \\k \" => \"".to_string(),
+            vec![
+                "A".to_string(),
+                "Aardvark".to_string(),
+                "Inserted | 3".to_string(),
+                "Alias | See Alpha".to_string(),
+                "alpha | 2".to_string(),
+                "Alpha".to_string(),
+                "Beta".to_string(),
+                "Gamma | 1; 2".to_string(),
+                "Delta | 1".to_string(),
+                "R".to_string(),
+                "Range Alpha | 1 to 3".to_string(),
+                "Z".to_string(),
+                "Zebra | 3".to_string(),
+                "Zebra renamed | 1".to_string(),
+            ],
+        ),
+        (
+            "INDEX \\z 1033 \\r".to_string(),
+            vec![
+                "Aardvark: Inserted, 3".to_string(),
+                "Alias. See Alpha".to_string(),
+                "alpha, 2".to_string(),
+                "Alpha: Beta; Gamma, 1, 2; Delta, 1".to_string(),
+                "Range Alpha, 1–3".to_string(),
+                "Zebra, 3".to_string(),
+                "Zebra renamed, 1".to_string(),
+            ],
+        ),
+        (
+            "INDEX \\z 1033 \\f \"a\"".to_string(),
+            vec!["Filtered A, 1".to_string()],
+        ),
+    ];
+    assert_eq!(
+        f281_cache_records(&document_xml(&mut document)),
+        expected,
+        "index-mutated-complex"
+    );
+    let mut document = f281_authority_probe(false).unwrap();
+    let report = document.rebuild_generated_tables().unwrap();
+    assert!(report.diagnostics.is_empty(), "{:?}", report.diagnostics);
+    let expected = vec![
+        (
+            "TOA \\c 1 \\h".to_string(),
+            vec![
+                "Cases".to_string(),
+                "Alpha v. Zenith, 100 F.3d 200 (2000)\t1, 2, 3, 4, 5, 6".to_string(),
+                "Beta v. Delta, 200 F.3d 300 (2001)\t1, 2, 3, 4".to_string(),
+                "Range v. Pages, 400 F.3d 500 (2003)\t2–4".to_string(),
+                "Zeta v. Able, 300 F.3d 400 (2002)\t1".to_string(),
+            ],
+        ),
+        (
+            "TOA \\c 1 \\h \\p".to_string(),
+            vec![
+                "Cases".to_string(),
+                "Alpha v. Zenith, 100 F.3d 200 (2000)\tpassim".to_string(),
+                "Beta v. Delta, 200 F.3d 300 (2001)\t1, 2, 3, 4".to_string(),
+                "Range v. Pages, 400 F.3d 500 (2003)\t2–4".to_string(),
+                "Zeta v. Able, 300 F.3d 400 (2002)\t1".to_string(),
+            ],
+        ),
+        (
+            "TOA \\c 1 \\e \" | \" \\l \"; \" \\g \" to \"".to_string(),
+            vec![
+                "Alpha v. Zenith, 100 F.3d 200 (2000) | 1; 2; 3; 4; 5; 6".to_string(),
+                "Beta v. Delta, 200 F.3d 300 (2001) | 1; 2; 3; 4".to_string(),
+                "Range v. Pages, 400 F.3d 500 (2003) | 2 to 4".to_string(),
+                "Zeta v. Able, 300 F.3d 400 (2002) | 1".to_string(),
+            ],
+        ),
+        (
+            "TOA \\c 2 \\h".to_string(),
+            vec![
+                "Statutes".to_string(),
+                "F281 Statute section 12\t1".to_string(),
+            ],
+        ),
+        (
+            "TOA \\c 5 \\h".to_string(),
+            vec![
+                "Treatises".to_string(),
+                "F281 Treatise, chapter 9\t1".to_string(),
+            ],
+        ),
+    ];
+    assert_eq!(
+        f281_cache_records(&document_xml(&mut document)),
+        expected,
+        "authorities-initial-complex"
+    );
+    let mut document = f281_authority_probe(true).unwrap();
+    let report = document.rebuild_generated_tables().unwrap();
+    assert!(report.diagnostics.is_empty(), "{:?}", report.diagnostics);
+    let expected = vec![
+        (
+            "TOA \\c 1 \\h".to_string(),
+            vec![
+                "Cases".to_string(),
+                "Aardvark v. New, 500 F.3d 600 (2004)\t5".to_string(),
+                "Alpha v. Zenith, 100 F.3d 200 (2000)\t1, 2, 3, 4, 5, 6".to_string(),
+                "Beta v. Delta, 200 F.3d 300 (2001)\t1, 2, 3, 4, 5".to_string(),
+                "Range v. Pages, 400 F.3d 500 (2003)\t2–4".to_string(),
+                "Zeta renamed v. Able, 300 F.3d 400 (2002)\t1".to_string(),
+            ],
+        ),
+        (
+            "TOA \\c 1 \\h \\p".to_string(),
+            vec![
+                "Cases".to_string(),
+                "Aardvark v. New, 500 F.3d 600 (2004)\t5".to_string(),
+                "Alpha v. Zenith, 100 F.3d 200 (2000)\tpassim".to_string(),
+                "Beta v. Delta, 200 F.3d 300 (2001)\tpassim".to_string(),
+                "Range v. Pages, 400 F.3d 500 (2003)\t2–4".to_string(),
+                "Zeta renamed v. Able, 300 F.3d 400 (2002)\t1".to_string(),
+            ],
+        ),
+        (
+            "TOA \\c 1 \\e \" | \" \\l \"; \" \\g \" to \"".to_string(),
+            vec![
+                "Aardvark v. New, 500 F.3d 600 (2004) | 5".to_string(),
+                "Alpha v. Zenith, 100 F.3d 200 (2000) | 1; 2; 3; 4; 5; 6".to_string(),
+                "Beta v. Delta, 200 F.3d 300 (2001) | 1; 2; 3; 4; 5".to_string(),
+                "Range v. Pages, 400 F.3d 500 (2003) | 2 to 4".to_string(),
+                "Zeta renamed v. Able, 300 F.3d 400 (2002) | 1".to_string(),
+            ],
+        ),
+        (
+            "TOA \\c 2 \\h".to_string(),
+            vec![
+                "Statutes".to_string(),
+                "F281 Statute section 12\t1".to_string(),
+            ],
+        ),
+        (
+            "TOA \\c 5 \\h".to_string(),
+            vec![
+                "Treatises".to_string(),
+                "F281 Treatise, chapter 9\t1".to_string(),
+            ],
+        ),
+    ];
+    assert_eq!(
+        f281_cache_records(&document_xml(&mut document)),
+        expected,
+        "authorities-mutated-complex"
+    );
+    let mut document = f281_figure_probe(false).unwrap();
+    let report = document.rebuild_generated_tables().unwrap();
+    assert!(report.diagnostics.is_empty(), "{:?}", report.diagnostics);
+    let expected = vec![
+        (
+            "TOC \\c \"Figure\" \\h".to_string(),
+            vec![
+                "Figure 1: Mercury [SRC_C01]\t1".to_string(),
+                "Figure 2: Venus [SRC_C04]\t2".to_string(),
+            ],
+        ),
+        (
+            "TOC \\a \"Figure\" \\h".to_string(),
+            vec![
+                "Mercury [SRC_C01]\t1".to_string(),
+                "Venus [SRC_C04]\t2".to_string(),
+            ],
+        ),
+        (
+            "TOC \\c \"Table\" \\h".to_string(),
+            vec!["Table 1: Counts [SRC_C02]\t1".to_string()],
+        ),
+        (
+            "TOC \\c \"Equation\" \\h".to_string(),
+            vec!["Equation 1: Energy [SRC_C03]\t2".to_string()],
+        ),
+        (
+            "TOC \\c \"Exhibit\" \\h".to_string(),
+            vec!["Exhibit 1: Custom label [SRC_C05]\t3".to_string()],
+        ),
+        (
+            "TOC \\t \"F281 Caption,1\" \\h".to_string(),
+            vec![
+                "Figure 1: Mercury [SRC_C01]\t1".to_string(),
+                "Table 1: Counts [SRC_C02]\t1".to_string(),
+                "Exhibit 1: Custom label [SRC_C05]\t3".to_string(),
+                "Styled text without a sequence [SRC_C07]\t3".to_string(),
+            ],
+        ),
+        (
+            "TOC \\c \"Figure\" \\t \"F281 Caption,1\" \\h".to_string(),
+            vec![
+                "Figure 1: Mercury [SRC_C01]\t1".to_string(),
+                "Table 1: Counts [SRC_C02]\t1".to_string(),
+                "Exhibit 1: Custom label [SRC_C05]\t3".to_string(),
+                "Styled text without a sequence [SRC_C07]\t3".to_string(),
+            ],
+        ),
+    ];
+    assert_eq!(
+        f281_cache_records(&document_xml(&mut document)),
+        expected,
+        "figures-initial"
+    );
+    let mut document = f281_figure_probe(true).unwrap();
+    let report = document.rebuild_generated_tables().unwrap();
+    assert!(report.diagnostics.is_empty(), "{:?}", report.diagnostics);
+    let expected = vec![
+        (
+            "TOC \\c \"Figure\" \\h".to_string(),
+            vec![
+                "Figure 1: Mercury [SRC_C01]\t1".to_string(),
+                "Figure 2: Venus renamed [SRC_C04]\t2".to_string(),
+                "Figure 3: Mars inserted [SRC_MUT_C08]\t3".to_string(),
+            ],
+        ),
+        (
+            "TOC \\a \"Figure\" \\h".to_string(),
+            vec![
+                "Mercury [SRC_C01]\t1".to_string(),
+                "Venus renamed [SRC_C04]\t2".to_string(),
+                "Mars inserted [SRC_MUT_C08]\t3".to_string(),
+            ],
+        ),
+        (
+            "TOC \\c \"Table\" \\h".to_string(),
+            vec!["No table of figures entries found.".to_string()],
+        ),
+        (
+            "TOC \\c \"Equation\" \\h".to_string(),
+            vec!["Equation 1: Energy [SRC_C03]\t2".to_string()],
+        ),
+        (
+            "TOC \\c \"Exhibit\" \\h".to_string(),
+            vec!["Exhibit 1: Custom label [SRC_C05]\t3".to_string()],
+        ),
+        (
+            "TOC \\t \"F281 Caption,1\" \\h".to_string(),
+            vec![
+                "Figure 1: Mercury [SRC_C01]\t1".to_string(),
+                "Exhibit 1: Custom label [SRC_C05]\t3".to_string(),
+                "Styled text without a sequence [SRC_C07]\t3".to_string(),
+                "Figure 3: Mars inserted [SRC_MUT_C08]\t3".to_string(),
+            ],
+        ),
+        (
+            "TOC \\c \"Figure\" \\t \"F281 Caption,1\" \\h".to_string(),
+            vec![
+                "Figure 1: Mercury [SRC_C01]\t1".to_string(),
+                "Exhibit 1: Custom label [SRC_C05]\t3".to_string(),
+                "Styled text without a sequence [SRC_C07]\t3".to_string(),
+                "Figure 3: Mars inserted [SRC_MUT_C08]\t3".to_string(),
+            ],
+        ),
+    ];
+    assert_eq!(
+        f281_cache_records(&document_xml(&mut document)),
+        expected,
+        "figures-mutated"
+    );
+}
+
+#[test]
+fn index_hierarchy_ranges_and_cross_references_match_word() {
+    // Authenticated Chapter/k initial and mutated Word 16.113.2 captures.
+    for (changed, expected) in [
+        (
+            false,
+            vec![
+                "A",
+                "Alias | See Alpha",
+                "alpha | 7-2",
+                "Alpha",
+                "Beta",
+                "Gamma | 2-1; 7-2",
+                "Delta | 2-1",
+                "R",
+                "Range Alpha | 2-1 to 11-3",
+                "Z",
+                "Zebra | 2-1",
+            ],
+        ),
+        (
+            true,
+            vec![
+                "A",
+                "Aardvark",
+                "Inserted | 12-3",
+                "Alias | See Alpha",
+                "alpha | 8-2",
+                "Alpha",
+                "Beta",
+                "Gamma | 3-1; 8-2",
+                "Delta | 3-1",
+                "R",
+                "Range Alpha | 3-1 to 12-3",
+                "Z",
+                "Zebra | 12-3",
+                "Zebra renamed | 3-1",
+            ],
+        ),
+    ] {
+        let mut document = f281_index_probe_with_chapters(changed, true).unwrap();
+        let report = document.rebuild_generated_tables().unwrap();
+        assert!(report.diagnostics.is_empty(), "{:?}", report.diagnostics);
+        let records = f281_cache_records(&document_xml(&mut document));
+        let chapter = records
+            .iter()
+            .filter(|(instruction, _)| instruction.contains("\\s Chapter"))
+            .collect::<Vec<_>>();
+        assert_eq!(chapter.len(), 2);
+        for (_, entries) in chapter {
+            assert_eq!(entries, &expected);
+        }
+    }
+}
+
+#[test]
+fn authority_categories_short_citations_and_passim_match_word() {
+    let mut document = f281_authority_probe(false).unwrap();
+    let story = f254_story(&document, StoryKind::Body);
+    let first = document
+        .insert_table_of_authorities(
+            &ContentLocation::end(story),
+            &rdocx::TableOfAuthoritiesOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(first.story().kind(), StoryKind::Body);
+    let report = document.rebuild_generated_tables().unwrap();
+    assert!(report.diagnostics.is_empty(), "{:?}", report.diagnostics);
+    let records = f281_cache_records(&document_xml(&mut document));
+    let added = &records[records.len() - 3..];
+    assert!(
+        added[0].0.contains("\\c 1")
+            && added[1].0.contains("\\c 2")
+            && added[2].0.contains("\\c 5")
+    );
+    assert_eq!(
+        added[0].1,
+        [
+            "Cases",
+            "Alpha v. Zenith, 100 F.3d 200 (2000)\tpassim",
+            "Beta v. Delta, 200 F.3d 300 (2001)\t1, 2, 3, 4",
+            "Range v. Pages, 400 F.3d 500 (2003)\t2–4",
+            "Zeta v. Able, 300 F.3d 400 (2002)\t1"
+        ]
+    );
+    assert_eq!(added[1].1, ["Statutes", "F281 Statute section 12\t1"]);
+    assert_eq!(added[2].1, ["Treatises", "F281 Treatise, chapter 9\t1"]);
+    assert!(!document_xml(&mut document).contains("TOA \\c 0"));
+}
+
+#[test]
+fn generated_table_source_scan_excludes_old_result_ranges() {
+    let mut document = f281_index_probe(false).unwrap();
+    let first = document.rebuild_generated_tables().unwrap();
+    let first_xml = document_xml(&mut document);
+    let first_records = f281_cache_records(&first_xml);
+    let second = document.rebuild_generated_tables().unwrap();
+    assert!(second.diagnostics.is_empty(), "{:?}", second.diagnostics);
+    assert_eq!(first.index_entries, second.index_entries);
+    assert_eq!(second.bookmark_count, 0);
+    let second_xml = document_xml(&mut document);
+    assert_eq!(f281_cache_records(&second_xml), first_records);
+    assert_eq!(
+        second_xml.matches("<w:bookmarkStart").count(),
+        first_xml.matches("<w:bookmarkStart").count()
+    );
+}
+
+#[test]
+fn generated_table_rebuild_rejects_ambiguous_ranges_atomically() {
+    let mut document = Document::new();
+    document.add_paragraph("source");
+    let location = f254_item(&document, &f254_story(&document, StoryKind::Body), 0);
+    document
+        .insert_index_entry(
+            &StoryRunPosition {
+                location,
+                run_index: 0,
+            },
+            &rdocx::IndexEntry {
+                levels: vec!["Range".into()],
+                page_range_bookmark: Some("MissingRange".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let story = f254_story(&document, StoryKind::Body);
+    document
+        .insert_index(
+            &ContentLocation::end(story),
+            &rdocx::IndexOptions::default(),
+        )
+        .unwrap();
+    let before = document.to_bytes().unwrap();
+    assert!(
+        document
+            .rebuild_generated_tables()
+            .unwrap_err()
+            .to_string()
+            .contains("MissingRange")
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let mut document = f281_index_probe(false).unwrap();
+    let bytes = document.to_bytes().unwrap();
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let xml = String::from_utf8(package.get_part("word/document.xml").unwrap().to_vec()).unwrap();
+    package.set_part(
+        "word/document.xml",
+        xml.replacen("F281IndexRange", "MissingRange", 1)
+            .into_bytes(),
+    );
+    let mut output = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut output).unwrap();
+    let mut document = Document::from_bytes(output.get_ref()).unwrap();
+    let before = document.to_bytes().unwrap();
+    assert!(document.rebuild_generated_tables().is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn generated_tables_preserve_text_in_caption_field_runs() {
+    let mut document = Document::new();
+    let mut paragraph = document.add_paragraph("");
+    let mut run = paragraph.add_run("Figure ");
+    run.add_field("SEQ Figure", "STALE").unwrap();
+    run.add_text(". Same run caption");
+    let story = f254_story(&document, StoryKind::Body);
+    document
+        .insert_table_of_figures(
+            &ContentLocation::end(story.clone()),
+            &rdocx::TableOfFiguresOptions::default(),
+        )
+        .unwrap();
+    let story = f254_story(&document, StoryKind::Body);
+    document
+        .insert_table_of_figures(
+            &ContentLocation::end(story),
+            &rdocx::TableOfFiguresOptions {
+                include_label_and_number: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    document.rebuild_generated_tables().unwrap();
+    let records = f281_cache_records(&document_xml(&mut document));
+    assert_eq!(records[0].1, ["Figure 1. Same run caption\t1"]);
+    assert_eq!(records[1].1, ["Same run caption\t1"]);
+}
+
+#[test]
+fn generated_tables_reject_duplicate_range_names_and_malformed_markers_atomically() {
+    for duplicate in [false, true] {
+        let mut source = f281_index_probe(false).unwrap();
+        let bytes = source.to_bytes().unwrap();
+        let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+        let xml =
+            String::from_utf8(package.get_part("word/document.xml").unwrap().to_vec()).unwrap();
+        let changed = if duplicate {
+            xml.replacen("</w:body>", r#"<w:p><w:bookmarkStart w:id="999" w:name="F281IndexRange"/><w:r><w:t>duplicate</w:t></w:r><w:bookmarkEnd w:id="999"/></w:p></w:body>"#, 1)
+        } else {
+            xml.replacen(
+                r#"XE &quot;Range Alpha&quot; \r F281IndexRange"#,
+                r#"XE &quot;Range Alpha&quot; \r"#,
+                1,
+            )
+        };
+        assert_ne!(changed, xml);
+        package.set_part("word/document.xml", changed.into_bytes());
+        let mut output = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut output).unwrap();
+        let mut document = Document::from_bytes(output.get_ref()).unwrap();
+        let before = document.to_bytes().unwrap();
+        assert!(document.rebuild_generated_tables().is_err());
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+}
+
+fn f281_paragraph_fragments(xml: &str) -> Vec<CT_P> {
+    let mut reader = XmlReader::from_str(xml);
+    let mut start = None;
+    let mut depth = 0usize;
+    let mut result = Vec::new();
+    let mut buffer = Vec::new();
+    loop {
+        let offset = reader.buffer_position() as usize;
+        match reader.read_event_into(&mut buffer).unwrap() {
+            XmlEvent::Start(element) if element.local_name().as_ref() == b"p" => {
+                if depth == 0 {
+                    start = Some(offset);
+                }
+                depth += 1;
+            }
+            XmlEvent::End(element) if element.local_name().as_ref() == b"p" => {
+                depth -= 1;
+                if depth == 0 {
+                    let fragment = &xml[start.take().unwrap()..reader.buffer_position() as usize];
+                    let fragment = if fragment[..fragment.find('>').unwrap()].contains("xmlns:w=") {
+                        fragment.to_owned()
+                    } else {
+                        fragment.replacen("<w:p", "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"", 1)
+                    };
+                    result.push(CT_P::from_xml_fragment(fragment.as_bytes()).unwrap());
+                }
+            }
+            XmlEvent::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    result
+}
+
+#[test]
+fn generated_tables_preserve_instruction_and_result_formatting() {
+    let mut document = f281_index_probe(false).unwrap();
+    document.rebuild_generated_tables().unwrap();
+    let xml = document_xml(&mut document);
+    let paragraphs = f281_paragraph_fragments(&xml);
+    let gamma = paragraphs
+        .iter()
+        .find(|paragraph| paragraph.text().starts_with("Gamma, "))
+        .unwrap();
+    assert_eq!(
+        gamma.properties.as_ref().unwrap().style_id.as_deref(),
+        Some("Index3")
+    );
+    let pages = gamma
+        .runs
+        .iter()
+        .flat_map(|run| &run.content)
+        .filter_map(|content| match content {
+            rdocx_oxml::text::RunContent::Field(field) if field.instruction.name == "PAGEREF" => {
+                Some(field.cached_display_segments())
+            }
+            _ => None,
+        })
+        .flatten()
+        .collect::<Vec<_>>();
+    assert_eq!(pages.len(), 2);
+    let first = pages[0].1.unwrap();
+    let second = pages[1].1.unwrap();
+    assert_eq!((first.bold, first.bold_cs), (Some(true), Some(true)));
+    assert_eq!((second.italic, second.italic_cs), (Some(true), Some(true)));
+    assert_ne!(first.italic, Some(true));
+    assert_ne!(second.bold, Some(true));
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let styles =
+        rdocx_oxml::styles::CT_Styles::from_xml(package.get_part("/word/styles.xml").unwrap())
+            .unwrap();
+    for (id, left) in [("Index1", 220), ("Index2", 440), ("Index3", 660)] {
+        let properties = styles.get_by_id(id).unwrap().ppr.as_ref().unwrap();
+        assert_eq!(properties.ind_left, Some(rdocx_oxml::units::Twips(left)));
+        assert_eq!(properties.ind_hanging, Some(rdocx_oxml::units::Twips(220)));
+    }
+    let bytes = document.to_bytes().unwrap();
+    let mut reopened = Document::from_bytes(&bytes).unwrap();
+    assert_eq!(
+        f281_cache_records(&document_xml(&mut reopened)),
+        f281_cache_records(&xml)
+    );
+
+    let mut document = Document::new();
+    document.add_paragraph("source");
+    let location = f254_item(&document, &f254_story(&document, StoryKind::Body), 0);
+    document
+        .insert_index_entry(
+            &StoryRunPosition {
+                location,
+                run_index: 0,
+            },
+            &rdocx::IndexEntry {
+                levels: vec!["Linked".into()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let story = f254_story(&document, StoryKind::Body);
+    document
+        .insert_index(
+            &ContentLocation::end(story),
+            &rdocx::IndexOptions {
+                hyperlink: true,
+                leader: rdocx::TabLeader::Hyphen,
+                entry_page_separator: "\t".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    document.rebuild_generated_tables().unwrap();
+    let xml = document_xml(&mut document);
+    assert!(xml.contains("w:leader=\"hyphen\""));
+    assert!(xml.contains("<w:hyperlink w:anchor=\"GeneratedTable_"));
+    document.rebuild_generated_tables().unwrap();
+    assert!(document_xml(&mut document).contains("<w:hyperlink w:anchor=\"GeneratedTable_"));
+}
+
+#[test]
+fn table_of_figures_uses_caption_sequence_sources() {
+    let mut document = Document::new();
+    document.add_paragraph("boundary");
+    let boundary = f254_item(&document, &f254_story(&document, StoryKind::Body), 0);
+    document
+        .insert_caption(
+            &boundary,
+            &rdocx::CaptionOptions {
+                label: "Figure".into(),
+                text: "Native caption".into(),
+                bookmark: "CaptionSource".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let story = f254_story(&document, StoryKind::Body);
+    document
+        .insert_table_of_figures(
+            &ContentLocation::end(story),
+            &rdocx::TableOfFiguresOptions {
+                include_label_and_number: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let report = document.rebuild_generated_tables().unwrap();
+    assert_eq!(report.figure_entries, 1);
+    let records = f281_cache_records(&document_xml(&mut document));
+    assert_eq!(records[0].1, ["Native caption\t1"]);
+    assert!(records[0].0.contains("\\a Figure") && !records[0].0.contains("\\s Figure"));
+}
+
+#[test]
+fn generated_table_targets_use_one_post_insertion_snapshot() {
+    let mut document = Document::new();
+    let mut index = 0;
+    f281_paragraph(&mut document, &mut index, "table boundary", false);
+    for entry in 0..48 {
+        f281_field(
+            &mut document,
+            &mut index,
+            &format!("F281Source{entry:02} "),
+            &format!("XE Item{entry:02}"),
+            "",
+            true,
+        )
+        .unwrap();
+    }
+    let before = document.layout_deterministic().unwrap();
+    let source_before = before
+        .layout
+        .pages
+        .iter()
+        .find(|page| f252_page_text(page).contains("F281Source00"))
+        .unwrap()
+        .displayed_page_number;
+    let boundary = document.paragraph_story_location(0).unwrap().unwrap();
+    document
+        .insert_index(
+            &boundary,
+            &rdocx::IndexOptions {
+                entry_page_separator: "\t".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let report = document.rebuild_generated_tables().unwrap();
+    assert_eq!(report.index_entries, 48);
+    let final_snapshot = document.layout_deterministic().unwrap();
+    let xml = document_xml(&mut document);
+    let paragraphs = f281_paragraph_fragments(&xml);
+    let mut values = Vec::new();
+    for paragraph in &paragraphs {
+        for content in paragraph.runs.iter().flat_map(|run| &run.content) {
+            let rdocx_oxml::text::RunContent::Field(field) = content else {
+                continue;
+            };
+            if field.instruction.name != "PAGEREF" {
+                continue;
+            }
+            let rdocx_oxml::text::FieldArgument::Text(target) = &field.instruction.arguments[0]
+            else {
+                panic!("page target must be literal");
+            };
+            let actual = final_snapshot.bookmark_page_section(target).unwrap();
+            assert_eq!(field.cached_result, actual.displayed_page.to_string());
+            values.push(actual.displayed_page);
+        }
+    }
+    assert_eq!(values.len(), 48);
+    assert!(
+        values[0] > source_before,
+        "provisional tables must precede page measurement"
+    );
+}
+
+#[test]
+fn generated_tables_preserve_qualified_source_metadata_and_locked_caches() {
+    let body = r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="urn:f281-preserved"><q:body><x:source x:kept="exact"/><q:p x:source="marker"><q:r><q:t>source</q:t></q:r><q:r><q:fldChar q:fldCharType="begin"/><q:instrText xml:space="preserve"> XE Alpha </q:instrText><q:fldChar q:fldCharType="separate"/><q:fldChar q:fldCharType="end"/></q:r></q:p><q:p><q:fldSimple q:instr="INDEX \z 1033" q:fldLock="1"><q:r><q:rPr><q:i/></q:rPr><q:t>locked cache</q:t></q:r></q:fldSimple></q:p><q:p><q:fldSimple q:instr="INDEX \z 1033" x:format="producer"><q:r><q:t>producer cache</q:t></q:r></q:fldSimple></q:p><q:p><q:fldSimple q:instr="INDEX \z 1033"><q:r><q:t>old supported cache</q:t></q:r></q:fldSimple></q:p><q:sectPr/></q:body></q:document>"#;
+    let mut document = document_with_field_parts(body, None, None);
+    let before = document_xml(&mut document);
+    let report = document.rebuild_generated_tables().unwrap();
+    assert_eq!(report.index_entries, 1);
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains("locked cache"))
+    );
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains("unsupported simple owner"))
+    );
+    let after = document_xml(&mut document);
+    for preserved in [
+        r#"<x:source x:kept="exact"/>"#,
+        r#"x:source="marker""#,
+        r#"<q:instrText xml:space="preserve"> XE Alpha </q:instrText>"#,
+        r#"<q:fldSimple q:instr="INDEX \z 1033" q:fldLock="1"><q:r><q:rPr><q:i/></q:rPr><q:t>locked cache</q:t></q:r></q:fldSimple>"#,
+        r#"<q:fldSimple q:instr="INDEX \z 1033" x:format="producer"><q:r><q:t>producer cache</q:t></q:r></q:fldSimple>"#,
+    ] {
+        assert!(before.contains(preserved));
+        assert!(after.contains(preserved), "{preserved}");
+    }
+    assert!(!after.contains("old supported cache"));
+    let bytes = document.to_bytes().unwrap();
+    let mut reopened = Document::from_bytes(&bytes).unwrap();
+    assert_eq!(document_xml(&mut reopened), after);
+}
+
+#[test]
+fn generated_tables_retain_complete_unmeasured_collation_owners() {
+    let retained = r#"<w:fldSimple w:instr="INDEX \z 1033"><w:r><w:rPr><w:i/></w:rPr><w:t>original Unicode owner cache</w:t></w:r></w:fldSimple>"#;
+    let source = r#"<w:p><w:r><w:t>source</w:t></w:r><w:r><w:fldChar w:fldCharType="begin"/><w:instrText>XE &quot;Éclair&quot;</w:instrText><w:fldChar w:fldCharType="separate"/><w:fldChar w:fldCharType="end"/></w:r></w:p>"#;
+    let mut isolated = document_with_field_parts(
+        &wrap_word_body(&format!("{source}<w:p>{retained}</w:p>")),
+        None,
+        None,
+    );
+    let before = isolated.to_bytes().unwrap();
+    let report = isolated.rebuild_generated_tables().unwrap();
+    assert_eq!(report.index_entries, 0);
+    assert_eq!(
+        report.diagnostics,
+        ["generated table retains source keys outside captured en-US ASCII collation"]
+    );
+    assert_eq!(isolated.to_bytes().unwrap(), before);
+
+    let supported_source = r#"<w:p><w:r><w:t>other source</w:t></w:r><w:r><w:fldChar w:fldCharType="begin"/><w:instrText>XE Alpha \f a</w:instrText><w:fldChar w:fldCharType="separate"/><w:fldChar w:fldCharType="end"/></w:r></w:p>"#;
+    let supported = r#"<w:p><w:fldSimple w:instr="INDEX \z 1033 \f a"><w:r><w:t>old supported cache</w:t></w:r></w:fldSimple></w:p>"#;
+    let mut mixed = document_with_field_parts(
+        &wrap_word_body(&format!(
+            "{source}{supported_source}<w:p>{retained}</w:p>{supported}"
+        )),
+        None,
+        None,
+    );
+    let report = mixed.rebuild_generated_tables().unwrap();
+    assert_eq!(report.index_entries, 1);
+    assert_eq!(
+        report.diagnostics,
+        ["generated table retains source keys outside captured en-US ASCII collation"]
+    );
+    let xml = document_xml(&mut mixed);
+    assert!(xml.contains(retained));
+    assert!(!xml.contains("old supported cache"));
+    let mut reopened = Document::from_bytes(&mixed.to_bytes().unwrap()).unwrap();
+    assert!(document_xml(&mut reopened).contains(retained));
+}
+
+#[test]
+fn generated_table_targets_qualify_related_and_cell_owners() {
+    let mut document = Document::new();
+    document.add_paragraph("body source");
+    document.set_header("header source");
+    document.set_footer("footer source");
+    document
+        .add_table(1, 1)
+        .row(0)
+        .unwrap()
+        .cell(0)
+        .unwrap()
+        .set_text("cell source");
+    let reference = document.paragraph_story_location(0).unwrap().unwrap();
+    let footnote = document
+        .create_footnote(&reference, "footnote source")
+        .unwrap();
+    let reference = document.paragraph_story_location(0).unwrap().unwrap();
+    let endnote = document
+        .create_endnote(&reference, "endnote source")
+        .unwrap();
+    for (kind, label) in [
+        (StoryKind::Body, "Body"),
+        (StoryKind::Header, "Header"),
+        (StoryKind::Footer, "Footer"),
+        (StoryKind::TableCell, "Cell"),
+    ] {
+        let story = f254_story(&document, kind);
+        let location = f254_item(&document, &story, 0);
+        document
+            .insert_index_entry(
+                &StoryRunPosition {
+                    location,
+                    run_index: 0,
+                },
+                &rdocx::IndexEntry {
+                    levels: vec![label.into()],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+    for (note, label) in [(false, "Footnote"), (true, "Endnote")] {
+        let story = if note {
+            document.endnote_story(endnote).unwrap().unwrap()
+        } else {
+            document.footnote_story(footnote).unwrap().unwrap()
+        };
+        let location = f254_item(&document, &story, 0);
+        document
+            .insert_index_entry(
+                &StoryRunPosition {
+                    location,
+                    run_index: 0,
+                },
+                &rdocx::IndexEntry {
+                    levels: vec![label.into()],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+    let body = f254_story(&document, StoryKind::Body);
+    document
+        .insert_index(&ContentLocation::end(body), &rdocx::IndexOptions::default())
+        .unwrap();
+    let report = document.rebuild_generated_tables().unwrap();
+    assert_eq!(report.index_entries, 6);
+    assert_eq!(report.bookmark_count, 6);
+    assert!(report.diagnostics.is_empty(), "{:?}", report.diagnostics);
+    let records = f281_cache_records(&document_xml(&mut document));
+    assert_eq!(
+        records[0]
+            .1
+            .iter()
+            .map(|entry| entry.split(", ").next().unwrap())
+            .collect::<Vec<_>>(),
+        ["Body", "Cell", "Endnote", "Footer", "Footnote", "Header"]
+    );
+    let snapshot = document.layout_deterministic().unwrap();
+    let paragraphs = f281_paragraph_fragments(&document_xml(&mut document));
+    for field in paragraphs
+        .iter()
+        .flat_map(|paragraph| &paragraph.runs)
+        .flat_map(|run| &run.content)
+        .filter_map(|content| match content {
+            rdocx_oxml::text::RunContent::Field(field) if field.instruction.name == "PAGEREF" => {
+                Some(field)
+            }
+            _ => None,
+        })
+    {
+        let rdocx_oxml::text::FieldArgument::Text(target) = &field.instruction.arguments[0] else {
+            panic!("target must be literal");
+        };
+        assert_eq!(
+            field.cached_result,
+            snapshot
+                .bookmark_page_section(target)
+                .unwrap()
+                .displayed_page
+                .to_string()
+        );
+    }
+}
+
+#[test]
+fn generated_tables_preserve_foreign_w_binding_and_opaque_siblings() {
+    let opaque = r#"<w:p><w:r><w:t>opaque</w:t></w:r></w:p>"#;
+    let xml = format!(
+        r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w="urn:producer"><q:body>{opaque}<q:p><q:r><q:t>source</q:t></q:r><q:fldSimple q:instr="XE Alpha"/></q:p><q:p><q:fldSimple q:instr="INDEX \z 1033"><q:r><q:t>OLD</q:t></q:r></q:fldSimple></q:p><q:sectPr/></q:body></q:document>"#
+    );
+    let mut document = document_with_field_parts(&xml, None, None);
+    let before = document.to_bytes().unwrap();
+    let error = document.rebuild_generated_tables().unwrap_err().to_string();
+    assert!(error.contains("shadowed `w` namespace"), "{error}");
+    assert!(!error.contains("inventory"), "{error}");
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let unchanged = document_xml(&mut document);
+    assert!(unchanged.contains(opaque));
+    assert!(unchanged.contains(r#"xmlns:w="urn:producer""#));
+    let safe_opaque = opaque.replace("w:", "x:");
+    let safe_xml = xml.replace(opaque, &safe_opaque).replace(
+        r#"xmlns:w="urn:producer""#,
+        r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="urn:producer""#,
+    );
+    let mut document = document_with_field_parts(&safe_xml, None, None);
+    let report = document.rebuild_generated_tables().unwrap();
+    assert_eq!(report.index_entries, 1);
+    assert!(report.diagnostics.is_empty());
+    let after = document_xml(&mut document);
+    assert!(after.contains(&safe_opaque));
+    assert_eq!(f281_cache_records(&after)[0].1, ["Alpha, 1"]);
+    let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(document_xml(&mut reopened), after);
+}
+
+#[test]
+fn generated_tables_close_simple_owner_local_cache_namespaces() {
+    let preserved = r#"<x:metadata x:value="exact"><x:child/></x:metadata>"#;
+    let retained = r#"<q:fldSimple xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="urn:producer" q:instr="INDEX \z 1033" x:format="opaque"><q:r><q:t>retained</q:t></q:r></q:fldSimple>"#;
+    let xml = format!(
+        r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="urn:producer"><w:body>{preserved}<w:p><w:fldSimple w:instr="XE Alpha"/></w:p><w:p><q:fldSimple xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main" q:instr="INDEX \z 1033"><q:r><q:t>OLD</q:t></q:r><!--owned cache comment--><q:r><q:t>TAIL</q:t></q:r></q:fldSimple></w:p><w:p>{retained}</w:p><w:sectPr/></w:body></w:document>"#
+    );
+    let mut document = document_with_field_parts(&xml, None, None);
+    let report = document.rebuild_generated_tables().unwrap();
+    assert_eq!(report.index_entries, 1);
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|message| message.contains("unsupported simple owner"))
+    );
+    let after = document_xml(&mut document);
+    assert!(after.contains(preserved));
+    assert!(after.contains(retained));
+    assert_eq!(f281_cache_records(&after)[0].1, ["Alpha, 1"]);
+    oxml_core::xml::validate_strict_xml_1_0(after.as_bytes()).unwrap();
+    let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(document_xml(&mut reopened), after);
+}
+
+#[test]
+fn generated_tables_materialize_empty_simple_owners_and_retain_refusals() {
+    let locked = r#"<w:fldSimple w:instr="INDEX \z 1033" w:fldLock="1"/>"#;
+    let unsupported = r#"<w:fldSimple w:instr="INDEX \z 1041"/>"#;
+    let xml = format!(
+        r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>source</w:t></w:r><w:fldSimple w:instr="XE Alpha"/><w:fldSimple w:instr="TA \l Authority \s Key \c 1"/></w:p><w:p><w:r><w:t>Figure </w:t></w:r><w:fldSimple w:instr="SEQ Figure"/><w:r><w:t>: Caption</w:t></w:r></w:p><w:p><w:fldSimple w:instr="INDEX \z 1033"/></w:p><w:p><w:fldSimple w:instr="TOA \c 1"/></w:p><w:p><w:fldSimple w:instr="TOC \c Figure"/></w:p><w:p>{locked}</w:p><w:p>{unsupported}</w:p><w:sectPr/></w:body></w:document>"#
+    );
+    let mut document = document_with_field_parts(&xml, None, None);
+    let report = document.rebuild_generated_tables().unwrap();
+    assert_eq!(
+        (
+            report.index_entries,
+            report.authority_entries,
+            report.figure_entries
+        ),
+        (1, 1, 1)
+    );
+    assert_eq!(report.diagnostics.len(), 2);
+    let after = document_xml(&mut document);
+    let records = f281_cache_records(&after);
+    assert_eq!(records[0].1, ["Alpha, 1"]);
+    assert_eq!(records[1].1, ["Authority\t1"]);
+    assert_eq!(records[2].1, ["Figure 1: Caption\t1"]);
+    assert!(after.contains(locked));
+    assert!(after.contains(unsupported));
+    let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(document_xml(&mut reopened), after);
+    let xml = xml.replace("XE Alpha", "XE Alpha \\r MissingRange");
+    let mut document = document_with_field_parts(&xml, None, None);
+    let before = document.to_bytes().unwrap();
+    assert!(document.rebuild_generated_tables().is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+}

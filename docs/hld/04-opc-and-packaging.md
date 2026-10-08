@@ -4,6 +4,17 @@ Owner: `oxml-opc`, with media naming in `oxml-media`.
 
 ## The package
 
+Generated-table edits stage source targets and provisional cache paragraphs
+in one candidate. Only the owned separator-to-end cache span is replaced.
+Supported simple generated owners expand to complex fields with the exact
+producer instruction and result XML retained during expansion. Expanded names
+and ancestor namespace bindings qualify every owner and generated paragraph.
+Locked fields, unsupported formatting, unsupported locales and unmeasured sort
+keys retain their complete owner and cache with diagnostics. Unknown source
+XML and original style definitions stay untouched. Missing, ambiguous or
+unplaced required targets and malformed spans abort without publishing any
+candidate part.
+
 ```rust
 pub struct OpcPackage {
     pub content_types: ContentTypes,
@@ -1643,3 +1654,13 @@ story ownership, and non-decimal section page formats retain their original
 cache. Every written field becomes clean. A parse, layout, source-correlation,
 serialization, or reopen failure publishes neither package bytes nor typed
 state.
+
+Generated-table source projection retains every producer namespace binding,
+including a foreign binding for the conventional `w` prefix. A safe alias for
+Word content rebuilds through the checked inventory. If checked target insertion
+requires canonical serialization under a retained conflicting prefix, the
+existing serializer boundary refuses atomically and preserves the complete
+package and cache. Projection never rebinds opaque content to make insertion
+possible. Simple cache expansion closes each replayed subtree over the owner's
+namespace scope and validates the staged part before publication. Opened and
+self-closing simple owners use the same ownership and refusal checks.

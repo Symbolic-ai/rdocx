@@ -12505,7 +12505,8 @@ fn switch_is_known_flag(field_name: &str, switch_name: &str) -> bool {
         "STYLEREF" => &["l", "n", "t", "w", "p"],
         "TOC" => &["h", "z", "u", "w", "x"],
         "TC" => &["n"],
-        "TOA" => &["b", "p"],
+        "TOA" => &["b", "h", "p"],
+        "INDEX" => &["r"],
         "XE" | "TA" => &["b", "i"],
         "INCLUDETEXT" => &["!"],
         "FILENAME" => &["p"],
@@ -12517,12 +12518,24 @@ fn switch_is_known_flag(field_name: &str, switch_name: &str) -> bool {
 
 fn switch_takes_argument(field_name: &str, switch_name: &str) -> bool {
     let switch_name = switch_name.to_ascii_lowercase();
+    if field_name == "INDEX" && switch_name == "r" {
+        return false;
+    }
     matches!(
         switch_name.as_str(),
         "*" | "#" | "@" | "r" | "s" | "d" | "b" | "f"
     ) || field_name == "INCLUDETEXT" && switch_name == "c"
         || field_name == "TOC" && matches!(switch_name.as_str(), "o" | "n" | "t" | "p")
         || field_name == "TC" && switch_name == "l"
+        || field_name == "INDEX"
+            && matches!(
+                switch_name.as_str(),
+                "z" | "f" | "h" | "e" | "l" | "g" | "k" | "s"
+            )
+        || field_name == "XE" && matches!(switch_name.as_str(), "f" | "r" | "t")
+        || field_name == "TA" && matches!(switch_name.as_str(), "l" | "s" | "c" | "r")
+        || field_name == "TOA" && matches!(switch_name.as_str(), "c" | "e" | "l" | "g")
+        || field_name == "TOC" && matches!(switch_name.as_str(), "c" | "a")
         || matches!(field_name, "DISPLAYBARCODE" | "MERGEBARCODE")
             && matches!(switch_name.as_str(), "h" | "q" | "p" | "c")
 }
@@ -17085,6 +17098,107 @@ mod tests {
         );
         let producer_raw = r#"<w:fldSimple w:instr='PRODUCER \q "value"'><w:r><w:t>cache</w:t></w:r></w:fldSimple>"#;
         assert!(serialized_paragraph(&parse_paragraph(producer_raw)).contains(producer_raw));
+    }
+
+    #[test]
+    fn generated_table_operands_parse_bare_and_quoted_without_flag_collisions() {
+        for raw in [
+            r#"INDEX \z 1033 \f a \h A \e " | " \l "; " \g " to " \k " => " \s Chapter \r"#,
+            r#"INDEX \z "1033" \f "a" \h "A" \e " | " \l "; " \g " to " \k " => " \s "Chapter" \r"#,
+        ] {
+            let field = Field::from_raw(raw, FieldForm::Complex, vec![]).unwrap();
+            assert!(field.instruction.arguments.is_empty());
+            for (name, operand) in [
+                ("z", "1033"),
+                ("f", "a"),
+                ("h", "A"),
+                ("e", " | "),
+                ("l", "; "),
+                ("g", " to "),
+                ("k", " => "),
+                ("s", "Chapter"),
+            ] {
+                assert_eq!(
+                    field
+                        .instruction
+                        .switches
+                        .iter()
+                        .find(|switch| switch.name == name)
+                        .unwrap()
+                        .argument,
+                    Some(FieldArgument::Text(operand.into()))
+                );
+            }
+            assert_eq!(field.instruction.switches.last().unwrap().argument, None);
+            assert_eq!(field.effective_instruction_text(), raw);
+        }
+        for (raw, operands, flags) in [
+            (
+                r#"XE "Alpha:Beta" \f a \r Range \t "See Alpha" \b \i"#,
+                vec![("f", "a"), ("r", "Range"), ("t", "See Alpha")],
+                vec!["b", "i"],
+            ),
+            (
+                r#"TA \l "Long citation" \s Short \c 16 \r Range \b \i"#,
+                vec![
+                    ("l", "Long citation"),
+                    ("s", "Short"),
+                    ("c", "16"),
+                    ("r", "Range"),
+                ],
+                vec!["b", "i"],
+            ),
+            (
+                r#"TOA \c 1 \e " | " \l "; " \g " to " \h \p"#,
+                vec![("c", "1"), ("e", " | "), ("l", "; "), ("g", " to ")],
+                vec!["h", "p"],
+            ),
+            (r#"TOC \c Figure \h"#, vec![("c", "Figure")], vec!["h"]),
+            (
+                r#"TOC \a "Custom label" \h"#,
+                vec![("a", "Custom label")],
+                vec!["h"],
+            ),
+        ] {
+            let field = Field::from_raw(raw, FieldForm::Simple, vec![]).unwrap();
+            for (name, operand) in operands {
+                assert_eq!(
+                    field
+                        .instruction
+                        .switches
+                        .iter()
+                        .find(|switch| switch.name == name)
+                        .unwrap()
+                        .argument,
+                    Some(FieldArgument::Text(operand.into()))
+                );
+            }
+            for name in flags {
+                assert_eq!(
+                    field
+                        .instruction
+                        .switches
+                        .iter()
+                        .find(|switch| switch.name == name)
+                        .unwrap()
+                        .argument,
+                    None
+                );
+            }
+        }
+        let reference = parse_field_instruction(r#"REF \h "target name""#);
+        assert_eq!(
+            reference.arguments,
+            vec![FieldArgument::Text("target name".into())]
+        );
+        assert_eq!(reference.switches[0].argument, None);
+        let sequence = parse_field_instruction(r#"SEQ Chapter \r 7"#);
+        assert_eq!(
+            sequence.switches[0].argument,
+            Some(FieldArgument::Text("7".into()))
+        );
+        let malformed = parse_field_instruction(r#"TOA \c "1"#);
+        assert!(!malformed.quotes_are_balanced());
     }
 
     #[test]

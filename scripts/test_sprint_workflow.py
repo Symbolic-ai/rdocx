@@ -7817,6 +7817,9 @@ Pedro Assumpcao and the rdocx maintainers.
                 # F-280 completes source-qualified captions, SEQ and REF.
                 # Unqualified source graphs retain caches with diagnostics.
                 280,
+                # F-281 completes generated indexes, figures and authorities.
+                # Unmeasured collation owners retain their complete caches.
+                281,
             }
         }
         self.assertEqual(

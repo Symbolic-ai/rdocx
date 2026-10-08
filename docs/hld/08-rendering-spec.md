@@ -1827,6 +1827,25 @@ system codec.
 
 ## Word bookmark field pagination
 
+INDEX, caption-selected TOC and TOA rebuilding creates provisional entries
+before obtaining one immutable deterministic `WordLayoutResult`. Every page
+and range endpoint is read through `bookmark_page_section` from that result.
+The transaction never measures source pages before table insertion and never
+runs a second paginator. A range uses both checked bookmark endpoints, including
+the sequence context at each endpoint for chapter-prefixed INDEX entries.
+Caption selection uses TOC `c` or `a`, independently of its `s` page prefix.
+
+INDEX hierarchy, repeated-page suppression, cross-reference punctuation,
+run-in entries, page emphasis and chapter separators follow the pinned en-US
+captures. Sorting is bounded to ASCII keys with case-sensitive grouping and
+captured lowercase-first ties. Other sort keys retain the generated owner.
+Caption entries preserve rich source runs and use real caption SEQ decisions,
+while styled TOC selection follows its explicit style set. Authority occurrences
+join by category-local short citation and display the first long citation.
+Passim applies at the captured five-distinct-page threshold. TOA `h` emits
+category headings, not hyperlinks. Category headings follow the sixteen
+captured default en-US labels, with categories 8 through 16 displayed numerically.
+
 Word `REF` fields resolve the text of one uniquely correlated typed main-story
 bookmark before shaping. Paragraph correlation follows document order through
 body paragraphs, laid-out tables, and modeled content controls. A missing or

@@ -1310,6 +1310,14 @@ pub struct StoryItemRef<'a> {
     location: ContentLocation,
 }
 
+/// One exact owner slice used for generated-table discovery and cache edits.
+pub(crate) struct GeneratedStoryOwner {
+    pub(crate) story: StoryId,
+    pub(crate) range: std::ops::Range<usize>,
+    pub(crate) xml: Vec<u8>,
+    pub(crate) namespaces: BTreeMap<String, String>,
+}
+
 /// One owned story-item projection materialized from a single story inventory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoryItemSnapshot {
@@ -15147,6 +15155,96 @@ impl Document {
         self.theme_part_name = Some(theme_part);
         self.theme_dirty = false;
         Ok(())
+    }
+
+    pub(crate) fn generated_table_paragraph_positions(
+        &self,
+    ) -> Result<Vec<(ContentLocation, std::ops::Range<usize>)>> {
+        let mut result = Vec::new();
+        for story in self.stories()? {
+            if story.kind == StoryKind::Comment {
+                continue;
+            }
+            let (source, _) = self.story_source_and_owner(&story)?;
+            let xml = self
+                .package
+                .get_part(&source.part_name)
+                .unwrap_or(source.xml.as_ref());
+            let owner = scan_story_owners(xml, source.root_kind)?
+                .into_iter()
+                .find(|owner| owner.kind == story.kind && owner.owner_index == story.owner_index)
+                .ok_or_else(|| {
+                    Error::Other(
+                        "generated paragraph owner disappeared from retained source".into(),
+                    )
+                })?;
+            for (index, item) in scan_story_items(xml, &owner)?.iter().enumerate() {
+                let spans = match item.kind {
+                    StoryItemKind::Paragraph => vec![(vec![index], item.full.clone())],
+                    StoryItemKind::ContentControl => scan_story_control_paragraphs(xml, item)?
+                        .into_iter()
+                        .enumerate()
+                        .map(|(paragraph, span)| (vec![index, paragraph], span))
+                        .collect(),
+                    _ => continue,
+                };
+                for (path, range) in spans {
+                    let location =
+                        ContentLocation::new(story.clone(), StoryItemKind::Paragraph, path);
+                    self.story_range_paragraph_source(&location)?;
+                    result.push((location, range));
+                }
+            }
+        }
+        result.sort_by_key(|(location, range)| {
+            (location.story().part_name().to_owned(), range.start)
+        });
+        Ok(result)
+    }
+
+    /// Exact physical story-owner content, from the existing checked inventory.
+    pub(crate) fn generated_table_story_sources(&self) -> Result<Vec<GeneratedStoryOwner>> {
+        let mut result = Vec::new();
+        let mut seen = HashSet::new();
+        for source in self.story_sources()? {
+            let xml = if source.part_name == self.doc_part_name {
+                self.package
+                    .get_part(&source.part_name)
+                    .unwrap_or(source.xml.as_ref())
+            } else {
+                source.xml.as_ref()
+            };
+            for owner in scan_story_owners(xml, source.root_kind)? {
+                if matches!(owner.kind, StoryKind::Comment | StoryKind::TableCell)
+                    || !seen.insert((owner.kind, source.part_name.clone(), owner.owner_index))
+                {
+                    continue;
+                }
+                let mut reader = quick_xml::Reader::from_reader(&xml[owner.full.clone()]);
+                let mut buffer = Vec::new();
+                let start = match reader.read_event_into(&mut buffer).map_err(|error| {
+                    Error::Other(format!("story owner start scan failed: {error}"))
+                })? {
+                    Event::Start(_) => owner.full.start + reader.buffer_position() as usize,
+                    Event::Empty(_) => continue,
+                    _ => return Err(Error::Other("story owner has no start element".into())),
+                };
+                let end = story_owner_content_end(xml, &owner)?;
+                let scope = story_namespace_scope_at(xml, start)?;
+                result.push(GeneratedStoryOwner {
+                    story: StoryId {
+                        kind: owner.kind,
+                        part_name: source.part_name.clone(),
+                        owner_index: owner.owner_index,
+                        fingerprint: owner.fingerprint,
+                    },
+                    range: start..end,
+                    xml: xml.to_vec(),
+                    namespaces: scope,
+                });
+            }
+        }
+        Ok(result)
     }
 
     fn story_sources(&self) -> Result<Vec<StorySource<'_>>> {

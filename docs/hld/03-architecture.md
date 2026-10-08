@@ -414,6 +414,17 @@ rule that no `oxml-*` crate depends on either facade family.
 
 ## What stays put
 
+Generated-table source discovery and rebuilding stay in `rdocx::field`.
+Concrete XE and TA markers, INDEX, caption-selected TOC and numbered TOA options
+use the existing checked story inventory and shared dynamic owned-span scanner.
+The shared instruction grammar in `rdocx-oxml::text` owns bare and quoted
+operands, including INDEX LCIDs and TA/TOA categories. It distinguishes INDEX
+run-in and TOA heading flags from operands without changing other opcode rules.
+Source discovery excludes every generated cache and correlates accepted marker
+and caption paragraphs with their exact retained OPC owner. Source SEQ values
+come from the existing physical sequence snapshot rather than another counter
+interpreter. Existing `rebuild_toc` keeps its compatibility contract.
+
 `rdocx-oxml` remains a real crate holding the WordprocessingML grammar for
 text, properties, tables, styles, numbering, borders, headers and footers,
 footnotes, comments, settings, placeholder replacement, and `drawing.rs`. The
