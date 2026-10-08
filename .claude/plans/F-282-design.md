@@ -230,6 +230,20 @@ Authored tags and GUIDs are validated and unique in the collection. Caller GUIDs
 
 Imported locale spelling is preserved independently of the numeric facade projection. A valid lexical language tag such as es-ES can map to both documented LCIDs 1034 and 3082. Do not choose the first table row or invent a numeric identity. When no independently grounded unique mapping exists, BibliographySourceInfo.supported is None and its diagnostics names the non-lossless locale projection. Internal formatting still supports the lexical locale and must never use unsupported-cache fallback for this projection limitation. Preserve the source XML exactly and reject an ambiguous typed source replacement atomically. Tests distinguish explicit 1034, explicit 3082 and imported es-ES, prove byte-preserving inspection and fail-closed mutation, and retain full formatter coverage. The added diagnostics field is additive public API and earns existing README, public API and packaging checks.
 
+Imported formatting-locale operands also support independently measured lexical
+language values. The native source and field discriminator at index
+77ed38cf20956dc2c0dda9081ad257b1affb90852e8489a35335c2e304c47686
+retains field instructions while fr-FR and es-ES select French and Spanish on
+an absent-source Patent. Preserve original operand spelling and apply the
+measured final-l selection and explicit source-locale precedence. Numeric1034
+normalizes to es-ES_tradnl in this producer, while3082 normalizes to es-ES.
+Support that measured traditional spelling distinctly without inferring
+modern and traditional collation equality. The ambiguous public es-ES numeric
+projection remains absent with diagnostics, while internal lexical formatting
+remains supported. This formatting-l evidence does not establish lexical-f
+filter semantics or an exhaustive accepted-alias set. Keep producer source
+normalization separate from library byte-preservation assertions.
+
 An owned existing source mutation replaces only selected modeled property spans. Retain original unknown root attributes, namespace declarations, style settings, locale data, nonstandard source types, producer contributor extensions, unknown child subtrees and unrelated custom XML bytes. Metadata inside a replaced standard simple-text property is not silently discarded, such input is rejected as an ambiguous owned property. A no-op operation preserves package bytes.
 
 Implement independent concrete Rust formatting for all twelve styles. Use exhaustive BibliographyStyle and BibliographySourceKind matches that select concrete source-member assembly rules. Locale records supply observed names, dates, labels, separators, punctuation and collation policy. Assemble directly into existing CT_R, CT_P and CT_Tbl result structures with run, paragraph, table, grid and cell properties, avoiding a second rendering tree or a forwarding wrapper. Reuse the existing ordered story-block representation and atomic mutation transaction for fields spanning sibling paragraphs and tables. Name-list and citation disambiguation state is computed once per source collection. Numeric styles use the observed global citation/source order, while name/title styles use their recorded collation and tie-break rules. Do not sort all locales by Unicode scalar values or approximate full sorting with ASCII lowercase.
