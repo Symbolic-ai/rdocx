@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 23 | 1 | 30 |
-| X, Cross-cutting | 200 | 189 | 4 | 3 |
-| **Total** | **525** | **462** | **5** | **54** |
+| X, Cross-cutting | 200 | 190 | 3 | 3 |
+| **Total** | **525** | **463** | **4** | **54** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -741,7 +741,7 @@ regenerated, never hand-edited.
 | F-X185 | Expose comment anchor text and story location | S90 | M | done |
 | F-X186 | Move comment anchors without losing threads | S90 | M | done |
 | F-X187 | Scoped paragraph and cell text replacement | S90 | M | done |
-| F-X188 | Preserve comment ownership when replacing or removing whole stories | S90 | L | in-progress |
+| F-X188 | Preserve comment ownership when replacing or removing whole stories | S90 | L | done |
 | F-X190 | Preserve cached text in multi-run complex field story snapshots | S90 | M | pending |
 | F-X189 | Prepare Word 0.16.0 and PowerPoint 0.14.0 families | S90 | L | pending |
 <!-- AUTOGEN:backlog-MX END -->

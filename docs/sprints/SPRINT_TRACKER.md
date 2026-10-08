@@ -842,3 +842,5 @@ or changing the reviewed release boundary. Keep Issue281 open for F-184.
 | F-X186 | S90 | M | 2 | 1 | 2026-10-08 | Identity-preserving native/Python/CLI comment movement for hadim Issue284 and adapted PR287, ALL pass4 clean, facade1770/CLI65/Python94, hash49 unchanged |
 
 | F-X187 | S90 | M | 2 | 1 | 2026-10-08 | Owned native and Python scoped replacement for hadim Issue285 and adapted PR286, direct-control correction from PR287, ALL pass2 clean, native2422/Python97/CLI11, hash49 unchanged |
+
+| F-X188 | S90 | L | 4 | not recorded | 2026-10-09 | Issues288/292 whole-story ownership and qualified glossary omission, ALL pass3 clean, native1878/Python99, hash49 unchanged. Actual effort was not measured |

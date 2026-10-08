@@ -18180,3 +18180,98 @@ then full-catalogue F-282 resumes from its authenticated paused backup.
 Issues264 and291 remain untouched. No push, main merge, tag, publication or
 GitHub closure occurred. Complete issue and PR disposition waits for verified
 sprint close, and publication retains separate reviewed-SHA approval.
+
+
+### F-X188, Preserve comment ownership across whole-story edits
+
+**Sprint.** S90
+**Completed.** 2026-10-09
+**Size.** L, estimated 4 days, actual effort not recorded.
+
+**What was built.** Complete header and footer replacement transactions now
+reconcile removed comment threads before publication. Text, raw and image
+entrances preserve unrelated review state and live authoring identities.
+Imported physical story parts remain retained, while their proved markers
+retire only after the last effective modeled, inherited or opaque use.
+Glossary removal and replacement reconcile complete owned threads. Supported
+fragment creation, update, extraction and insertion omit transferred review
+markers before dependency capture. This addresses Hadrien Mary (`hadim`)'s
+[Issue288](https://github.com/tensorbee/rdocx/issues/288) and
+[Issue292](https://github.com/tensorbee/rdocx/issues/292), selectively adapting
+[PR290](https://github.com/tensorbee/rdocx/pull/290), head f7841769, and its
+isolated Issue292 commit33ac7827. The inherited PR287 stack is not imported
+unchanged or counted twice.
+
+**Non-obvious choices.** Four additive fallible native setters expose checked
+refusal. Existing native wrappers retain their documented panic convention,
+while Python setters propagate errors and advance revisions only on success.
+The ten installer boundaries validate a cloned output and publish the
+original staged candidate, preserving numbering and relationship handles.
+XML-invalid header text now refuses at entry with exact original bytes.
+Main and glossary-local review owners stay separate even with equal numeric
+ids. Malformed local mappings, orphan companions and shared marked physical
+note ownership refuse. Shared unannotated note sources remain supported.
+Qualified marker omission retains mixed carriers, opaque siblings and source
+package bytes. Plain dependency-free commented creation retains its existing
+refusal policy.
+
+Independent review D1 found unselected note owners entering omission. The
+repair follows only selected recursive footnote, textbox and endnote content.
+D2 found retained root background entering omission and dependency capture.
+Both now use namespace-complete transferred body content, with included
+physical final section properties treated separately. Generic fragment
+admission and dependency policy remain unchanged. Both defects have actual
+current-before failures and passing source-built controls. These later proofs
+are distinct from the three original exact claimed-Base failure logs.
+
+**Deviations from the design plan.** None. The plan records measured live
+identity, early refusal and selected-content clarifications. Historical
+fixture and compilation failures remain unqualified. Shared marked-note
+proof demonstrates validation ambiguity, not executed destructive deletion.
+
+**Spec sections touched.** Exactly HLD03 architecture, HLD04 package ownership,
+HLD10 bindings and HLD12 tests. All four integrated files equal the reviewed
+CodeHead. Affected README inventories describe the current archives.
+
+**Tests.** The named
+whole_story_removal_and_replacement_preserve_comment_closure gate fails at
+compiled claim Basece6d46ba, then passes the actual prepare rerun with one test
+executed in0.20s. Complete affected native suites pass1878 tests and doctests,
+with22 existing ignored. Fresh Python core99, strict mypy2.3.0 seven files and
+stubtest six modules pass against the authenticated rebuilt extension.
+Operation matrices cover all installer entrances and six header/footer
+variants, shared physical targets, complete root/reply/companion closure,
+actual notes, glossary-local ownership, reverse transfer, public insertion,
+source preservation and actual preparation/final-reopen atomic refusal.
+
+All13 scoped stages pass, including all-target checks, denied-warning Clippy
+and rustdoc, both WASM graphs, affected READMEs,140 workflow tests with two
+existing skips, prose0 and adapters26. Receiptcaec5e01 binds18 current inputs
+and all logs. The1363.87s run includes Clippy618.15s, whose sampled wait is in
+dynamic compiler dependency loading. Exact cause remains unproved. It
+completed naturally, with no process signal or retry. Runtime provenance
+a0a34be6 and retained extension16f6d427 authenticate current Python evidence.
+Independent ALL pass3 records zero defects, smells and nitpicks after resolving
+D1 and D2. Frozen binder0a1b4086 retains18 captured inputs,15 records and93 logs.
+
+Root opened actual and retained verified publication dry-run archives and
+compared every archived source/test member,25 facade and three CLI, exactly
+to the current source. Facade actual compressed/normalized/count tuple is
+1577846/8774660/36, one compressed byte above recorded1577845 within the
+existing64-byte allowance. CLI is72979/326487/8. Both remain below10MiB.
+No registry upload occurred.
+
+**Hash harness.** All49 worker entries unchanged. All21 integrated code,
+test, HLD, plan and review files match CodeHead5a5bb726 exactly. The plan-only
+merge overlap resolves to those exact reviewed bytes, with no semantic
+reconciliation or baseline movement. Final full integrated sprint verification
+and review remain due after the remaining waves.
+
+**Notes for future sessions.** CodeHead5a5bb726 precedes handoff-only4f02a17f.
+Integration1674306a consumes validated handoff488fd6bb. Keep
+work/f-x188-codex through sprint close and remove only its clean completed
+worktree. Issue291 is included as separate F-X190 in exclusive wave16 before
+F-282 resumes. This supersedes historical entries that excluded291. Issue264
+remains excluded, and Issue281 remains open for F-184. No push, main merge,
+tag, publication or GitHub closure occurred. Release preparation and separate
+reviewed-main-SHA publication approvals remain ahead.
