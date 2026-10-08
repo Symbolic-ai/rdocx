@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 23 | 1 | 30 |
-| X, Cross-cutting | 198 | 187 | 3 | 4 |
-| **Total** | **523** | **460** | **4** | **55** |
+| X, Cross-cutting | 198 | 187 | 4 | 3 |
+| **Total** | **523** | **460** | **5** | **54** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -739,7 +739,7 @@ regenerated, never hand-edited.
 | F-X183 | Correct table margins and legacy positioning | S90 | M | in-progress |
 | F-X184 | Safe comment ownership during content removal | S90 | L | done |
 | F-X185 | Expose comment anchor text and story location | S90 | M | done |
-| F-X186 | Move comment anchors without losing threads | S90 | M | pending |
+| F-X186 | Move comment anchors without losing threads | S90 | M | in-progress |
 | F-X187 | Scoped paragraph and cell text replacement | S90 | M | pending |
 | F-X188 | Preserve comment ownership when replacing or removing whole stories | S90 | L | pending |
 <!-- AUTOGEN:backlog-MX END -->
