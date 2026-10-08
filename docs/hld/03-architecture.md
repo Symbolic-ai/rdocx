@@ -1843,6 +1843,15 @@ interval is explicitly unsupported when re-anchoring those coordinates cannot
 represent it faithfully. Supported controls, revisions and ordinary field
 caches retain accepted-view semantics. Multi-paragraph insertion qualifies both
 source endpoints before publishing either, retaining stale-owner checks.
+`Document::move_comment` selects a complete root range and reference through
+that same qualified proof. Replies, unknown ids and incomplete or ambiguous
+sources refuse atomically. Moving preserves thread identity and metadata,
+transports the original reference properties and opaque attributes, and leaves
+mixed-run neighbors in source order. Destination paragraph identity and run
+boundaries rebase after removal. Only newly empty pure Google marker controls
+are pruned. `move_comment_to_text` shares the existing recursive literal finder
+and splitter without allocating a temporary thread.
+Rich comment query restores main-part namespace context once through the existing strict declaration replay. Paired XML events prove that names, non-namespace attributes and payload remain identical, yielding exact physical boundary correspondence. The mapped canonical and restored story-owner inventories must be bijective in physical spans, kind and owner index before canonical paragraph paths receive actual namespace scopes. Additional or reinterpreted owners refuse instead of redirecting a query. The existing checked paragraph span traversal serves both discovery and projection, with paragraph scopes inventoried in a bounded pass. Canonical locations, fingerprints and accepted run indices remain authoritative. Imported paragraph and block-local alias fields retain rich A7B, source-byte purity and usable move/reopen endpoints. Comment destination anchoring replays retained declarations before replacing package authority, while other anchor kinds keep their existing path. Redundant declaration replay is omitted only for a unique exact owner whose complete non-namespace event payload and local declarations match, with identical resolved element and attribute namespace facts throughout that owner. Redundant child declarations on a transported reference do not require global replay to reinterpret its shape. This owner-local proof permits unrelated modeled source normalization. Needed declarations still use the unchanged strict replay. The private pre-removal endpoint probe validates the caller's exact accepted endpoints without publishing destination namespace context, while the real Comment destination always preserves that authority before replacing source. Same-owner modeled alias plus local raw-field fixtures that already fail initial save remain outside this correction. Supported controls include separate unrelated root-bound modeled aliases and normalized properties in the same package.
 `StoryRunPosition` and `StoryRunRange` add checked `ContentLocation` ownership
 for body and table-cell paragraphs without changing `RunPosition`. A body
 location can also name a paragraph inside a block content control with a

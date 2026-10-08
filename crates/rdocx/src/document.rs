@@ -61,6 +61,7 @@ use oxml_core::custom_properties::{CustomProperties, CustomProperty};
 use rdocx_oxml::core_properties::CoreProperties;
 
 use crate::Length;
+use crate::comments::{StoryRunPosition, StoryRunRange};
 use crate::content_control::ContentControlRef;
 use crate::error::{Error, Result};
 use crate::paragraph::{Paragraph, ParagraphRef};
@@ -2071,6 +2072,7 @@ fn namespace_prefix(declaration_name: &str) -> String {
 
 #[derive(Debug)]
 struct NestedNamespaceOwner {
+    source: Range<usize>,
     local_name: String,
     declarations: Vec<(String, String)>,
     snapshot: LogicalOwnerSnapshot,
@@ -2828,6 +2830,7 @@ fn nested_modeled_namespace_owners(xml: &[u8]) -> Result<Vec<NestedNamespaceOwne
             marker_multiset_matches(&markers, &candidate_markers, true)
         });
         owners.push(NestedNamespaceOwner {
+            source: span.start..span.end,
             local_name: span.local_name.clone(),
             declarations,
             snapshot,
@@ -5669,6 +5672,108 @@ struct StoryItemSpan {
     sdt_context: Option<StorySdtContext>,
 }
 
+// Paired source events prove physical correspondence while permitting only
+// namespace declarations to differ. Non-namespace source remains exact.
+#[allow(clippy::type_complexity)] // Concrete physical map and changed namespace offsets form one proof.
+fn comment_namespace_source_boundaries(
+    canonical: &[u8],
+    restored: &[u8],
+) -> Result<Option<(BTreeMap<usize, usize>, Vec<usize>)>> {
+    let mut left = NsReader::from_reader(canonical);
+    let mut right = NsReader::from_reader(restored);
+    let mut boundaries = BTreeMap::new();
+    let mut changed_namespace_facts = Vec::new();
+    loop {
+        let left_start = left.buffer_position() as usize;
+        let right_start = right.buffer_position() as usize;
+        let a = left.read_event().map_err(|e| Error::Other(e.to_string()))?;
+        let b = right
+            .read_event()
+            .map_err(|e| Error::Other(e.to_string()))?;
+        let same = match (&a, &b) {
+            (Event::Start(a), Event::Start(b)) | (Event::Empty(a), Event::Empty(b)) => {
+                let attributes = |element: &BytesStart<'_>| -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+                    element
+                        .attributes()
+                        .filter_map(|attribute| match attribute {
+                            Ok(attribute)
+                                if attribute.key.as_ref() == b"xmlns"
+                                    || attribute.key.as_ref().starts_with(b"xmlns:") =>
+                            {
+                                None
+                            }
+                            Ok(attribute) => Some(Ok((
+                                attribute.key.as_ref().to_vec(),
+                                attribute.value.as_ref().to_vec(),
+                            ))),
+                            Err(error) => Some(Err(Error::Other(error.to_string()))),
+                        })
+                        .collect()
+                };
+                let a_attributes = attributes(a)?;
+                let b_attributes = attributes(b)?;
+                let same_namespaces = left.resolver().resolve_element(a.name()).0
+                    == right.resolver().resolve_element(b.name()).0
+                    && a.attributes()
+                        .filter_map(|attribute| attribute.ok())
+                        .filter(|attribute| {
+                            attribute.key.as_ref() != b"xmlns"
+                                && !attribute.key.as_ref().starts_with(b"xmlns:")
+                        })
+                        .all(|attribute| {
+                            left.resolver().resolve_attribute(attribute.key).0
+                                == right.resolver().resolve_attribute(attribute.key).0
+                        });
+                if !same_namespaces {
+                    changed_namespace_facts.push(left_start);
+                }
+                a.name() == b.name() && a_attributes == b_attributes
+            }
+            _ => a == b,
+        };
+        if !same {
+            return Ok(None);
+        }
+        boundaries.insert(left_start, right_start);
+        boundaries.insert(
+            left.buffer_position() as usize,
+            right.buffer_position() as usize,
+        );
+        if matches!(a, Event::Eof) {
+            break;
+        }
+    }
+    Ok(Some((boundaries, changed_namespace_facts)))
+}
+
+// Existing checked paragraph paths shared by discovery and rich projection.
+// Neither consumer invents a second index axis.
+fn story_range_paragraph_spans(
+    xml: &[u8],
+    owner: &StoryOwnerSpan,
+    story: &StoryId,
+) -> Result<Vec<(ContentLocation, Range<usize>)>> {
+    let mut paragraphs = Vec::new();
+    for (index, item) in scan_story_items(xml, owner)?.iter().enumerate() {
+        let spans = match item.kind {
+            StoryItemKind::Paragraph => vec![(vec![index], item.full.clone())],
+            StoryItemKind::ContentControl => scan_story_control_paragraphs(xml, item)?
+                .into_iter()
+                .enumerate()
+                .map(|(paragraph, span)| (vec![index, paragraph], span))
+                .collect(),
+            _ => continue,
+        };
+        for (path, span) in spans {
+            paragraphs.push((
+                ContentLocation::new(story.clone(), StoryItemKind::Paragraph, path),
+                span,
+            ));
+        }
+    }
+    Ok(paragraphs)
+}
+
 struct StoryLinkSpan {
     full: Range<usize>,
     rel_id: Option<String>,
@@ -6010,6 +6115,338 @@ fn story_word_prefixes_at(
         }
     }
     Ok(prefixes)
+}
+
+// Locate the selected reference's actual run without changing raw attributes.
+fn comment_reference_run_span(xml: &[u8], owner: &Range<usize>, id: i32) -> Result<Range<usize>> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut stack = Vec::<(bool, Vec<u8>, usize)>::new();
+    let mut found = Vec::new();
+    let mut buffer = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (ns, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(error.to_string()))?;
+        let word = word_element(&ns);
+        drop(ns);
+        match &event {
+            Event::Start(element) | Event::Empty(element) => {
+                if word
+                    && element.local_name().as_ref() == b"commentReference"
+                    && owner.contains(&before)
+                {
+                    let mut selected = false;
+                    for attr in element.attributes() {
+                        let attr = attr.map_err(|error| Error::Other(error.to_string()))?;
+                        let (ns, local) = reader.resolver().resolve_attribute(attr.key);
+                        if word_element(&ns) && local.as_ref() == b"id" {
+                            selected = attr
+                                .decoded_and_normalized_value(
+                                    XmlVersion::Implicit1_0,
+                                    reader.decoder(),
+                                )
+                                .map_err(|error| Error::Other(error.to_string()))?
+                                .parse::<i32>()
+                                .ok()
+                                == Some(id);
+                        }
+                    }
+                    if selected {
+                        let start = stack
+                            .iter()
+                            .rev()
+                            .find(|(word, name, _)| *word && name == b"r")
+                            .map(|(_, _, start)| *start)
+                            .ok_or_else(|| {
+                                Error::Other("comment reference has no source run".into())
+                            })?;
+                        found.push(start..story_element_end(xml, start)?);
+                    }
+                }
+                if matches!(event, Event::Start(_)) {
+                    stack.push((word, element.local_name().as_ref().to_vec(), before));
+                }
+            }
+            Event::End(_) => {
+                stack.pop();
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    if found.len() != 1 {
+        return Err(Error::Other(
+            "comment move requires one qualified reference run".into(),
+        ));
+    }
+    Ok(found.remove(0))
+}
+
+#[allow(clippy::type_complexity)] // Concrete edit spans, reference bytes and original run span.
+fn comment_move_source_edits(
+    xml: &[u8],
+    selected: &[Range<usize>],
+) -> Result<(Vec<Range<usize>>, Vec<u8>, Range<usize>)> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut stack = Vec::<(bool, Vec<u8>, usize)>::new();
+    let mut reference = None;
+    let mut controls = Vec::new();
+    let mut buffer = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (ns, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(error.to_string()))?;
+        let word = word_element(&ns);
+        drop(ns);
+        match &event {
+            Event::Start(element) | Event::Empty(element) => {
+                if selected.iter().any(|span| span.start == before) {
+                    for (_, _, start) in stack
+                        .iter()
+                        .filter(|(word, name, _)| *word && name == b"sdt")
+                    {
+                        let span = *start..story_element_end(xml, *start)?;
+                        if !controls.contains(&span) {
+                            controls.push(span);
+                        }
+                    }
+                    if word && element.local_name().as_ref() == b"commentReference" {
+                        let start = stack
+                            .iter()
+                            .rev()
+                            .find(|(word, name, _)| *word && name == b"r")
+                            .map(|(_, _, start)| *start)
+                            .ok_or_else(|| {
+                                Error::Other("comment reference has no source run".into())
+                            })?;
+                        if reference
+                            .replace(start..story_element_end(xml, start)?)
+                            .is_some()
+                        {
+                            return Err(Error::Other(
+                                "comment move has duplicate reference runs".into(),
+                            ));
+                        }
+                    }
+                }
+                if matches!(event, Event::Start(_)) {
+                    stack.push((word, element.local_name().as_ref().to_vec(), before));
+                }
+            }
+            Event::End(_) => {
+                stack.pop();
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    let reference_span = reference
+        .ok_or_else(|| Error::Other("comment move has no selected reference run".into()))?;
+    let scope = story_namespace_scope_at(xml, reference_span.start)?;
+    let reference = close_content_fragment_namespaces(&xml[reference_span.clone()], &scope)?;
+    // Only the selected direct reference and run properties travel. Other
+    // children retain their exact source sequence, even when visible text and
+    // opaque producer payload share this run with the reference.
+    let selected_reference = selected
+        .iter()
+        .find(|span| reference_span.contains(&span.start))
+        .ok_or_else(|| Error::Other("comment move reference source was not selected".into()))?;
+    let mut original_reader = quick_xml::Reader::from_reader(&xml[reference_span.clone()]);
+    original_reader
+        .read_event()
+        .map_err(|error| Error::Other(error.to_string()))?;
+    let original_open_end = original_reader.buffer_position() as usize;
+    let mut reader = NsReader::from_reader(reference.as_slice());
+    let mut depth = 0usize;
+    let mut reference_found = false;
+    let mut open_end = 0usize;
+    let mut close_start = 0usize;
+    let mut kept = Vec::new();
+    let mut mixed = false;
+    let mut properties_count = 0usize;
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (ns, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(error.to_string()))?;
+        let word = word_element(&ns);
+        drop(ns);
+        let after = reader.buffer_position() as usize;
+        match &event {
+            Event::Start(element) | Event::Empty(element) => {
+                if depth == 0 {
+                    open_end = after;
+                }
+                if depth == 1 {
+                    let end = if matches!(event, Event::Empty(_)) {
+                        after
+                    } else {
+                        story_element_end(&reference, before)?
+                    };
+                    let is_selected = before
+                        == selected_reference.start - reference_span.start + open_end
+                            - original_open_end;
+                    if is_selected && word && element.local_name().as_ref() == b"commentReference" {
+                        if reference_found {
+                            return Err(Error::Other("comment reference run is ambiguous".into()));
+                        }
+                        reference_found = true;
+                        kept.push(before..end);
+                    } else if word && element.local_name().as_ref() == b"rPr" {
+                        properties_count += 1;
+                        kept.push(before..end);
+                    } else {
+                        mixed = true;
+                    }
+                }
+                if matches!(event, Event::Start(_)) {
+                    depth += 1;
+                }
+            }
+            Event::End(_) => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    close_start = before;
+                }
+            }
+            Event::Text(text) if depth == 1 && !text.iter().all(u8::is_ascii_whitespace) => {
+                mixed = true;
+            }
+            Event::Comment(_) | Event::PI(_) if depth == 1 => {
+                mixed = true;
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    if !reference_found || properties_count > 1 || close_start == 0 {
+        return Err(Error::Other(
+            "comment reference is not a uniquely separable direct run child".into(),
+        ));
+    }
+    let mut transport = reference[..open_end].to_vec();
+    for span in kept {
+        transport.extend_from_slice(&reference[span]);
+    }
+    transport.extend_from_slice(&reference[close_start..]);
+    let mut edits = selected
+        .iter()
+        .filter(|span| !reference_span.contains(&span.start))
+        .cloned()
+        .collect::<Vec<_>>();
+    edits.push(if mixed {
+        selected_reference.clone()
+    } else {
+        reference_span.clone()
+    });
+    controls.sort_by_key(|span| std::cmp::Reverse(span.start));
+    for control in controls {
+        let mut fragment = xml[control.clone()].to_vec();
+        let mut contained = edits
+            .iter()
+            .filter(|span| control.start <= span.start && span.end <= control.end)
+            .cloned()
+            .collect::<Vec<_>>();
+        contained.sort_by_key(|span| span.start);
+        for span in contained.iter().rev() {
+            fragment.drain(span.start - control.start..span.end - control.start);
+        }
+        if pure_empty_google_comment_control(
+            &fragment,
+            &story_namespace_scope_at(xml, control.start)?,
+        )? {
+            edits.retain(|span| !(control.start <= span.start && span.end <= control.end));
+            edits.push(control);
+        }
+    }
+    edits.sort_by_key(|span| span.start);
+    if edits.windows(2).any(|pair| pair[0].end > pair[1].start) {
+        return Err(Error::Other("comment move edits overlap".into()));
+    }
+    Ok((edits, transport, reference_span))
+}
+
+fn pure_empty_google_comment_control(xml: &[u8], scope: &BTreeMap<String, String>) -> Result<bool> {
+    // An authored namespace declaration or any other root attribute is payload.
+    let mut raw_reader = quick_xml::Reader::from_reader(xml);
+    if !matches!(raw_reader.read_event(), Ok(Event::Start(ref root)) if root.attributes().next().is_none())
+    {
+        return Ok(false);
+    }
+    let closed = close_content_fragment_namespaces(xml, scope)?;
+    let mut reader = NsReader::from_reader(closed.as_slice());
+    let mut stack = Vec::<Vec<u8>>::new();
+    let mut tag = false;
+    let mut content = false;
+    let mut buffer = Vec::new();
+    loop {
+        let (ns, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(error.to_string()))?;
+        let word = word_element(&ns);
+        drop(ns);
+        match &event {
+            Event::Start(element) | Event::Empty(element) => {
+                let name = element.local_name().as_ref().to_vec();
+                let parent = stack.last().map(Vec::as_slice);
+                let allowed = word
+                    && matches!(
+                        (parent, name.as_slice()),
+                        (None, b"sdt")
+                            | (Some(b"sdt"), b"sdtPr" | b"sdtContent")
+                            | (Some(b"sdtPr"), b"tag")
+                            | (Some(b"sdtContent"), b"p")
+                    );
+                if !allowed {
+                    return Ok(false);
+                }
+                if name == b"sdtContent" {
+                    if content {
+                        return Ok(false);
+                    }
+                    content = true;
+                }
+                for attr in element.attributes() {
+                    let attr = attr.map_err(|error| Error::Other(error.to_string()))?;
+                    if stack.is_empty()
+                        && (attr.key.as_ref() == b"xmlns"
+                            || attr.key.as_ref().starts_with(b"xmlns:"))
+                    {
+                        continue;
+                    }
+                    let (ns, local) = reader.resolver().resolve_attribute(attr.key);
+                    if name != b"tag" || !word_element(&ns) || local.as_ref() != b"val" || tag {
+                        return Ok(false);
+                    }
+                    tag = attr
+                        .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                        .map_err(|error| Error::Other(error.to_string()))?
+                        .starts_with("goog_rdk_");
+                    if !tag {
+                        return Ok(false);
+                    }
+                }
+                if matches!(event, Event::Start(_)) {
+                    stack.push(name);
+                }
+            }
+            Event::End(_) => {
+                stack.pop();
+            }
+            Event::Text(text) if text.iter().all(u8::is_ascii_whitespace) => {}
+            Event::Eof => break,
+            _ => return Ok(false),
+        }
+        buffer.clear();
+    }
+    Ok(tag && content)
 }
 
 fn story_element_end(xml: &[u8], start: usize) -> Result<usize> {
@@ -15690,6 +16127,7 @@ impl Document {
         range: &crate::comments::StoryRunRange,
         anchor: RangeAnchor<'_>,
         label: &str,
+        endpoint_probe: bool,
     ) -> Result<()> {
         let start = &range.start.location;
         let end = &range.end.location;
@@ -15820,14 +16258,326 @@ impl Document {
             let xml = close_content_fragment_namespaces(&xml, &scope)?;
             updated.splice(span, xml);
         }
+        let updated = match anchor {
+            RangeAnchor::Comment(id) if !endpoint_probe => {
+                self.comment_move_source_with_namespaces(&part_name, updated, id, false)?
+            }
+            _ => updated,
+        };
         set_story_source_xml(self, &part_name, updated)
     }
 
-    pub(crate) fn remove_story_range_markers(
+    /// Stage a comment move using physical source edits, then bind the surviving
+    /// destination paragraphs and accepted run boundaries to their new owners.
+    pub(crate) fn move_comment_story_range(
         &mut self,
         entry: &crate::comments::StoryRangeRef,
-        move_comment_reference: bool,
+        target: &StoryRunRange,
+        id: i32,
     ) -> Result<()> {
+        // Validate both endpoints before any source is removed. The probe never
+        // publishes its synthesized reference or changes the requested axis.
+        let mut probe = self.clone_for_staging();
+        probe.anchor_story_range(target, RangeAnchor::Comment(id), "comment", true)?;
+        let endpoints = [&target.start, &target.end]
+            .map(|position| {
+                let (source, paragraph) = self.story_range_paragraph_source(&position.location)?;
+                Ok((source.part_name.clone(), paragraph.full.start))
+            })
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
+        let (part_name, xml, selected) = self.story_range_marker_spans(entry, true)?;
+        let (edits, reference, reference_span) = comment_move_source_edits(&xml, &selected)?;
+        let mut reference_axis = None;
+        for (location, _) in self.story_range_paragraphs()? {
+            if location.story != entry.range().start.location.story {
+                continue;
+            }
+            let (source, paragraph) = self.story_range_paragraph_source(&location)?;
+            if !paragraph.full.contains(&reference_span.start) {
+                continue;
+            }
+            let scope = story_namespace_scope_at(source.xml.as_ref(), paragraph.full.start)?;
+            let raw =
+                close_content_fragment_namespaces(&source.xml[paragraph.full.clone()], &scope)?;
+            let paragraph_model = CT_P::from_xml_fragment(&raw)?;
+            let indices = paragraph_model
+                .accepted_run_paths()
+                .iter()
+                .enumerate()
+                .filter_map(|(index, path)| {
+                    paragraph_model
+                        .accepted_run(path)
+                        .filter(|run| {
+                            run.content.iter().any(|content| {
+                                matches!(content,
+                        RunContent::CommentReference { id: found, .. } if *found == id)
+                            })
+                        })
+                        .map(|_| index)
+                })
+                .collect::<Vec<_>>();
+            if indices.len() != 1 || reference_axis.is_some() {
+                return Err(Error::Other(
+                    "comment reference has no unique accepted run boundary".into(),
+                ));
+            }
+            reference_axis = Some((paragraph.full.start, indices[0]));
+        }
+        let (reference_paragraph, reference_index) = reference_axis.ok_or_else(|| {
+            Error::Other("comment reference is outside the supported accepted run axis".into())
+        })?;
+        let map_offset = |offset: usize| -> Result<usize> {
+            if edits.iter().any(|span| span.contains(&offset)) {
+                return Err(Error::Other(
+                    "comment move destination is inside a removed marker-only owner".into(),
+                ));
+            }
+            Ok(offset
+                - edits
+                    .iter()
+                    .filter(|span| span.end <= offset)
+                    .map(|span| span.len())
+                    .sum::<usize>())
+        };
+        let mut updated = xml;
+        for span in edits.iter().rev() {
+            updated.drain(span.clone());
+        }
+        let updated = self.comment_move_source_with_namespaces(&part_name, updated, id, true)?;
+        set_story_source_xml(self, &part_name, updated)?;
+        let stories = self.stories()?;
+        let rebase = |position: &StoryRunPosition,
+                      endpoint: &(String, usize)|
+         -> Result<StoryRunPosition> {
+            let original = position.location.story();
+            let story = stories
+                .iter()
+                .find(|story| {
+                    story.kind == original.kind
+                        && story.part_name == original.part_name
+                        && story.owner_index == original.owner_index
+                })
+                .ok_or_else(|| Error::Other("comment move destination story disappeared".into()))?;
+            let expected = if endpoint.0 == part_name {
+                map_offset(endpoint.1)?
+            } else {
+                endpoint.1
+            };
+            let (source, owner) = self.story_source_and_owner(story)?;
+            let mut found = None;
+            for (index, item) in scan_story_items(source.xml.as_ref(), &owner)?
+                .iter()
+                .enumerate()
+            {
+                let paths = match item.kind {
+                    StoryItemKind::Paragraph => vec![(vec![index], item.full.start)],
+                    StoryItemKind::ContentControl => {
+                        scan_story_control_paragraphs(source.xml.as_ref(), item)?
+                            .iter()
+                            .enumerate()
+                            .map(|(child, span)| (vec![index, child], span.start))
+                            .collect()
+                    }
+                    _ => Vec::new(),
+                };
+                for (path, offset) in paths {
+                    if offset == expected {
+                        if found.is_some() {
+                            return Err(Error::Other("ambiguous comment move destination".into()));
+                        }
+                        found = Some(path);
+                    }
+                }
+            }
+            let path = found.ok_or_else(|| {
+                Error::Other("comment move destination paragraph disappeared".into())
+            })?;
+            let removed_before_boundary = endpoint.0 == part_name
+                && endpoint.1 == reference_paragraph
+                && position.run_index > reference_index
+                && edits.iter().any(|span| {
+                    span.start <= reference_span.start && reference_span.end <= span.end
+                });
+            Ok(StoryRunPosition {
+                location: ContentLocation::new(story.clone(), StoryItemKind::Paragraph, path),
+                run_index: position.run_index - usize::from(removed_before_boundary),
+            })
+        };
+        let rebound = StoryRunRange {
+            start: rebase(&target.start, &endpoints[0])?,
+            end: rebase(&target.end, &endpoints[1])?,
+        };
+        self.anchor_story_range(&rebound, RangeAnchor::Comment(id), "comment", false)?;
+        // Replace only the uniquely synthesized selected reference run. The
+        // original run carries its namespace closure, formatting and raw attrs.
+        self.restore_comment_reference_run(id, reference)
+    }
+
+    pub(crate) fn remove_comment_source_for_move(
+        &mut self,
+        entry: &crate::comments::StoryRangeRef,
+    ) -> Result<Vec<u8>> {
+        let (part, xml, selected) = self.story_range_marker_spans(entry, true)?;
+        let (edits, reference, _) = comment_move_source_edits(&xml, &selected)?;
+        let mut updated = xml;
+        for span in edits.iter().rev() {
+            updated.drain(span.clone());
+        }
+        let updated = self.comment_move_source_with_namespaces(
+            &part,
+            updated,
+            match entry.kind() {
+                crate::comments::StoryRangeKind::Comment { id } => *id,
+                _ => return Err(Error::Other("expected comment move source".into())),
+            },
+            true,
+        )?;
+        set_story_source_xml(self, &part, updated)?;
+        Ok(reference)
+    }
+
+    pub(crate) fn restore_comment_reference_run(
+        &mut self,
+        id: i32,
+        reference: Vec<u8>,
+    ) -> Result<()> {
+        let ranges = self.story_ranges()?;
+        let matching = ranges
+            .iter()
+            .filter(|entry| {
+                matches!(entry.kind(),
+            crate::comments::StoryRangeKind::Comment { id: found } if *found == id)
+            })
+            .collect::<Vec<_>>();
+        if matching.len() != 1 {
+            return Err(Error::Other(
+                "moved comment has no unique destination range".into(),
+            ));
+        }
+        let (source, owner) =
+            self.story_source_and_owner(matching[0].range().end.location.story())?;
+        let part = source.part_name.clone();
+        let span = comment_reference_run_span(source.xml.as_ref(), &owner.full, id)?;
+        let mut xml = source.xml.into_owned();
+        xml.splice(span, reference);
+        let xml = self.comment_move_source_with_namespaces(&part, xml, id, false)?;
+        set_story_source_xml(self, &part, xml)
+    }
+
+    // Source discovery retains the established canonical fingerprint axis.
+    // Before a move replaces that source, replay its original qualified nested
+    // declarations so the replacement does not erase preserved raw aliases.
+    fn comment_move_source_with_namespaces(
+        &self,
+        part: &str,
+        xml: Vec<u8>,
+        id: i32,
+        source_removal: bool,
+    ) -> Result<Vec<u8>> {
+        if part != self.doc_part_name {
+            return Ok(xml);
+        }
+        let original = self
+            .package
+            .get_part(part)
+            .ok_or_else(|| Error::Other("comment move main source is missing".into()))?;
+        // Apply the same proved source edits to the original namespace authority.
+        // Whole transported runs disappear, while mixed source runs keep their
+        // declarations and every non-reference child in their original order.
+        let mut remaining_source = original.to_vec();
+        if source_removal {
+            let selected = crate::comments::comment_source_markers(original)?
+                .into_iter()
+                .filter(|marker| marker.id == id)
+                .map(|marker| marker.span)
+                .collect::<Vec<_>>();
+            if selected.len() != 3 {
+                return Err(Error::Other(
+                    "comment move original source lacks one qualified pair and reference".into(),
+                ));
+            }
+            let (edits, _, _) = comment_move_source_edits(original, &selected)?;
+            for span in edits.into_iter().rev() {
+                remaining_source.drain(span);
+            }
+        }
+        let original = remaining_source.as_slice();
+        let mut owners = nested_modeled_namespace_owners(original)?;
+        let original_spans = modeled_owner_spans(original)?;
+        let spans = modeled_owner_spans(&xml)?;
+        for owner in &mut owners {
+            let has_pair = |source: &[u8], span: &ModeledOwnerSpan| -> Result<bool> {
+                let mut scope = span
+                    .bindings
+                    .iter()
+                    .map(|(name, uri)| (namespace_prefix(name), uri.clone()))
+                    .collect::<BTreeMap<_, _>>();
+                for (name, uri) in &owner.declarations {
+                    let prefix = namespace_prefix(name);
+                    scope.insert(prefix, uri.clone());
+                }
+                let closed =
+                    close_content_fragment_namespaces(&source[span.start..span.end], &scope)?;
+                Ok(CT_P::comment_range_text_from_source(&closed, id)?.is_some())
+            };
+            let mut original_selected = false;
+            for span in original_spans
+                .iter()
+                .filter(|span| span.local_name == owner.local_name)
+            {
+                let markers = candidate_namespace_owner_markers(
+                    &original[span.start..span.end],
+                    &owner.declarations,
+                    &span.bindings,
+                    &owner.markers,
+                )?;
+                if marker_multiset_matches(&owner.markers, &markers, true)
+                    && has_pair(original, span)?
+                {
+                    original_selected = true;
+                }
+            }
+            let mut matching = Vec::new();
+            for span in spans
+                .iter()
+                .filter(|span| span.local_name == owner.local_name)
+            {
+                let markers = candidate_namespace_owner_markers(
+                    &xml[span.start..span.end],
+                    &owner.declarations,
+                    &span.bindings,
+                    &owner.markers,
+                )?;
+                if marker_multiset_matches(&owner.markers, &markers, true) {
+                    matching.push(span);
+                }
+            }
+            let selected = matching
+                .iter()
+                .map(|span| has_pair(&xml, span))
+                .collect::<Result<Vec<_>>>()?;
+            if original_selected || selected.iter().any(|selected| *selected) {
+                let [span] = matching.as_slice() else {
+                    return Err(Error::Other(
+                        "comment move has ambiguous retained namespace owner".into(),
+                    ));
+                };
+                owner.snapshot = logical_owner_snapshot(
+                    &xml[span.start..span.end],
+                    &span.bindings,
+                    &owner.declarations,
+                )?;
+            }
+        }
+        replay_nested_namespace_declarations(&xml, &owners)
+    }
+
+    fn story_range_marker_spans(
+        &self,
+        entry: &crate::comments::StoryRangeRef,
+        move_comment_reference: bool,
+    ) -> Result<(String, Vec<u8>, Vec<Range<usize>>)> {
         use crate::comments::StoryRangeKind;
         let (source, owner) = self.story_source_and_owner(entry.range().start.location.story())?;
         let part_name = source.part_name.clone();
@@ -15866,7 +16616,7 @@ impl Document {
         reader.config_mut().trim_text(false);
         let mut ranges = Vec::new();
         let mut ordinal = 0usize;
-        let mut stack = Vec::<(bool, Vec<u8>)>::new();
+        let mut stack = Vec::<(bool, Vec<u8>, usize)>::new();
         let mut buffer = Vec::new();
         loop {
             let before = reader.buffer_position() as usize;
@@ -15876,23 +16626,19 @@ impl Document {
             let is_word = word_element(&namespace);
             drop(namespace);
             let after = reader.buffer_position() as usize;
-            let hidden = stack.iter().any(|(word, name)| {
+            let hidden = stack.iter().any(|(word, name, start)| {
                 *word
                     && matches!(
                         name.as_slice(),
-                        b"del"
-                            | b"moveFrom"
-                            | b"txbxContent"
-                            | b"smartTag"
-                            | b"customXml"
-                            | b"fldSimple"
+                        b"del" | b"moveFrom" | b"smartTag" | b"customXml" | b"fldSimple"
                     )
+                    || *word && name == b"txbxContent" && *start > owner.full.start
             });
             if let Event::End(_) = &event {
                 stack.pop();
             }
             if let Event::Start(element) = &event {
-                stack.push((is_word, element.local_name().as_ref().to_vec()));
+                stack.push((is_word, element.local_name().as_ref().to_vec(), before));
             }
             let element = match &event {
                 Event::Start(element) | Event::Empty(element)
@@ -15996,7 +16742,16 @@ impl Document {
                 ranges.len()
             )));
         }
-        let mut updated = xml.to_vec();
+        Ok((part_name, xml.to_vec(), ranges))
+    }
+
+    pub(crate) fn remove_story_range_markers(
+        &mut self,
+        entry: &crate::comments::StoryRangeRef,
+        move_comment_reference: bool,
+    ) -> Result<()> {
+        let (part_name, mut updated, ranges) =
+            self.story_range_marker_spans(entry, move_comment_reference)?;
         for range in ranges.into_iter().rev() {
             updated.splice(range, []);
         }
@@ -16244,34 +16999,151 @@ impl Document {
         })
     }
 
+    // Guard the unique newly placed pair against the actual main source after
+    // existing namespace replay. Only this unpublished candidate's document part
+    // is flushed, leaving pending comment models and identifier state untouched.
+    pub(crate) fn comment_literal_range_text(&mut self, id: i32) -> Result<Option<String>> {
+        let xml = self.comment_move_source_with_namespaces(
+            &self.doc_part_name,
+            self.document.to_xml()?,
+            id,
+            false,
+        )?;
+        let part = self.doc_part_name.clone();
+        set_story_source_xml(self, &part, xml)?;
+        self.flush_document_to_package()?;
+        let source = self.package.get_part(&self.doc_part_name).ok_or_else(|| {
+            Error::Other("comment literal guard has no main document source".into())
+        })?;
+        Ok(CT_P::comment_range_text_from_source(source, id)?)
+    }
+
+    // Keep canonical locations and fingerprints while restoring only the proved
+    // namespace context used by rich comment projection. Physical event offsets
+    // qualify every owner before a restored declaration can reinterpret a name.
+    pub(crate) fn comment_story_range_paragraphs(&self) -> Result<Vec<(ContentLocation, Vec<u8>)>> {
+        let mut paragraphs = self.story_range_paragraphs()?;
+        let canonical = self.document.to_xml()?;
+        let original = self
+            .package
+            .get_part(&self.doc_part_name)
+            .ok_or_else(|| Error::Other("rich comment projection has no main source".into()))?;
+        let mut namespace_owners = nested_modeled_namespace_owners(original)?;
+        if namespace_owners.is_empty() {
+            return Ok(paragraphs);
+        }
+        let canonical_spans = modeled_owner_spans(&canonical)?;
+        let mut needed = Vec::new();
+        for owner in namespace_owners.drain(..) {
+            let original_scope = story_namespace_scope_at(original, owner.source.start)?;
+            let original_owner = close_content_fragment_namespaces(
+                &original[owner.source.clone()],
+                &original_scope,
+            )?;
+            let mut redundant = 0;
+            for target in canonical_spans.iter().filter(|span| {
+                span.local_name == owner.local_name
+                    && owner
+                        .declarations
+                        .iter()
+                        .all(|declaration| span.declarations.contains(declaration))
+            }) {
+                let scope = story_namespace_scope_at(&canonical, target.start)?;
+                let target_owner = close_content_fragment_namespaces(
+                    &canonical[target.start..target.end],
+                    &scope,
+                )?;
+                // Full owner payload, names and attributes prove the unique
+                // source counterpart. Only redundant namespace declarations may
+                // differ, with every resolved namespace fact still identical.
+                if let Some((_, changed)) =
+                    comment_namespace_source_boundaries(&original_owner, &target_owner)?
+                    && changed.is_empty()
+                {
+                    redundant += 1;
+                }
+            }
+            if redundant != 1 {
+                needed.push(owner);
+            }
+        }
+        let restored = replay_nested_namespace_declarations(&canonical, &needed)?;
+        if restored == canonical {
+            return Ok(paragraphs);
+        }
+        let (boundaries, _) = comment_namespace_source_boundaries(&canonical, &restored)?
+            .ok_or_else(|| {
+                Error::Other("rich comment namespace replay changed physical source".into())
+            })?;
+        let owners = scan_story_owners(&canonical, StoryKind::Body)?;
+        let restored_owners = scan_story_owners(&restored, StoryKind::Body)?;
+        if owners.len() != restored_owners.len()
+            || owners.iter().any(|owner| {
+                !restored_owners.iter().any(|other| {
+                    other.kind == owner.kind
+                        && other.owner_index == owner.owner_index
+                        && boundaries.get(&owner.full.start) == Some(&other.full.start)
+                        && boundaries.get(&owner.full.end) == Some(&other.full.end)
+                })
+            })
+        {
+            return Err(Error::Other(
+                "rich comment namespace replay changes story ownership".into(),
+            ));
+        }
+        let mut paragraph_spans = HashMap::new();
+        for owner in &owners {
+            let story = StoryId {
+                kind: owner.kind,
+                part_name: self.doc_part_name.clone(),
+                owner_index: owner.owner_index,
+                fingerprint: owner.fingerprint,
+            };
+            for (location, span) in story_range_paragraph_spans(&canonical, owner, &story)? {
+                if paragraph_spans.insert(location, span).is_some() {
+                    return Err(Error::Other(
+                        "rich comment has duplicate physical paragraph path".into(),
+                    ));
+                }
+            }
+        }
+        let scopes = story_namespace_scopes_at(
+            &restored,
+            paragraph_spans
+                .values()
+                .filter_map(|span| boundaries.get(&span.start).copied()),
+        )?;
+        for (location, xml) in &mut paragraphs {
+            if location.story.part_name != self.doc_part_name {
+                continue;
+            }
+            let span = paragraph_spans.get(location).ok_or_else(|| {
+                Error::Other("rich comment paragraph has no checked physical path".into())
+            })?;
+            let start = *boundaries.get(&span.start).ok_or_else(|| {
+                Error::Other("rich comment paragraph has no physical namespace boundary".into())
+            })?;
+            let end = *boundaries.get(&span.end).ok_or_else(|| {
+                Error::Other("rich comment paragraph has no physical namespace boundary".into())
+            })?;
+            let scope = scopes.get(&start).ok_or_else(|| {
+                Error::Other("rich comment paragraph namespace scope was not inventoried".into())
+            })?;
+            *xml = close_content_fragment_namespaces(&restored[start..end], scope)?;
+        }
+        Ok(paragraphs)
+    }
+
     pub(crate) fn story_range_paragraphs(&self) -> Result<Vec<(ContentLocation, Vec<u8>)>> {
         let mut paragraphs = Vec::new();
         for (story_index, story) in self.stories()?.into_iter().enumerate() {
             let (source, owner) = self.story_source_and_owner(&story)?;
             let source_xml = source.xml.as_ref();
-            for (index, item) in scan_story_items(source_xml, &owner)?.iter().enumerate() {
-                let spans = match item.kind {
-                    StoryItemKind::Paragraph => vec![(vec![index], item.full.clone())],
-                    StoryItemKind::ContentControl => {
-                        scan_story_control_paragraphs(source_xml, item)?
-                            .into_iter()
-                            .enumerate()
-                            .map(|(paragraph_index, span)| (vec![index, paragraph_index], span))
-                            .collect()
-                    }
-                    _ => continue,
-                };
-                for (path, span) in spans {
-                    let scope = story_namespace_scope_at(source_xml, span.start)?;
-                    let order = span.start;
-                    let xml = close_content_fragment_namespaces(&source_xml[span], &scope)?;
-                    paragraphs.push((
-                        story_index,
-                        order,
-                        ContentLocation::new(story.clone(), StoryItemKind::Paragraph, path),
-                        xml,
-                    ));
-                }
+            for (location, span) in story_range_paragraph_spans(source_xml, &owner, &story)? {
+                let scope = story_namespace_scope_at(source_xml, span.start)?;
+                let order = span.start;
+                let xml = close_content_fragment_namespaces(&source_xml[span], &scope)?;
+                paragraphs.push((story_index, order, location, xml));
             }
         }
         paragraphs.sort_by_key(|(story_index, offset, _, _)| (*story_index, *offset));

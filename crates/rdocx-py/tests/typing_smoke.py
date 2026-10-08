@@ -214,6 +214,8 @@ def exercise_rdocx_types(path: Path) -> None:
     story_position = StoryRunPosition(item=story_items[0], run_index=0)
     handle_position = StoryRunPosition(paragraph=document.paragraphs[0], run_index=0)
     story_range = StoryRunRange(start=story_position, end=handle_position)
+    assert_type(document.move_comment(comment_id, story_range), None)
+    assert_type(document.move_comment_to_text(comment_id, "target", occurrence=0), None)
     story_comment_id: int = document.add_comment(
         story_range, author="Ada", text="story review"
     )

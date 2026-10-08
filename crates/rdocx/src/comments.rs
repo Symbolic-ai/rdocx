@@ -422,7 +422,12 @@ impl Document {
         let mut candidate = self.clone_for_staging();
         let mut identifiers = candidate.identifiers.clone();
         let id = identifiers.reserve_bookmark_id()?;
-        candidate.anchor_story_range(&range, RangeAnchor::Bookmark { id, name }, "bookmark")?;
+        candidate.anchor_story_range(
+            &range,
+            RangeAnchor::Bookmark { id, name },
+            "bookmark",
+            false,
+        )?;
         candidate.identifiers = identifiers;
         candidate.story_ranges()?;
         let reopened = candidate.prepare_and_reopen_staged()?;
@@ -463,6 +468,7 @@ impl Document {
             &range,
             RangeAnchor::Permission { id, editor, group },
             "permission",
+            false,
         )?;
         candidate.story_ranges()?;
         let reopened = candidate.prepare_and_reopen_staged()?;
@@ -479,7 +485,7 @@ impl Document {
         }
         self.story_ranges()?;
         let mut candidate = self.clone_for_staging();
-        candidate.anchor_story_range(&range, RangeAnchor::Proofing { kind }, "proofing")?;
+        candidate.anchor_story_range(&range, RangeAnchor::Proofing { kind }, "proofing", false)?;
         candidate.story_ranges()?;
         let reopened = candidate.prepare_and_reopen_staged()?;
         self.commit_staged_mutation(reopened);
@@ -502,6 +508,66 @@ impl Document {
     }
 
     /// Move a checked pair to a new range in one story owner.
+    /// Move one existing root comment without changing its thread identity.
+    /// Unknown IDs, replies, incomplete anchors and unsupported destinations
+    /// are refused without publishing any change.
+    pub fn move_comment(&mut self, id: i32, range: StoryRunRange) -> Result<()> {
+        let selected = self.checked_movable_comment(id)?;
+        self.move_story_range(&selected, range)
+    }
+
+    /// Move an existing root comment onto a literal main-story occurrence.
+    /// Search and run splitting follow [`Self::add_comment_on_text`].
+    pub fn move_comment_to_text(&mut self, id: i32, anchor: &str, occurrence: usize) -> Result<()> {
+        let selected = self.checked_movable_comment(id)?;
+        let mut candidate = self.clone_for_staging();
+        let reference = candidate.remove_comment_source_for_move(&selected)?;
+        candidate.anchor_existing_comment_on_text(id, anchor, occurrence)?;
+        candidate.restore_comment_reference_run(id, reference)?;
+        candidate.flush_to_package()?;
+        candidate.comment_ownership()?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
+    fn checked_movable_comment(&self, id: i32) -> Result<StoryRangeRef> {
+        let mut proof = self.clone_for_staging();
+        proof.flush_to_package()?;
+        let ownership = proof.comment_ownership()?;
+        match ownership.parents.get(&id) {
+            None => return Err(Error::Other(format!("unknown comment {id}"))),
+            Some(Some(_)) => {
+                return Err(Error::Other(format!(
+                    "comment {id} is a reply, not a movable root"
+                )));
+            }
+            Some(None) => {}
+        }
+        let counts = CommentOwnership::marker_counts(&ownership.markers);
+        if counts.get(&id) != Some(&[1, 1, 1]) {
+            return Err(Error::Other(format!(
+                "comment {id} requires one complete paired range and reference"
+            )));
+        }
+        // This exact accepted projection also rejects hidden, reversed,
+        // cross-owner or unrepresentable endpoints rather than inventing one.
+        self.comment_anchor(id)?
+            .ok_or_else(|| Error::Other(format!("comment {id} has no movable paired range")))?;
+        let mut selected = self.story_ranges()?.into_iter().filter(
+            |entry| matches!(entry.kind(), StoryRangeKind::Comment { id: found } if *found == id),
+        );
+        let entry = selected
+            .next()
+            .ok_or_else(|| Error::Other(format!("comment {id} has no selected source range")))?;
+        if selected.next().is_some() {
+            return Err(Error::Other(format!(
+                "comment {id} has ambiguous source ranges"
+            )));
+        }
+        Ok(entry)
+    }
+
     pub fn move_story_range(
         &mut self,
         selected: &StoryRangeRef,
@@ -509,6 +575,20 @@ impl Document {
     ) -> Result<()> {
         if !self.story_ranges()?.contains(selected) {
             return Err(Error::Other("selected story range is stale".to_owned()));
+        }
+        if let StoryRangeKind::Comment { id } = selected.kind() {
+            let checked = self.checked_movable_comment(*id)?;
+            if &checked != selected {
+                return Err(Error::Other("selected comment range is stale".into()));
+            }
+            let mut candidate = self.clone_for_staging();
+            candidate.move_comment_story_range(selected, &range, *id)?;
+            candidate.flush_to_package()?;
+            candidate.comment_ownership()?;
+            candidate.story_ranges()?;
+            let reopened = candidate.prepare_and_reopen_staged()?;
+            self.commit_staged_mutation(reopened);
+            return Ok(());
         }
         let mut candidate = self.clone_for_staging();
         candidate.remove_story_range_markers(selected, true)?;
@@ -523,7 +603,7 @@ impl Document {
             StoryRangeKind::Proofing { kind } => RangeAnchor::Proofing { kind },
         };
         let mut placement_check = self.clone_for_staging();
-        placement_check.anchor_story_range(&range, anchor, "story")?;
+        placement_check.anchor_story_range(&range, anchor, "story", false)?;
         let refreshed = candidate.stories()?;
         let rebase = |position: &StoryRunPosition| -> Result<StoryRunPosition> {
             let source = position.location.story();
@@ -550,7 +630,7 @@ impl Document {
             start: rebase(&range.start)?,
             end: rebase(&range.end)?,
         };
-        candidate.anchor_story_range(&range, anchor, "story")?;
+        candidate.anchor_story_range(&range, anchor, "story", false)?;
         candidate.story_ranges()?;
         let reopened = candidate.prepare_and_reopen_staged()?;
         self.commit_staged_mutation(reopened);
@@ -1116,7 +1196,7 @@ impl Document {
         {
             let mut identifiers = self.identifiers.clone();
             let id = identifiers.reserve_comment_id()?;
-            self.anchor_story_range(&range, RangeAnchor::Comment(id), "comment")?;
+            self.anchor_story_range(&range, RangeAnchor::Comment(id), "comment", false)?;
             self.ensure_comment_models()?;
             self.ensure_comment_relationships()?;
             self.push_comment_definition(id, author, initials, text, date)?;
@@ -1263,6 +1343,25 @@ impl Document {
         self.ensure_comment_relationships()?;
         let mut identifiers = self.identifiers.clone();
         let id = identifiers.reserve_comment_id()?;
+        self.anchor_existing_comment_on_text(id, anchor, occurrence)?;
+        self.push_comment_definition(id, author, initials, text, date)?;
+        self.identifiers = identifiers;
+        self.comments_dirty = true;
+        self.invalidate_layout();
+        Ok(id)
+    }
+
+    // Shared existing literal finder and checked splitter. Moving a comment
+    // supplies its identity directly and never allocates a temporary thread.
+    fn anchor_existing_comment_on_text(
+        &mut self,
+        id: i32,
+        anchor: &str,
+        occurrence: usize,
+    ) -> Result<()> {
+        if anchor.is_empty() {
+            return Err(Error::Other("comment anchor text must not be empty".into()));
+        }
         let mut remaining = occurrence;
         let mut anchored = None;
         visit_body_paragraphs_mut(&mut self.document.body.content, &mut |paragraph| {
@@ -1294,18 +1393,6 @@ impl Document {
                             RangeAnchor::Comment(id),
                             "comment",
                         )
-                    })
-                    .and_then(|()| {
-                        // Preserved children such as `w:fldSimple` are not in
-                        // the literal text, but the range shows their text.
-                        let shown = paragraph.comment_range_text(id).unwrap_or_default();
-                        if shown == anchor {
-                            Ok(())
-                        } else {
-                            Err(Error::Other(format!(
-                                "comment anchor text {anchor:?} occurrence {occurrence} cannot be anchored exactly: its range would show {shown:?}"
-                            )))
-                        }
                     }),
             );
         });
@@ -1317,11 +1404,16 @@ impl Document {
                 "comment anchor text {anchor:?} has no occurrence {occurrence}: it occurs {found} {times} in the main story"
             ))
         })??;
-        self.push_comment_definition(id, author, initials, text, date)?;
-        self.identifiers = identifiers;
-        self.comments_dirty = true;
+        // Read actual namespace scopes after the mutable walk releases its borrow.
+        // Preserved field results count, while tabs and breaks have zero width.
+        let shown = self.comment_literal_range_text(id)?.unwrap_or_default();
+        if shown != anchor {
+            return Err(Error::Other(format!(
+                "comment anchor text {anchor:?} occurrence {occurrence} cannot be anchored exactly: its range would show {shown:?}"
+            )));
+        }
         self.invalidate_layout();
-        Ok(id)
+        Ok(())
     }
 
     /// Append comment `id`, holding one paragraph per line of `text`, and its
@@ -2299,10 +2391,10 @@ fn remove_anchors_from_paragraph(paragraph: &mut CT_P, ids: &HashSet<i32>) {
 // Source marker presence deliberately ignores accepted-view range pairing.
 // A raw reference inside an opaque wrapper still owns its definition.
 #[derive(Debug)]
-struct CommentSourceMarker {
-    id: i32,
-    family: usize,
-    span: Range<usize>,
+pub(crate) struct CommentSourceMarker {
+    pub(crate) id: i32,
+    pub(crate) family: usize,
+    pub(crate) span: Range<usize>,
     empty_run: Option<Range<usize>>,
 }
 
@@ -2344,7 +2436,7 @@ impl CommentOwnership {
     }
 }
 
-fn comment_source_markers(xml: &[u8]) -> Result<Vec<CommentSourceMarker>> {
+pub(crate) fn comment_source_markers(xml: &[u8]) -> Result<Vec<CommentSourceMarker>> {
     let mut reader = NsReader::from_reader(xml);
     reader.config_mut().trim_text(false);
     let mut buffer = Vec::new();
@@ -2566,19 +2658,19 @@ impl Document {
         }
         let counts = CommentOwnership::marker_counts(&ownership.markers);
         let paragraphs = source
-            .story_range_paragraphs()?
+            .comment_story_range_paragraphs()?
             .into_iter()
             .map(|(location, xml)| {
                 let ids = comment_source_markers(&xml)?
                     .into_iter()
                     .map(|marker| marker.id)
                     .collect::<HashSet<_>>();
-                Ok((location, CT_P::from_xml_fragment(&xml)?, ids))
+                Ok((location, CT_P::from_xml_fragment(&xml)?, ids, xml))
             })
             .collect::<Result<Vec<_>>>()?;
         let mut marker_paragraphs = HashMap::<i32, Vec<usize>>::new();
         let mut owner_paragraphs = HashMap::<crate::StoryId, Vec<usize>>::new();
-        for (index, (location, _, ids)) in paragraphs.iter().enumerate() {
+        for (index, (location, _, ids, _)) in paragraphs.iter().enumerate() {
             owner_paragraphs
                 .entry(location.story().clone())
                 .or_default()
@@ -2613,8 +2705,8 @@ impl Document {
             let mut text = String::new();
             let mut first_paragraph = None;
             for &index in marker_paragraphs.get(&id).into_iter().flatten() {
-                let (_, paragraph, _) = &paragraphs[index];
-                let (_, _, first, last) = paragraph.accepted_comment_projection(id, false)?;
+                let (_, _, _, xml) = &paragraphs[index];
+                let (_, _, first, last) = CT_P::accepted_comment_source_projection(xml, id, false)?;
                 if first.is_some() || last.is_some() {
                     first_paragraph = Some(index);
                     break;
@@ -2628,10 +2720,10 @@ impl Document {
                 .binary_search(&first_paragraph)
                 .expect("registered owner paragraph");
             for &index in &owner[offset..] {
-                let (location, paragraph, ids) = &paragraphs[index];
+                let (location, paragraph, ids, xml) = &paragraphs[index];
                 let was_open = open;
                 let (contribution, next_open, first, last) = if ids.contains(&id) {
-                    paragraph.accepted_comment_projection(id, open)?
+                    CT_P::accepted_comment_source_projection(xml, id, open)?
                 } else {
                     (paragraph.accepted_text(), open, None, None)
                 };

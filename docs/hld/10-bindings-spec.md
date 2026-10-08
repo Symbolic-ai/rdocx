@@ -1640,6 +1640,15 @@ in the literal text, and a match whose range would also show text that the
 literal text leaves out, such as a field result, is not exact. Python exposes
 it with keyword `author`, `text`, `occurrence`, `initials` and `date`
 arguments.
+Native `move_comment(id, StoryRunRange)` and `move_comment_to_text(id, anchor,
+occurrence)` move an existing root thread without changing its numeric id or
+metadata. Python exposes `move_comment(id, range)` and
+`move_comment_to_text(id, anchor, *, occurrence=0)`, advancing the document
+revision exactly once after successful package publication. Refusals retain
+bytes and revisions. `rdocx comment move <file> <id> --text <anchor>
+--occurrence <n>` uses the existing required output, JSON and atomic save
+conventions. Unknown ids, replies, stale destinations and unsupported source
+ownership produce checked errors.
 The Python `add_comment` and `reply_to` methods expose the same value as the
 optional `date` keyword, and `rdocx comment add` and `rdocx comment reply` as
 the optional `--date` flag. Omission writes no date and remains deterministic.

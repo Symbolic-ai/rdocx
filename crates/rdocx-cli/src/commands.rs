@@ -1482,6 +1482,27 @@ pub fn comment_add(
     )
 }
 
+/// Move one existing thread and publish only the reopened complete package.
+pub fn comment_move(
+    file: &Path,
+    id: i32,
+    text: &str,
+    occurrence: usize,
+    output: &Path,
+    json_output: bool,
+) -> Result<()> {
+    let mut doc = Document::open(file)?;
+    doc.move_comment_to_text(id, text, occurrence)?;
+    publish_document(&mut doc, output)?;
+    mutation_record(
+        json_output,
+        "main",
+        "move",
+        json!({"comment_id": id}),
+        output,
+    )
+}
+
 /// Add one reply and publish the complete mutated document atomically.
 pub fn comment_reply(
     file: &Path,

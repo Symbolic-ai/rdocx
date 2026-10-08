@@ -1436,6 +1436,16 @@ comments-extended relationship graph reachable from the main document, with
 matching overrides and namespace declarations. A failed validation or
 allocation leaves anchors, typed parts, relationships, and overrides unchanged.
 
+Comment moves stage marker removal, narrowly qualified Google wrapper pruning,
+destination placement and package reopen together. Unchanged definition and
+companion parts retain their owned identities. Typed run references retain
+unmodeled source through boundary-owned raw carriers that never emit twice or
+survive typed removal or replacement. Numeric identity alone does not make an
+independent raw element a typed carrier. Unordered raw references remain
+verbatim, while plain id-only Word aliases retain canonical serialization. Literal comment matching qualifies Word markers and text in the actual staged main-part source, including ancestor-local table, cell, paragraph and control scopes. Complete-source namespace validation refuses unresolved element or attribute prefixes even outside the selected range. Comment moves replay existing qualified nested-owner declarations before replacing their main source and before the literal safeguard. Only the uniquely proved selected owner may refresh its private logical snapshot after authorized marker changes, with its exact raw namespace markers and namespace facts preserved. Ambiguous owners refuse, while all unselected owners retain strict replay. Source removal derives retained owners from the original package after the same qualified selected-marker edits, so transported whole runs disappear while mixed runs retain their declarations and non-reference source sequence. The captured reference remains namespace-closed for restoration. This preserves raw alias fields without changing the story fingerprint axis. Rich anchor projection consumes the namespace-closed original paragraph source and preserves those bindings through its private endpoint-fidelity probe. Tabs and breaks remain zero width only for the literal matching safeguard, while the rich reader retains their display characters.
+Mixed reference runs retain neighboring
+raw children, comments and processing instructions in source order.
+
 Tracked-revision resolution is also staged above the package boundary. The
 facade resolves selected revision placements in the main document, headers,
 footers, comments, normal footnotes, endnotes, and nested text boxes. It patches

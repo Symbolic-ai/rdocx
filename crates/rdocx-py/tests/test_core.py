@@ -3792,3 +3792,44 @@ def test_comment_anchor_header_block_control_preserves_nonbody_identity():
     assert document.to_bytes() == before
     document.add_comment(comment.anchor, author="Ben", text="Same header")
     assert document.comments[-1].anchor_text == "HEADER"
+
+
+def test_comment_moves_refuse_unknown_reply_and_invalid_ranges_atomically():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("SOURCE")
+    document.add_paragraph("TARGET TARGET")
+    identity = document.add_comment_on_text("SOURCE", author="Ada", initials="A",
+        text="Review", date="2026-10-08T12:00:00Z")
+    reply = document.reply_to(identity, author="Ben", text="Reply")
+    document.resolve_comment(identity)
+    metadata = document.comments
+    target = document.paragraphs[1]
+    bounds = rdocx.StoryRunRange(
+        start=rdocx.StoryRunPosition(paragraph=target, run_index=0),
+        end=rdocx.StoryRunPosition(paragraph=target, run_index=1))
+    held = document.paragraphs[0]
+    document.move_comment(identity, bounds)
+    assert document.comments == metadata
+    assert document.comments[0].anchor_text == "TARGET TARGET"
+    with pytest.raises(rdocx.StaleElementError):
+        held.text
+    document.move_comment_to_text(identity, "TARGET", occurrence=1)
+    assert document.comments == metadata
+    assert document.comments[0].anchor_text == "TARGET"
+    before = document.to_bytes()
+    current = document.comments[0].anchor
+    for selected in [999, reply]:
+        with pytest.raises(rdocx.RdocxError):
+            document.move_comment(selected, current)
+        assert document.to_bytes() == before
+    with pytest.raises(rdocx.RdocxError):
+        document.move_comment_to_text(identity, "absent")
+    assert document.to_bytes() == before
+    with pytest.raises(rdocx.StaleElementError):
+        document.move_comment(identity, bounds)
+    assert document.to_bytes() == before
+    reopened = rdocx.Document.from_bytes(before)
+    assert reopened.comments == metadata
+    assert reopened.comments[0].anchor_text == "TARGET"

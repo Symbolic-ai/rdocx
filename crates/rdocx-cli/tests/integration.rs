@@ -4156,3 +4156,51 @@ fn comment_list_json_keeps_related_locations_and_point_orphan_states() {
         assert_eq!(fs::read(&path).unwrap(), before);
     }
 }
+
+#[test]
+fn comment_move_outputs_reopen_with_unchanged_thread() {
+    let workspace = TempWorkspace::new("comment-move");
+    let input = workspace.path.join("input.docx");
+    let output = workspace.path.join("output.docx");
+    let mut document = Document::new();
+    document.add_paragraph("SOURCE");
+    document.add_paragraph("TARGET TARGET");
+    let id = document
+        .add_comment_on_text(
+            "SOURCE",
+            0,
+            "Ada",
+            Some("A"),
+            "Review",
+            Some("2026-10-08T12:00:00Z"),
+        )
+        .unwrap();
+    document.reply_to(id, "Ben", "Reply").unwrap();
+    document.resolve_comment(id, true).unwrap();
+    document.save(&input).unwrap();
+    let before = fs::read(&input).unwrap();
+    let result = cli(&[
+        "comment",
+        "move",
+        path_text(&input),
+        &id.to_string(),
+        "--text",
+        "TARGET",
+        "--occurrence",
+        "1",
+        "-o",
+        path_text(&output),
+        "--json",
+    ]);
+    assert_success(&result, "move root comment");
+    let reopened = Document::open(&output).unwrap();
+    assert_eq!(
+        reopened.comment_anchor_text(id).unwrap().as_deref(),
+        Some("TARGET")
+    );
+    assert_eq!(reopened.comments().len(), 2);
+    assert_eq!(reopened.comments()[0].id(), id);
+    assert!(reopened.comments()[0].resolved());
+    assert_eq!(reopened.comments()[1].parent_id(), Some(id));
+    assert_eq!(fs::read(&input).unwrap(), before);
+}

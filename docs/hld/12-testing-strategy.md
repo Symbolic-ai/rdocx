@@ -3711,3 +3711,18 @@ its coordinates cannot re-anchor the selected display. Python runtime and
 strict typing cover optional frozen fields, typed snapshots and stale range
 reuse. CLI JSON asserts complete typed endpoint locations and null versus empty
 text. These source-built API checks do not claim native Word render parity. Issue 289 is covered by block-control paragraph endpoints with accepted text and nonempty XML, exact two-segment paths and containing body indices before and after reopen.
+
+
+### Checked Word comment moves
+
+Existing native entrypoints pin thread and companion continuity, same-paragraph
+accepted-boundary rebasing, cross-story placement, block-control destinations
+and exact mixed-reference source retention. Google marker wrappers prune only
+when their raw skeleton contains no unrelated payload. Namespace aliases and
+foreign lookalikes remain distinct. Incomplete, duplicate, reversed, point,
+orphan, reply, unknown and stale sources refuse without publication. Oxml
+carrier tests cover paired and empty references, qualified attributes, multiple
+references, property insertion, typed replacement, removal, splitting and
+segment serialization. Python runtime and typing cover revision invalidation
+and text occurrence errors. CLI outputs reopen with the same thread identity.
+These source-built checks do not claim a native Word rendering oracle.

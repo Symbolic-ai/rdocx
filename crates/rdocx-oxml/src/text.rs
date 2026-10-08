@@ -2059,8 +2059,11 @@ pub struct CT_R {
 const RAW_LEGACY_HORIZONTAL_RULE_FLAG: usize = 1usize << (usize::BITS - 1);
 const RAW_ALTERNATE_CONTENT_DRAWING_FLAG: usize = 1usize << (usize::BITS - 2);
 const RAW_ROOT_ATTRIBUTES_FLAG: usize = 1usize << (usize::BITS - 3);
-const RAW_CHILD_FLAGS: usize =
-    RAW_LEGACY_HORIZONTAL_RULE_FLAG | RAW_ALTERNATE_CONTENT_DRAWING_FLAG | RAW_ROOT_ATTRIBUTES_FLAG;
+const RAW_COMMENT_REFERENCE_FLAG: usize = 1usize << (usize::BITS - 4);
+const RAW_CHILD_FLAGS: usize = RAW_LEGACY_HORIZONTAL_RULE_FLAG
+    | RAW_ALTERNATE_CONTENT_DRAWING_FLAG
+    | RAW_ROOT_ATTRIBUTES_FLAG
+    | RAW_COMMENT_REFERENCE_FLAG;
 const RAW_CHILD_POSITION_MASK: usize = !RAW_CHILD_FLAGS;
 const VML_NAMESPACE: &[u8] = b"urn:schemas-microsoft-com:vml";
 const OFFICE_NAMESPACE: &[u8] = b"urn:schemas-microsoft-com:office:office";
@@ -2430,6 +2433,7 @@ impl CT_R {
     /// Replace typed run content while retaining every raw child boundary.
     #[doc(hidden)]
     pub fn replace_content(&mut self, content: Vec<RunContent>) {
+        self.retain_comment_reference_sources(None);
         let property_boundary = usize::from(self.properties.is_some());
         let replacement_end = property_boundary + content.len();
         for position in &mut self.extra_xml_positions {
@@ -2463,6 +2467,7 @@ impl CT_R {
     #[doc(hidden)]
     pub fn remap_removed_content(&mut self, removed: &[bool]) {
         let property_boundary = usize::from(self.properties.is_some());
+        self.retain_comment_reference_sources(Some(removed));
         for position in &mut self.extra_xml_positions {
             let decoded = Self::raw_child_position(*position);
             let content_boundary = decoded.saturating_sub(property_boundary);
@@ -2475,6 +2480,41 @@ impl CT_R {
             );
             Self::set_raw_child_position(position, remapped);
         }
+    }
+
+    fn retain_comment_reference_sources(&mut self, removed: Option<&[bool]>) {
+        if self.extra_xml.len() != self.extra_xml_positions.len() {
+            return;
+        }
+        let property_boundary = usize::from(self.properties.is_some());
+        let keep = self
+            .extra_xml_positions
+            .iter()
+            .map(|encoded| {
+                *encoded & RAW_COMMENT_REFERENCE_FLAG == 0
+                    || removed.is_some_and(|removed| {
+                        !removed
+                            .get(
+                                Self::raw_child_position(*encoded)
+                                    .saturating_sub(property_boundary),
+                            )
+                            .copied()
+                            .unwrap_or(true)
+                    })
+            })
+            .collect::<Vec<_>>();
+        let mut index = 0;
+        self.extra_xml.retain(|_| {
+            let retain = keep[index];
+            index += 1;
+            retain
+        });
+        let mut index = 0;
+        self.extra_xml_positions.retain(|_| {
+            let retain = keep[index];
+            index += 1;
+            retain
+        });
     }
 
     /// Remove selected comment-reference content and retain surrounding raw XML.
@@ -2589,7 +2629,14 @@ impl CT_R {
                         modeled_children += 1;
                     } else if is_word_element(name.as_ref(), b"commentReference", &prefixes) {
                         let id = required_word_i32_attribute(e, b"id", &prefixes)?;
-                        reader.read_to_end_into(name, &mut Vec::new())?;
+                        let raw = capture_element(reader, e)?;
+                        let mut source = Reader::from_reader(raw.as_slice());
+                        source.read_event()?;
+                        let has_payload = !matches!(source.read_event()?, Event::End(_));
+                        if has_payload || comment_reference_has_payload_attributes(e, &prefixes) {
+                            extra_xml.push(close_comment_reference_source(&raw, &prefixes)?);
+                            extra_xml_positions.push(modeled_children | RAW_COMMENT_REFERENCE_FLAG);
+                        }
                         content.push(RunContent::CommentReference {
                             id,
                             raw_before: extra_xml.len(),
@@ -2669,6 +2716,13 @@ impl CT_R {
                         modeled_children += 1;
                     } else if is_word_element(name.as_ref(), b"commentReference", &prefixes) {
                         let id = required_word_i32_attribute(e, b"id", &prefixes)?;
+                        if comment_reference_has_payload_attributes(e, &prefixes) {
+                            extra_xml.push(close_comment_reference_source(
+                                &capture_empty_element(e)?,
+                                &prefixes,
+                            )?);
+                            extra_xml_positions.push(modeled_children | RAW_COMMENT_REFERENCE_FLAG);
+                        }
                         content.push(RunContent::CommentReference {
                             id,
                             raw_before: extra_xml.len(),
@@ -2691,6 +2745,10 @@ impl CT_R {
                         extra_xml.push(capture_empty_element(e)?);
                         extra_xml_positions.push(modeled_children);
                     }
+                }
+                Ok(event @ (Event::Comment(_) | Event::PI(_))) => {
+                    extra_xml.push(capture_standalone_event(event.into_owned())?);
+                    extra_xml_positions.push(modeled_children);
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"r") => {
                     break;
@@ -2835,15 +2893,45 @@ impl CT_R {
                 }
                 RunContent::CommentReference { id, raw_before } => {
                     if !ordered_raw {
-                        for raw in self
+                        for (index, raw) in self
                             .extra_xml
                             .iter()
+                            .enumerate()
                             .take((*raw_before).min(self.extra_xml.len()))
                             .skip(raw_written)
                         {
-                            write_raw_with_word_override(writer, raw, foreign_word_namespace)?;
+                            if !self
+                                .extra_xml_positions
+                                .get(index)
+                                .is_some_and(|position| *position & RAW_COMMENT_REFERENCE_FLAG != 0)
+                            {
+                                write_raw_with_word_override(writer, raw, foreign_word_namespace)?;
+                            }
                             raw_written += 1;
                         }
+                    }
+                    if let Some(raw) = self
+                        .extra_xml_positions
+                        .iter()
+                        .zip(&self.extra_xml)
+                        .find_map(|(position, raw)| {
+                            (*position & RAW_COMMENT_REFERENCE_FLAG != 0
+                                && Self::raw_child_position(*position) == typed_boundary
+                                && retained_comment_reference_id(raw) == Some(*id))
+                            .then_some(raw)
+                        })
+                    {
+                        write_raw_with_word_override(writer, raw, foreign_word_namespace)?;
+                        typed_boundary += 1;
+                        if ordered_raw {
+                            write_run_raw_boundary(
+                                writer,
+                                self,
+                                typed_boundary,
+                                foreign_word_namespace,
+                            )?;
+                        }
+                        continue;
                     }
                     let mut buf = itoa::Buffer::new();
                     let mut e = BytesStart::new("w:commentReference");
@@ -2859,8 +2947,13 @@ impl CT_R {
 
         // Write captured unknown child elements
         if !ordered_raw {
-            for raw in self.extra_xml.iter().skip(raw_written) {
-                if is_root_attribute_record(raw) {
+            for (index, raw) in self.extra_xml.iter().enumerate().skip(raw_written) {
+                if is_root_attribute_record(raw)
+                    || self
+                        .extra_xml_positions
+                        .get(index)
+                        .is_some_and(|position| *position & RAW_COMMENT_REFERENCE_FLAG != 0)
+                {
                     continue;
                 }
                 write_raw_with_word_override(writer, raw, foreign_word_namespace)?;
@@ -2872,6 +2965,70 @@ impl CT_R {
     }
 }
 
+fn comment_reference_has_payload_attributes(element: &BytesStart<'_>, prefixes: &[String]) -> bool {
+    let name = element.name();
+    let own_binding = qualified_name_prefix(name.as_ref())
+        .map_or_else(|| "xmlns".to_owned(), |prefix| format!("xmlns:{prefix}"));
+    element.attributes().any(|attribute| {
+        attribute.ok().is_none_or(|attribute| {
+            if attribute_in_namespace(
+                attribute.key.as_ref(),
+                b"id",
+                crate::namespace::W_NS,
+                prefixes,
+            ) {
+                return false;
+            }
+            // The element's own Word alias declaration is structural, not opaque
+            // payload. Every other declaration or attribute retains its source.
+            !(attribute.key.as_ref() == own_binding.as_bytes()
+                && attribute
+                    .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())
+                    .is_ok_and(|value| value == crate::namespace::W_NS))
+        })
+    })
+}
+
+fn close_comment_reference_source(raw: &[u8], prefixes: &[String]) -> Result<Vec<u8>> {
+    let mut bindings = prefixes
+        .iter()
+        .filter_map(|binding| {
+            binding
+                .strip_prefix('\0')
+                .and_then(|binding| binding.split_once('\0'))
+                .map(|(prefix, uri)| (prefix.to_owned(), uri.to_owned()))
+        })
+        .collect::<Vec<_>>();
+    for prefix in prefixes.iter().filter(|prefix| !prefix.starts_with('\0')) {
+        if !bindings.iter().any(|(bound, _)| bound == prefix) {
+            bindings.push((prefix.clone(), crate::namespace::W_NS.to_owned()));
+        }
+    }
+    raw_with_external_bindings(raw, &bindings)
+}
+
+fn retained_comment_reference_id(raw: &[u8]) -> Option<i32> {
+    let mut reader = quick_xml::reader::NsReader::from_reader(raw);
+    let (ns, event) = reader.read_resolved_event().ok()?;
+    if !matches!(ns, ResolveResult::Bound(namespace) if namespace.as_ref() == crate::namespace::W_NS.as_bytes())
+    {
+        return None;
+    }
+    let element = match event {
+        Event::Start(element) | Event::Empty(element) => element,
+        _ => return None,
+    };
+    if element.local_name().as_ref() != b"commentReference" {
+        return None;
+    }
+    element.attributes().find_map(|attr| {
+        let attr = attr.ok()?;
+        let (ns, local) = reader.resolver().resolve_attribute(attr.key);
+        (matches!(ns, ResolveResult::Bound(namespace) if namespace.as_ref() == crate::namespace::W_NS.as_bytes())
+            && local.as_ref() == b"id").then(|| attr.decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder()).ok()?.parse().ok()).flatten()
+    })
+}
+
 fn write_run_raw_boundary<W: std::io::Write>(
     writer: &mut Writer<W>,
     run: &CT_R,
@@ -2880,6 +3037,7 @@ fn write_run_raw_boundary<W: std::io::Write>(
 ) -> Result<()> {
     for (position, raw) in run.extra_xml_positions.iter().zip(&run.extra_xml) {
         if !CT_R::raw_child_is_root_attributes(*position)
+            && *position & RAW_COMMENT_REFERENCE_FLAG == 0
             && CT_R::raw_child_position(*position) == boundary
         {
             write_raw_with_word_override(writer, raw, foreign_word_namespace)?;
@@ -5942,7 +6100,36 @@ impl CT_P {
         }
         let mut raw = Vec::new();
         self.to_xml(&mut Writer::new(&mut raw))?;
-        let raw = raw_with_root_word_binding(&raw, crate::namespace::W_NS)?;
+        Self::accepted_comment_source_projection(&raw, id, open_at_start)
+    }
+
+    /// Project a comment from its namespace-closed original paragraph source.
+    /// Retain its exact inherited bindings through the private fidelity probe.
+    /// The accepted text, endpoint axis and unsupported-source checks are the
+    /// same as [`Self::accepted_comment_projection`].
+    #[doc(hidden)]
+    #[allow(clippy::type_complexity)] // Concrete text, open state and two accepted endpoints.
+    pub fn accepted_comment_source_projection(
+        xml: &[u8],
+        id: i32,
+        open_at_start: bool,
+    ) -> Result<(String, bool, Option<usize>, Option<usize>)> {
+        let raw = raw_with_external_bindings(
+            xml,
+            &[("w".to_owned(), crate::namespace::W_NS.to_owned())],
+        )?;
+        let mut root_reader = Reader::from_reader(raw.as_slice());
+        let bindings = loop {
+            match root_reader.read_event()? {
+                Event::Start(element) | Event::Empty(element) => {
+                    break raw_namespace_declarations(&element)?;
+                }
+                Event::Eof => {
+                    return Err(OxmlError::MissingElement("comment paragraph root".into()));
+                }
+                _ => {}
+            }
+        };
         let selected = project_comment_text(&raw, id, open_at_start)?;
         if !selected.markers.is_empty() {
             // Remove only this selected pair before asking the existing checked
@@ -5956,7 +6143,11 @@ impl CT_P {
                 .map_err(|error| OxmlError::InvalidValue(format!("comment {id}: existing accepted run axis cannot faithfully represent selected source: {error}")))?;
             let mut raw = Vec::new();
             probe.to_xml(&mut Writer::new(&mut raw))?;
-            let raw = raw_with_root_word_binding(&raw, crate::namespace::W_NS)?;
+            let raw = raw_with_external_bindings(&raw, &bindings)?;
+            let raw = raw_with_external_bindings(
+                &raw,
+                &[("w".to_owned(), crate::namespace::W_NS.to_owned())],
+            )?;
             let placed = project_comment_text(&raw, id, open_at_start)?;
             if selected.text != placed.text
                 || selected.start_offset != placed.start_offset
@@ -6240,6 +6431,98 @@ impl CT_P {
                 _ => {}
             }
             buffer.clear();
+        }
+    }
+
+    /// Read the literal range safeguard from its namespace-qualified source.
+    /// Only qualified Word markers, identity attributes and `t` elements count.
+    /// Tabs and breaks have zero width, while field-result text remains visible.
+    /// This does not change the richer accepted anchor projection.
+    #[doc(hidden)]
+    pub fn comment_range_text_from_source(xml: &[u8], id: i32) -> Result<Option<String>> {
+        // Validate the complete source separately. Text extraction below skips
+        // `t` subtrees and ends at the selected marker, neither of which may
+        // hide a missing namespace declaration elsewhere in the candidate.
+        let mut validation = NsReader::from_reader(xml);
+        loop {
+            let (namespace, event) = validation.read_resolved_event()?;
+            if let ResolveResult::Unknown(prefix) = namespace {
+                return Err(OxmlError::InvalidValue(format!(
+                    "comment literal source has unresolved element namespace prefix {:?}",
+                    String::from_utf8_lossy(&prefix)
+                )));
+            }
+            match event {
+                Event::Start(element) | Event::Empty(element) => {
+                    for attribute in element.attributes() {
+                        let attribute = attribute?;
+                        attribute.decoded_and_normalized_value(
+                            XmlVersion::Implicit1_0,
+                            validation.decoder(),
+                        )?;
+                        if !namespace_declaration(attribute.key.as_ref())
+                            && let (ResolveResult::Unknown(prefix), _) =
+                                validation.resolver().resolve_attribute(attribute.key)
+                        {
+                            return Err(OxmlError::InvalidValue(format!(
+                                "comment literal source has unresolved attribute namespace prefix {:?}",
+                                String::from_utf8_lossy(&prefix)
+                            )));
+                        }
+                    }
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        let mut reader = NsReader::from_reader(xml);
+        let mut text = None::<String>;
+        loop {
+            let (namespace, event) = reader.read_resolved_event()?;
+            let word = matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == crate::namespace::W_NS.as_bytes());
+            drop(namespace);
+            match event {
+                Event::Start(element) | Event::Empty(element)
+                    if word
+                        && matches!(
+                            element.local_name().as_ref(),
+                            b"commentRangeStart" | b"commentRangeEnd"
+                        ) =>
+                {
+                    let mut marker_id = None;
+                    for attribute in element.attributes() {
+                        let attribute = attribute?;
+                        let (namespace, local) = reader.resolver().resolve_attribute(attribute.key);
+                        if local.as_ref() == b"id"
+                            && matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == crate::namespace::W_NS.as_bytes())
+                        {
+                            marker_id = Some(
+                                attribute
+                                    .decoded_and_normalized_value(
+                                        XmlVersion::Implicit1_0,
+                                        reader.decoder(),
+                                    )?
+                                    .parse::<i32>()
+                                    .map_err(|error| OxmlError::InvalidValue(error.to_string()))?,
+                            );
+                        }
+                    }
+                    if marker_id == Some(id) {
+                        if element.local_name().as_ref() == b"commentRangeEnd" {
+                            return Ok(text);
+                        }
+                        text = Some(String::new());
+                    }
+                }
+                Event::Start(element) if word && element.local_name().as_ref() == b"t" => {
+                    let encoded = reader.read_text(element.name())?;
+                    if let Some(text) = text.as_mut() {
+                        text.push_str(&crate::xml_text::decode_escaped(&encoded));
+                    }
+                }
+                Event::Eof => return Ok(None),
+                _ => {}
+            }
         }
     }
 
@@ -8706,7 +8989,10 @@ fn write_run_content_segment<W: std::io::Write>(
     if run.extra_xml_positions.len() == run.extra_xml.len() {
         for (position, raw) in run.extra_xml_positions.iter().zip(&run.extra_xml) {
             let boundary = CT_R::raw_child_position(*position);
-            if boundary < lower || boundary > upper {
+            if boundary < lower
+                || boundary > upper
+                || (*position & RAW_COMMENT_REFERENCE_FLAG != 0 && boundary == upper)
+            {
                 continue;
             }
             let mut mapped = *position;
@@ -12867,6 +13153,39 @@ impl Default for CT_P {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn comment_literal_source_validates_namespaces_outside_selected_range() {
+        let range = r#"<w:commentRangeStart w:id="4"/><w:r><w:t>A</w:t><w:tab/><w:t>B</w:t></w:r><w:commentRangeEnd w:id="4"/>"#;
+        for invalid in [
+            "<q:bad/>",
+            "<w:r q:bad=\"value\"/>",
+            "<w:r q:bad=\"&invalid;\"/>",
+        ] {
+            for (before, inside, after) in [(invalid, "", ""), ("", invalid, ""), ("", "", invalid)]
+            {
+                let selected = range.replace("<w:tab/>", &format!("<w:tab/>{inside}"));
+                let xml = format!(
+                    r#"<w:p xmlns:w="{}">{before}{selected}{after}</w:p>"#,
+                    crate::namespace::W_NS
+                );
+                assert!(
+                    super::CT_P::comment_range_text_from_source(xml.as_bytes(), 4).is_err(),
+                    "{xml}"
+                );
+            }
+        }
+        let xml = format!(
+            r#"<w:p xmlns:w="{}" xmlns:q="urn:foreign"><q:box q:keep="value"/>{range}<q:box xmlns:q="urn:other"><q:t>IGNORED</q:t></q:box></w:p>"#,
+            crate::namespace::W_NS
+        );
+        assert_eq!(
+            super::CT_P::comment_range_text_from_source(xml.as_bytes(), 4)
+                .unwrap()
+                .as_deref(),
+            Some("AB")
+        );
+    }
     use super::*;
 
     fn parse_paragraph(xml: &str) -> CT_P {
@@ -17951,5 +18270,128 @@ mod tests {
                 assert_eq!(serialized_paragraph(&reopened), output);
             }
         }
+    }
+
+    #[test]
+    fn comment_reference_carriers_preserve_source_and_follow_typed_ownership() {
+        for paired in [false, true] {
+            let reference = if paired {
+                r#"<q:commentReference q:id="7" x:id="foreign" xmlns:w="urn:foreign"><x:owned/><!--owned--><?owned exact?></q:commentReference>"#
+            } else {
+                r#"<q:commentReference q:id="7" x:id="foreign" xmlns:w="urn:foreign"/>"#
+            };
+            let raw = format!(
+                r#"<w:p xmlns:w="{}" xmlns:q="{}" xmlns:x="urn:opaque"><w:r x:run="kept"><!--before--><?before exact?><w:t>AB</w:t>{reference}<!--between--><w:t>CD</w:t><q:commentReference q:id="8" x:id="second"/><?after exact?></w:r></w:p>"#,
+                crate::namespace::W_NS,
+                crate::namespace::W_NS
+            );
+            let paragraph = CT_P::from_xml_fragment(raw.as_bytes()).unwrap();
+            assert_eq!(paragraph.accepted_text(), "ABCD");
+            assert_eq!(paragraph.accepted_run_paths().len(), 1);
+            let mut run = paragraph.runs[0].clone();
+            let serialize = |run: &CT_R| {
+                let mut writer = Writer::new(Vec::new());
+                run.to_xml(&mut writer).unwrap();
+                String::from_utf8(writer.into_inner()).unwrap()
+            };
+            let output = serialize(&run);
+            assert_eq!(output.matches("x:id=\"foreign\"").count(), 1, "{output}");
+            assert_eq!(output.matches("x:id=\"second\"").count(), 1, "{output}");
+            assert!(output.find("<!--before-->").unwrap() < output.find("<w:t>AB").unwrap());
+            assert!(
+                output.find("<!--between-->").unwrap() > output.find("x:id=\"foreign\"").unwrap()
+            );
+            assert!(output.contains("<?after exact?>"));
+            if paired {
+                assert!(output.contains("<x:owned/><!--owned--><?owned exact?>"));
+            }
+            run.ensure_properties().bold = Some(true);
+            let output = serialize(&run);
+            assert!(output.find("<w:rPr>").unwrap() < output.find("x:id=\"foreign\"").unwrap());
+            let mut changed = run.clone();
+            let RunContent::CommentReference { id, .. } = &mut changed.content[1] else {
+                panic!("reference");
+            };
+            *id = 9;
+            let changed = serialize(&changed);
+            assert!(!changed.contains("x:id=\"foreign\""), "{changed}");
+            assert!(changed.contains("w:id=\"9\""));
+            let mut removed = run.clone();
+            assert!(removed.remove_comment_references(&[7]));
+            let removed = serialize(&removed);
+            assert!(
+                !removed.contains("foreign") && !removed.contains("<x:owned"),
+                "{removed}"
+            );
+            assert!(removed.contains("<!--between-->") && removed.contains("x:id=\"second\""));
+            let mut replaced = run.clone();
+            replaced.replace_content(vec![RunContent::Text(CT_Text::new("NEW"))]);
+            let replaced = serialize(&replaced);
+            assert!(!replaced.contains("commentReference"), "{replaced}");
+            assert!(replaced.contains("<!--before-->") && replaced.contains("<?after exact?>"));
+            let mut head = run.clone();
+            let tail = head.split_off_at(2).unwrap();
+            assert!(!serialize(&head).contains("commentReference"));
+            assert_eq!(serialize(&tail).matches("commentReference ").count(), 2);
+            let mut segmented = Writer::new(Vec::new());
+            write_run_content_segment(&mut segmented, &run, 0, 1, true, false, None).unwrap();
+            write_run_content_segment(&mut segmented, &run, 1, 3, false, false, None).unwrap();
+            write_run_content_segment(&mut segmented, &run, 3, 4, false, true, None).unwrap();
+            let segmented = String::from_utf8(segmented.into_inner()).unwrap();
+            assert_eq!(
+                segmented.matches("x:id=\"foreign\"").count(),
+                1,
+                "{segmented}"
+            );
+            assert_eq!(
+                segmented.matches("x:id=\"second\"").count(),
+                1,
+                "{segmented}"
+            );
+            let mut unordered = run.clone();
+            unordered.extra_xml_positions.clear();
+            // Without private boundary provenance, raw references are independent sources.
+            let unordered = serialize(&unordered);
+            assert_eq!(
+                unordered.matches("commentReference ").count(),
+                4,
+                "{unordered}"
+            );
+            assert!(unordered.contains("x:id=\"foreign\""));
+            assert!(unordered.contains("x:id=\"second\""));
+        }
+    }
+
+    #[test]
+    fn unordered_raw_comment_references_remain_independent_sources() {
+        let raw = format!(
+            r#"<w:commentReference xmlns:w="{}" w:id="7" xmlns:x="urn:x" x:keep="opaque"/>"#,
+            crate::namespace::W_NS
+        );
+        let mut failures = Vec::new();
+        for typed in [None, Some(7), Some(8)] {
+            let run = CT_R {
+                properties: None,
+                content: typed
+                    .map(|id| RunContent::CommentReference { id, raw_before: 1 })
+                    .into_iter()
+                    .collect(),
+                extra_xml: vec![raw.as_bytes().to_vec()],
+                extra_xml_positions: Vec::new(),
+                alt_drawings: Vec::new(),
+            };
+            let mut writer = Writer::new(Vec::new());
+            run.to_xml(&mut writer).unwrap();
+            let output = String::from_utf8(writer.into_inner()).unwrap();
+            if !output.contains(&raw)
+                || output.matches("commentReference ").count() != 1 + usize::from(typed.is_some())
+            {
+                failures.push(format!("typed={typed:?}: {output}"));
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "independent raw references were lost: {failures:?}"
+        );
     }
 }

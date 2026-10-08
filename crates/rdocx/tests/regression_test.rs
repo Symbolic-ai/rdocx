@@ -58670,3 +58670,1097 @@ fn comment_anchor_listing_proves_absence_without_weakening_owned_graph() {
         }
     }
 }
+
+#[test]
+fn comment_moves_preserve_thread_identity() {
+    let mut seed = Document::new();
+    seed.add_paragraph("SOURCE");
+    seed.add_paragraph("KEPT");
+    seed.set_header("TARGET");
+    let id = seed
+        .add_comment_with_date(
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            Some("A"),
+            "Review\nMore",
+            Some("2026-10-08T12:00:00Z"),
+        )
+        .unwrap();
+    seed.reply_to_with_date(id, "Ben", "Reply", Some("2026-10-08T12:01:00Z"))
+        .unwrap();
+    seed.resolve_comment(id, true).unwrap();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    let main = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let reference = format!(r#"<w:r><w:commentReference w:id="{id}"/></w:r>"#);
+    assert_eq!(main.matches(&reference).count(), 1);
+    let styled = format!(
+        r#"<w:r xmlns:x="urn:move-source" x:transport="exact"><w:rPr><w:b/><w:i/></w:rPr><w:commentReference w:id="{id}" x:id="foreign-exact"/></w:r>"#
+    );
+    package.set_part(
+        "/word/document.xml",
+        main.replace(&reference, &styled).into_bytes(),
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+    let metadata = |d: &Document| {
+        d.comments()
+            .into_iter()
+            .map(|c| {
+                (
+                    c.id(),
+                    c.author().map(str::to_owned),
+                    c.initials().map(str::to_owned),
+                    c.date().map(str::to_owned),
+                    c.text(),
+                    c.parent_id(),
+                    c.resolved(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let original_metadata = metadata(&document);
+    let selected = document
+        .story_ranges()
+        .unwrap()
+        .into_iter()
+        .find(|r| matches!(r.kind(), rdocx::StoryRangeKind::Comment { id: found } if *found == id))
+        .unwrap();
+    let header = f254_story(&document, StoryKind::Header);
+    let location = document
+        .story_items(&header)
+        .unwrap()
+        .into_iter()
+        .find(|i| i.kind() == StoryItemKind::Paragraph)
+        .unwrap()
+        .location()
+        .clone();
+    let target = StoryRunRange {
+        start: StoryRunPosition {
+            location: location.clone(),
+            run_index: 0,
+        },
+        end: StoryRunPosition {
+            location,
+            run_index: 1,
+        },
+    };
+    // Before proof uses the existing move route, not missing API availability.
+    document.move_story_range(&selected, target).unwrap();
+    assert_eq!(metadata(&document), original_metadata);
+    assert_eq!(
+        document.comment_anchor_text(id).unwrap().as_deref(),
+        Some("TARGET")
+    );
+    let output =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let header_xml = std::str::from_utf8(output.get_part(header.part_name()).unwrap()).unwrap();
+    assert!(
+        header_xml.contains("x:transport=\"exact\""),
+        "the reference run's source attributes must move with it: {header_xml}"
+    );
+    assert!(header_xml.contains("<w:b/>") && header_xml.contains("<w:i/>"));
+    assert!(header_xml.contains("x:id=\"foreign-exact\""));
+    for (part, original) in &package.parts {
+        if part != "/word/document.xml" && part != header.part_name() {
+            assert_eq!(output.get_part(part), Some(original.as_slice()), "{part}");
+        }
+    }
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(metadata(&reopened), original_metadata);
+}
+
+#[test]
+fn comment_move_prunes_only_empty_google_marker_wrappers() {
+    let mut seed = Document::new();
+    seed.add_paragraph("SOURCE");
+    seed.add_paragraph("KEPT");
+    let id = seed
+        .add_comment(
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "Review",
+        )
+        .unwrap();
+    let body = format!(
+        r#"<w:p><w:sdt><w:sdtPr><w:tag w:val="goog_rdk_start"/></w:sdtPr><w:sdtContent><w:commentRangeStart w:id="{id}"/></w:sdtContent></w:sdt><w:r><w:t>SOURCE</w:t></w:r><w:sdt><w:sdtPr><w:tag w:val="goog_rdk_end"/></w:sdtPr><w:sdtContent><w:commentRangeEnd w:id="{id}"/></w:sdtContent></w:sdt><w:sdt><w:sdtPr><w:tag w:val="goog_rdk_ref"/></w:sdtPr><w:sdtContent><w:r><w:commentReference w:id="{id}"/></w:r></w:sdtContent></w:sdt></w:p><w:p><w:r><w:t>KEPT</w:t></w:r></w:p>"#
+    );
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    package.set_part("/word/document.xml", wrap_word_body(&body).into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+    let selected = document
+        .story_ranges()
+        .unwrap()
+        .into_iter()
+        .find(|r| matches!(r.kind(), rdocx::StoryRangeKind::Comment { id: found } if *found == id))
+        .unwrap();
+    let location = document.paragraph_story_location(1).unwrap().unwrap();
+    document
+        .move_story_range(
+            &selected,
+            StoryRunRange {
+                start: StoryRunPosition {
+                    location: location.clone(),
+                    run_index: 0,
+                },
+                end: StoryRunPosition {
+                    location,
+                    run_index: 1,
+                },
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        document.comment_anchor_text(id).unwrap().as_deref(),
+        Some("KEPT")
+    );
+    let output =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let main = std::str::from_utf8(output.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(
+        !main.contains("goog_rdk_"),
+        "only moved markers occupied these wrappers: {main}"
+    );
+    assert_eq!(document.paragraph(0).unwrap().text(), "SOURCE");
+}
+
+#[test]
+fn comment_moves_rebase_same_paragraph_and_preserve_mixed_reference_runs() {
+    for mixed in [false, true] {
+        let mut seed = Document::new();
+        seed.add_paragraph("SOURCE").add_run("TARGET");
+        let id = seed
+            .add_comment(
+                RunRange {
+                    start: RunPosition {
+                        body_index: 0,
+                        run_index: 0,
+                    },
+                    end: RunPosition {
+                        body_index: 0,
+                        run_index: 1,
+                    },
+                },
+                "Ada",
+                None,
+                "Review",
+            )
+            .unwrap();
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+                .unwrap();
+        let main =
+            String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+        let old = format!(r#"<w:r><w:commentReference w:id="{id}"/></w:r>"#);
+        let neighbor = if mixed {
+            r#"<w:t>NEIGHBOR</w:t><x:opaque value="kept"/><!--run-payload--><?keep exact?>"#
+        } else {
+            ""
+        };
+        let reference = format!(
+            r#"<w:r xmlns:x="urn:move-source" x:transport="same"><w:rPr><w:b/></w:rPr><w:commentReference w:id="{id}" x:id="foreign-exact"/>{neighbor}</w:r>"#
+        );
+        assert_eq!(main.matches(&old).count(), 1);
+        package.set_part(
+            "/word/document.xml",
+            main.replace(&old, &reference).into_bytes(),
+        );
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+        let location = document.paragraph_story_location(0).unwrap().unwrap();
+        document
+            .move_comment(
+                id,
+                StoryRunRange {
+                    start: StoryRunPosition {
+                        location: location.clone(),
+                        run_index: 2,
+                    },
+                    end: StoryRunPosition {
+                        location,
+                        run_index: 3,
+                    },
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            document.comment_anchor_text(id).unwrap().as_deref(),
+            Some("TARGET"),
+            "mixed={mixed}"
+        );
+        assert_eq!(
+            document.paragraph(0).unwrap().text(),
+            if mixed {
+                "SOURCENEIGHBORTARGET"
+            } else {
+                "SOURCETARGET"
+            }
+        );
+        let saved = document.to_bytes().unwrap();
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+        let raw = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        assert_eq!(raw.matches("foreign-exact").count(), 1, "{raw}");
+        if mixed {
+            assert_eq!(
+                raw.matches("<x:opaque value=\"kept\"/>").count(),
+                1,
+                "{raw}"
+            );
+            assert_eq!(
+                raw.matches("<!--run-payload--><?keep exact?>").count(),
+                1,
+                "{raw}"
+            );
+        }
+        let reopened = Document::from_bytes(&saved).unwrap();
+        assert_eq!(
+            reopened.comment_anchor_text(id).unwrap().as_deref(),
+            Some("TARGET")
+        );
+        let before = document.to_bytes().unwrap();
+        document.move_comment_to_text(id, "SOURCE", 0).unwrap();
+        assert_eq!(
+            document.comment_anchor_text(id).unwrap().as_deref(),
+            Some("SOURCE")
+        );
+        assert_ne!(document.to_bytes().unwrap(), before);
+    }
+}
+
+#[test]
+fn comment_moves_to_literal_text_keep_zero_width_and_namespace_semantics() {
+    let imported = |target: &str| {
+        let mut seed = Document::new();
+        seed.add_paragraph("SOURCE");
+        let id = seed
+            .add_comment_on_text("SOURCE", 0, "Ada", None, "Kept identity", None)
+            .unwrap();
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+                .unwrap();
+        let main = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        let start = main.find("<w:p>").unwrap();
+        let end = start + main[start..].find("</w:p>").unwrap() + "</w:p>".len();
+        let xml = wrap_word_body(&format!("{}{target}", &main[start..end]));
+        package.set_part("/word/document.xml", xml.into_bytes());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        (Document::from_bytes(bytes.get_ref()).unwrap(), id)
+    };
+    let mut failures = Vec::new();
+    for (name, target, anchor, expected, alias) in [
+        (
+            "zero-width",
+            r#"<w:p><w:r><w:t>A</w:t><w:tab/><w:br/><w:t>B</w:t></w:r></w:p>"#,
+            "AB",
+            "A\t\nB",
+            false,
+        ),
+        (
+            "ns0-control",
+            r#"<w:p><w:sdt><w:sdtPr/><w:sdtContent><w:r><w:t>A</w:t></w:r><w:r><w:t>B</w:t></w:r></w:sdtContent></w:sdt></w:p>"#,
+            "B",
+            "B",
+            true,
+        ),
+        (
+            "table-text-scope",
+            r#"<w:tbl xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:tblPr/><w:tblGrid><w:gridCol w:w="2400"/></w:tblGrid><w:tr><w:tc><w:tcPr/><w:p><w:r><w:t>A</w:t><q:t>7</q:t><w:t>B</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+            "A7B",
+            "A7B",
+            false,
+        ),
+        (
+            "cell-text-scope",
+            r#"<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="2400"/></w:tblGrid><w:tr><w:tc xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:tcPr/><w:p><w:r><w:t>A</w:t><q:t>7</q:t><w:t>B</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+            "A7B",
+            "A7B",
+            false,
+        ),
+        (
+            "paragraph-text-scope",
+            r#"<w:p xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:r><w:t>A</w:t><q:t>7</q:t><w:t>B</w:t></w:r></w:p>"#,
+            "A7B",
+            "A7B",
+            false,
+        ),
+        (
+            "block-text-scope",
+            r#"<w:sdt xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:sdtPr/><w:sdtContent><w:p><w:r><w:t>A</w:t><q:t>7</q:t><w:t>B</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+            "A7B",
+            "A7B",
+            false,
+        ),
+        (
+            "table-local-foreign-shadow",
+            r#"<w:tbl xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:tblPr/><w:tblGrid><w:gridCol w:w="2400"/></w:tblGrid><w:tr><w:tc><w:tcPr/><w:p><w:sdt><w:sdtPr/><w:sdtContent><w:r><w:t>A</w:t></w:r><w:r><w:t>B</w:t><q:box xmlns:q="urn:foreign"><q:t>FOREIGN</q:t><q:commentRangeEnd q:id="0"/></q:box></w:r></w:sdtContent></w:sdt></w:p></w:tc></w:tr></w:tbl>"#,
+            "AB",
+            "AB",
+            false,
+        ),
+        (
+            "table-local-alias",
+            r#"<w:tbl xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:tblPr/><w:tblGrid><w:gridCol w:w="2400"/></w:tblGrid><w:tr><w:tc><w:tcPr/><w:p><q:sdt><q:sdtPr/><q:sdtContent><q:r><q:t>A</q:t></q:r><q:r><q:t>B</q:t></q:r></q:sdtContent></q:sdt></w:p></w:tc></w:tr></w:tbl>"#,
+            "AB",
+            "AB",
+            false,
+        ),
+        (
+            "cell-local-shadow",
+            r#"<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="2400"/></w:tblGrid><w:tr><w:tc xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:tcPr/><w:p><q:sdt><q:sdtPr/><q:sdtContent><q:r><q:t>A</q:t></q:r><q:r><q:t>B</q:t><q:box xmlns:q="urn:foreign"><q:t>FOREIGN</q:t><q:commentRangeEnd q:id="0"/></q:box></q:r></q:sdtContent></q:sdt></w:p></w:tc></w:tr></w:tbl>"#,
+            "AB",
+            "AB",
+            false,
+        ),
+        (
+            "block-local-alias",
+            r#"<w:sdt xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:sdtPr/><w:sdtContent><w:p><q:sdt><q:sdtPr/><q:sdtContent><q:r><q:t>A</q:t></q:r><q:r><q:t>B</q:t></q:r></q:sdtContent></q:sdt></w:p></w:sdtContent></w:sdt>"#,
+            "AB",
+            "AB",
+            false,
+        ),
+        (
+            "paragraph-local-alias",
+            r#"<w:p xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><q:sdt><q:sdtPr/><q:sdtContent><q:r><q:t>A</q:t></q:r><q:r><q:t>B</q:t></q:r></q:sdtContent></q:sdt></w:p>"#,
+            "AB",
+            "AB",
+            false,
+        ),
+        (
+            "local-shadow",
+            r#"<w:p><w:sdt xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:sdtPr/><w:sdtContent><q:r><q:t>A</q:t></q:r><q:r><q:t>B</q:t><q:box xmlns:q="urn:foreign"><q:t>FOREIGN</q:t><q:commentRangeEnd q:id="0"/></q:box></q:r></w:sdtContent></w:sdt></w:p>"#,
+            "AB",
+            "AB",
+            false,
+        ),
+        (
+            "foreign-lookalikes",
+            r#"<w:p xmlns:x="urn:foreign"><w:r><w:t>A</w:t><x:commentRangeStart x:id="0"/><x:t>FOREIGN</x:t><x:commentRangeEnd x:id="0"/><w:t>B</w:t></w:r></w:p>"#,
+            "AB",
+            "AB",
+            false,
+        ),
+    ] {
+        if matches!(
+            name,
+            "table-local-alias" | "cell-local-shadow" | "paragraph-local-alias"
+        ) {
+            let (mut document, id) = imported(target);
+            let before = document.to_bytes().unwrap();
+            let error = document.move_comment_to_text(id, anchor, 0).unwrap_err();
+            assert!(
+                error.to_string().contains("has no occurrence 0"),
+                "{name}: {error}"
+            );
+            assert_eq!(document.to_bytes().unwrap(), before, "{name}");
+            continue;
+        }
+        let mut xml = wrap_word_body(&format!("<w:p><w:r><w:t>SOURCE</w:t></w:r></w:p>{target}"));
+        if alias {
+            xml = xml
+                .replace("xmlns:w=", "xmlns:ns0=")
+                .replace("<w:", "<ns0:")
+                .replace("</w:", "</ns0:");
+        }
+        let mut document = document_with_content_controls(&xml);
+        let id = document
+            .add_comment_on_text("SOURCE", 0, "Ada", None, "Kept identity", None)
+            .unwrap_or_else(|error| panic!("initial source add {name}: {error}"));
+        let original = document
+            .comments()
+            .iter()
+            .map(|comment| (comment.id(), comment.text()))
+            .collect::<Vec<_>>();
+        // These three preserved q:sdt owners are not represented by the existing
+        // accepted literal axis before the guard. Do not invent accepted runs.
+        if matches!(
+            name,
+            "table-local-alias" | "cell-local-shadow" | "paragraph-local-alias"
+        ) {
+            let before = document.to_bytes().unwrap();
+            let error = document.move_comment_to_text(id, anchor, 0).unwrap_err();
+            assert!(
+                error.to_string().contains("has no occurrence 0"),
+                "{name}: {error}"
+            );
+            assert_eq!(document.to_bytes().unwrap(), before, "{name}");
+            continue;
+        }
+        if let Err(error) = document.move_comment_to_text(id, anchor, 0) {
+            failures.push(format!("{name}: {error}"));
+            continue;
+        }
+        assert_eq!(
+            document
+                .comments()
+                .iter()
+                .map(|comment| (comment.id(), comment.text()))
+                .collect::<Vec<_>>(),
+            original
+        );
+        assert_eq!(
+            document.comment_anchor_text(id).unwrap().as_deref(),
+            Some(expected),
+            "{name}"
+        );
+        document.validate_comment_ownership().unwrap();
+        let saved = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&saved).unwrap();
+        assert_eq!(
+            reopened.comment_anchor_text(id).unwrap().as_deref(),
+            Some(expected),
+            "{name}"
+        );
+        // No temporary thread or identity was allocated by moving the source.
+        let next = document
+            .add_comment_on_text("SOURCE", 0, "Next", None, "Second", None)
+            .unwrap();
+        assert_eq!(next, id + 1, "{name}");
+    }
+    // Exact Base proof shows these fail their initial save even before an edit.
+    // The checked source guard refuses earlier, without publishing a mutation.
+    for (target, owner) in [
+        (
+            r#"<w:tbl xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:tblPr/><w:tblGrid><w:gridCol w:w="2400"/></w:tblGrid><w:tr><w:tc><w:tcPr/><w:p><w:r><w:t>A</w:t></w:r><q:fldSimple q:instr=" PAGE "><q:r><q:t>7</q:t></q:r></q:fldSimple><w:r><w:t>B</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+            "tbl",
+        ),
+        (
+            r#"<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="2400"/></w:tblGrid><w:tr><w:tc xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:tcPr/><w:p><w:r><w:t>A</w:t></w:r><q:fldSimple q:instr=" PAGE "><q:r><q:t>7</q:t></q:r></q:fldSimple><w:r><w:t>B</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+            "tc",
+        ),
+    ] {
+        let mut document = document_with_content_controls(&wrap_word_body(&format!(
+            "<w:p><w:r><w:t>SOURCE</w:t></w:r></w:p>{target}"
+        )));
+        let error = document.to_bytes().unwrap_err().to_string();
+        assert!(
+            error.contains(&format!(
+                "cannot identify retained `{owner}` nested namespace owner"
+            )),
+            "{error}"
+        );
+        let snapshot = |document: &Document| {
+            document
+                .story_items(&f254_story(document, rdocx::StoryKind::Body))
+                .unwrap()
+                .into_iter()
+                .map(|item| item.xml().unwrap().into_owned())
+                .collect::<Vec<_>>()
+        };
+        let before = snapshot(&document);
+        assert!(document.comments().is_empty());
+        assert_eq!(
+            document
+                .add_comment_on_text("SOURCE", 0, "Ada", None, "Kept", None)
+                .unwrap_err()
+                .to_string(),
+            error
+        );
+        assert_eq!(snapshot(&document), before);
+        assert!(document.comments().is_empty());
+        assert_eq!(document.to_bytes().unwrap_err().to_string(), error);
+    }
+    // These two sources are saveable on exact Base. A move beside their raw
+    // field must preserve its local namespace, while crossing it must refuse.
+    for target in [
+        r#"<w:p xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:r><w:t>A</w:t></w:r><q:fldSimple q:instr=" PAGE "><q:r><q:t>7</q:t></q:r></q:fldSimple><w:r><w:t>B</w:t></w:r></w:p>"#,
+        r#"<w:sdt xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:sdtPr/><w:sdtContent><w:p><w:r><w:t>A</w:t></w:r><q:fldSimple q:instr=" PAGE "><q:r><q:t>7</q:t></q:r></q:fldSimple><w:r><w:t>B</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    ] {
+        let mut document = document_with_content_controls(&wrap_word_body(&format!(
+            "<w:p><w:r><w:t>SOURCE</w:t></w:r></w:p>{target}"
+        )));
+        let id = document
+            .add_comment_on_text("SOURCE", 0, "Ada", None, "Kept", None)
+            .unwrap();
+        document.move_comment_to_text(id, "A", 0).unwrap();
+        let bytes = document.to_bytes().unwrap();
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+        let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        assert!(
+            xml.contains(
+                "xmlns:q=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\""
+            ),
+            "{xml}"
+        );
+        assert!(
+            xml.contains(r#"<q:fldSimple q:instr=" PAGE "><q:r><q:t>7</q:t></q:r></q:fldSimple>"#),
+            "{xml}"
+        );
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        assert_eq!(
+            reopened.comment_anchor_text(id).unwrap().as_deref(),
+            Some("A")
+        );
+    }
+    let repeated = r#"<w:p xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:r><w:t>A</w:t></w:r><q:fldSimple q:instr=" PAGE "><q:r><q:t>7</q:t></q:r></q:fldSimple><w:r><w:t>B</w:t></w:r></w:p>"#;
+    let (mut ambiguous, id) = imported(&format!("{repeated}{repeated}"));
+    // Existing strict replay already refuses this indistinguishable imported
+    // owner pair on save. Move must preserve that refusal and its source state.
+    let original_error = ambiguous.to_bytes().unwrap_err().to_string();
+    let snapshot = |document: &Document| {
+        document
+            .story_items(&f254_story(document, rdocx::StoryKind::Body))
+            .unwrap()
+            .into_iter()
+            .map(|item| item.xml().unwrap().into_owned())
+            .collect::<Vec<_>>()
+    };
+    let before = snapshot(&ambiguous);
+    let error = ambiguous.move_comment_to_text(id, "A", 0).unwrap_err();
+    assert_eq!(error.to_string(), original_error);
+    assert_eq!(snapshot(&ambiguous), before);
+    assert_eq!(
+        ambiguous.to_bytes().unwrap_err().to_string(),
+        original_error
+    );
+    for (target, anchor, shown) in [
+        (
+            r#"<w:p xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:r><w:t>A</w:t></w:r><q:fldSimple q:instr=" PAGE "><q:r><q:t>7</q:t></q:r></q:fldSimple><w:r><w:t>B</w:t></w:r></w:p>"#,
+            "AB",
+            "A7B",
+        ),
+        (
+            r#"<w:sdt xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:sdtPr/><w:sdtContent><w:p><w:r><w:t>A</w:t></w:r><q:fldSimple q:instr=" PAGE "><q:r><q:t>7</q:t></q:r></q:fldSimple><w:r><w:t>B</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+            "AB",
+            "A7B",
+        ),
+        (
+            r#"<w:p><w:r><w:t>A</w:t></w:r><w:fldSimple w:instr=" PAGE "><w:r><w:t>7</w:t></w:r></w:fldSimple><w:r><w:t>B</w:t></w:r></w:p>"#,
+            "AB",
+            "A7B",
+        ),
+        (
+            r#"<w:p><w:r><w:t>A</w:t></w:r><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>9</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r><w:r><w:t>B</w:t></w:r></w:p>"#,
+            "AB",
+            "A9B",
+        ),
+    ] {
+        let mut document = document_with_content_controls(&wrap_word_body(&format!(
+            "<w:p><w:r><w:t>SOURCE</w:t></w:r></w:p>{target}"
+        )));
+        let id = document
+            .add_comment_on_text("SOURCE", 0, "Ada", None, "Kept", None)
+            .unwrap();
+        let before = document.to_bytes().unwrap();
+        let error = match document.move_comment_to_text(id, anchor, 0) {
+            Err(error) => error,
+            Ok(()) => panic!(
+                "unexpected exact move for {target}: {}",
+                document_xml(&mut document)
+            ),
+        };
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("its range would show {shown:?}")),
+            "{error}"
+        );
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+    assert!(
+        failures.is_empty(),
+        "literal move compatibility: {failures:?}"
+    );
+}
+
+#[test]
+fn comment_moves_rebase_after_marker_only_block_controls_and_retain_opaque_wrappers() {
+    for opaque in [false, true] {
+        let mut seed = Document::new();
+        seed.add_paragraph("SOURCE");
+        let id = seed
+            .add_comment(
+                RunRange {
+                    start: RunPosition {
+                        body_index: 0,
+                        run_index: 0,
+                    },
+                    end: RunPosition {
+                        body_index: 0,
+                        run_index: 1,
+                    },
+                },
+                "Ada",
+                None,
+                "Review",
+            )
+            .unwrap();
+        let extra = if opaque {
+            r#" xmlns:x="urn:retained" x:keep="root""#
+        } else {
+            ""
+        };
+        let payload = if opaque {
+            "<!--opaque--><?retain exact?>"
+        } else {
+            ""
+        };
+        let body = format!(
+            r#"<w:sdt{extra}><w:sdtPr><w:tag w:val="goog_rdk_start"/></w:sdtPr><w:sdtContent><w:p><w:commentRangeStart w:id="{id}"/>{payload}</w:p></w:sdtContent></w:sdt><w:p><w:r><w:t>SOURCE</w:t></w:r></w:p><w:sdt><w:sdtPr><w:tag w:val="goog_rdk_end"/></w:sdtPr><w:sdtContent><w:p><w:commentRangeEnd w:id="{id}"/></w:p></w:sdtContent></w:sdt><w:sdt><w:sdtPr><w:tag w:val="goog_rdk_ref"/></w:sdtPr><w:sdtContent><w:p><w:r><w:commentReference w:id="{id}"/></w:r></w:p></w:sdtContent></w:sdt><w:sdt><w:sdtPr><w:tag w:val="destination"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>FIRST</w:t></w:r></w:p><w:p><w:r><w:t>TARGET</w:t></w:r></w:p></w:sdtContent></w:sdt>"#
+        );
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+                .unwrap();
+        package.set_part("/word/document.xml", wrap_word_body(&body).into_bytes());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+        let body_story = f254_story(&document, StoryKind::Body);
+        let target = ContentLocation::new(body_story, StoryItemKind::Paragraph, vec![4, 1]);
+        document
+            .move_comment(
+                id,
+                StoryRunRange {
+                    start: StoryRunPosition {
+                        location: target.clone(),
+                        run_index: 0,
+                    },
+                    end: StoryRunPosition {
+                        location: target,
+                        run_index: 1,
+                    },
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            document.comment_anchor_text(id).unwrap().as_deref(),
+            Some("TARGET")
+        );
+        let saved = document.to_bytes().unwrap();
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+        let raw = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        assert_eq!(
+            raw.matches("goog_rdk_").count(),
+            usize::from(opaque),
+            "{raw}"
+        );
+        if opaque {
+            assert!(
+                raw.contains("x:keep=\"root\"") && raw.contains("<!--opaque--><?retain exact?>"),
+                "{raw}"
+            );
+        }
+        let anchor = document.comment_anchor(id).unwrap().unwrap();
+        assert_eq!(
+            anchor.start.location.index_path(),
+            if opaque { &[2, 1] } else { &[1, 1] }
+        );
+        document.move_comment_to_text(id, "SOURCE", 0).unwrap();
+        assert_eq!(
+            document.comment_anchor_text(id).unwrap().as_deref(),
+            Some("SOURCE")
+        );
+    }
+}
+
+#[test]
+fn comment_moves_cover_related_owners_and_refuse_invalid_graphs_atomically() {
+    for kind in [
+        StoryKind::Header,
+        StoryKind::Footer,
+        StoryKind::TableCell,
+        StoryKind::Footnote,
+        StoryKind::Endnote,
+        StoryKind::TextBox,
+    ] {
+        let mut document = Document::new();
+        document.add_paragraph("SOURCE");
+        document.add_paragraph("RETURN");
+        document.set_header("TARGET");
+        document.set_footer("TARGET");
+        document
+            .add_table(1, 1)
+            .cell(0, 0)
+            .unwrap()
+            .set_text("TARGET");
+        let note = document.add_footnote("TARGET");
+        let reference = document.paragraph_story_location(1).unwrap().unwrap();
+        let endnote = document.create_endnote(&reference, "TARGET").unwrap();
+        let zero = Length::pt(0.0);
+        document
+            .add_text_box_to_story(
+                &f254_story(&document, StoryKind::Body),
+                "TARGET",
+                rdocx::TextBoxOptions {
+                    width: Length::pt(144.0),
+                    height: Length::pt(54.0),
+                    anchor: rdocx::PictureAnchor {
+                        horizontal_relative_from: rdocx::DrawingHorizontalRelativeFrom::Column,
+                        horizontal_offset: zero,
+                        horizontal_alignment: None,
+                        vertical_relative_from: rdocx::DrawingVerticalRelativeFrom::Paragraph,
+                        vertical_offset: zero,
+                        vertical_alignment: None,
+                        wrap: rdocx::DrawingWrap::TopAndBottom,
+                        distance_top: zero,
+                        distance_bottom: zero,
+                        distance_left: zero,
+                        distance_right: zero,
+                        relative_height: 1,
+                        behind_text: false,
+                    },
+                    rotation_degrees: 0.0,
+                    text_direction: rdocx::TextBoxDirection::Horizontal,
+                    fill_color: None,
+                },
+            )
+            .unwrap();
+        let id = document
+            .add_comment_on_text(
+                "SOURCE",
+                0,
+                "Ada",
+                Some("A"),
+                "Review",
+                Some("2026-10-08T12:00:00Z"),
+            )
+            .unwrap();
+        let reply = document.reply_to(id, "Ben", "Reply").unwrap();
+        document.resolve_comment(id, true).unwrap();
+        let story = if kind == StoryKind::Endnote {
+            document.endnote_story(endnote).unwrap().unwrap()
+        } else if kind == StoryKind::Footnote {
+            document.footnote_story(note).unwrap().unwrap()
+        } else {
+            f254_story(&document, kind)
+        };
+        let location = document
+            .story_items(&story)
+            .unwrap()
+            .into_iter()
+            .find(|item| item.kind() == StoryItemKind::Paragraph)
+            .unwrap()
+            .location()
+            .clone();
+        let snapshot = document.story_range_paragraph_snapshot(&location).unwrap();
+        let paragraph = CT_P::from_xml_fragment(snapshot.xml()).unwrap();
+        let target_index = paragraph
+            .accepted_run_paths()
+            .iter()
+            .enumerate()
+            .find_map(|(index, path)| {
+                paragraph
+                    .accepted_run(path)
+                    .filter(|run| {
+                        run.content.iter().any(|content|
+                matches!(content, rdocx_oxml::text::RunContent::Text(text) if text.text == "TARGET"))
+                    })
+                    .map(|_| index)
+            })
+            .unwrap();
+        document
+            .move_comment(
+                id,
+                StoryRunRange {
+                    start: StoryRunPosition {
+                        location: location.clone(),
+                        run_index: target_index,
+                    },
+                    end: StoryRunPosition {
+                        location,
+                        run_index: target_index + 1,
+                    },
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            document.comment_anchor_text(id).unwrap().as_deref(),
+            Some("TARGET"),
+            "{kind:?}"
+        );
+        assert_eq!(
+            document
+                .comments()
+                .iter()
+                .find(|comment| comment.id() == reply)
+                .unwrap()
+                .parent_id(),
+            Some(id)
+        );
+        assert!(
+            document
+                .comments()
+                .iter()
+                .find(|comment| comment.id() == id)
+                .unwrap()
+                .resolved()
+        );
+        document.validate_comment_ownership().unwrap();
+        document.move_comment_to_text(id, "RETURN", 0).unwrap();
+        assert_eq!(
+            document.comment_anchor_text(id).unwrap().as_deref(),
+            Some("RETURN")
+        );
+        let saved = document.to_bytes().unwrap();
+        assert_eq!(
+            Document::from_bytes(&saved)
+                .unwrap()
+                .comment_anchor_text(id)
+                .unwrap()
+                .as_deref(),
+            Some("RETURN")
+        );
+        let before = document.to_bytes().unwrap();
+        assert!(document.move_comment_to_text(999, "RETURN", 0).is_err());
+        assert!(document.move_comment_to_text(reply, "RETURN", 0).is_err());
+        assert!(document.move_comment_to_text(id, "RETURN", 1).is_err());
+        assert!(document.move_comment_to_text(id, "", 0).is_err());
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+    let mut seed = Document::new();
+    seed.add_paragraph("SOURCE");
+    seed.add_paragraph("TARGET");
+    let id = seed
+        .add_comment_on_text("SOURCE", 0, "Ada", None, "Review", None)
+        .unwrap();
+    let saved = seed.to_bytes().unwrap();
+    let original = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    let raw = std::str::from_utf8(original.get_part("/word/document.xml").unwrap()).unwrap();
+    let start = format!(r#"<w:commentRangeStart w:id="{id}"/>"#);
+    let end = format!(r#"<w:commentRangeEnd w:id="{id}"/>"#);
+    let reference = format!(r#"<w:r><w:commentReference w:id="{id}"/></w:r>"#);
+    for malformed in [
+        raw.replace(&start, ""),
+        raw.replace(&end, ""),
+        raw.replace(&reference, ""),
+        raw.replace(&start, &format!("{start}{start}")),
+        raw.replace(&start, "SELECTED_START_TEMP")
+            .replace(&end, &start)
+            .replace("SELECTED_START_TEMP", &end),
+        raw.replace(&start, "").replace(&end, ""),
+        raw.replace(&start, "")
+            .replace(&end, "")
+            .replace(&reference, ""),
+    ] {
+        let mut package = original.clone();
+        package.set_part("/word/document.xml", malformed.into_bytes());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+        let before = document.to_bytes().unwrap();
+        assert!(document.move_comment_to_text(id, "TARGET", 0).is_err());
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+}
+
+#[test]
+fn comment_moves_qualify_aliases_foreign_markers_and_stale_destinations() {
+    let mut seed = Document::new();
+    seed.add_paragraph("SOURCE");
+    seed.add_paragraph("TARGET");
+    let id = seed
+        .add_comment_on_text("SOURCE", 0, "Ada", None, "Review", None)
+        .unwrap();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    let raw = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    let raw = raw.replace("<w:document ", &format!("<w:document xmlns:q=\"{}\" xmlns:x=\"urn:opaque\" ", rdocx_oxml::namespace::W_NS))
+        .replace("<w:commentRangeStart", "<q:commentRangeStart").replace("<w:commentRangeEnd", "<q:commentRangeEnd")
+        .replace(&format!("w:id=\"{id}\""), &format!("q:id=\"{id}\""))
+        .replace("<w:commentReference", "<q:commentReference")
+        .replace("</w:p>", "<x:commentRangeStart x:id=\"0\"/><x:commentRangeEnd x:id=\"0\"/><w:r><x:commentReference x:id=\"0\"/></w:r></w:p>");
+    package.set_part("/word/document.xml", raw.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+    document.move_comment_to_text(id, "TARGET", 0).unwrap();
+    assert_eq!(
+        document.comment_anchor_text(id).unwrap().as_deref(),
+        Some("TARGET")
+    );
+    let saved = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    let raw = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert_eq!(
+        raw.matches("<x:commentRangeStart x:id=\"0\"/>").count(),
+        2,
+        "{raw}"
+    );
+    assert_eq!(
+        raw.matches("<x:commentReference x:id=\"0\"/>").count(),
+        2,
+        "{raw}"
+    );
+    let stale = document.comment_anchor(id).unwrap().unwrap();
+    document.add_paragraph("UNRELATED");
+    let before = document.to_bytes().unwrap();
+    assert!(document.move_comment(id, stale).is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    assert!(
+        document
+            .move_comment(
+                id,
+                StoryRunRange {
+                    start: StoryRunPosition {
+                        location: location.clone(),
+                        run_index: 99
+                    },
+                    end: StoryRunPosition {
+                        location,
+                        run_index: 100
+                    }
+                }
+            )
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn comment_anchor_imported_alias_field_keeps_rich_display_and_usable_endpoints() {
+    let mut outcomes = Vec::new();
+    for (block, aliased) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut seed = Document::new();
+        seed.add_paragraph("SOURCE");
+        let id = seed
+            .add_comment_on_text(
+                "SOURCE",
+                0,
+                "Ada",
+                Some("A"),
+                "Review",
+                Some("2026-10-08T12:00:00Z"),
+            )
+            .unwrap();
+        seed.reply_to(id, "Ben", "Reply").unwrap();
+        seed.resolve_comment(id, true).unwrap();
+        let local = if block {
+            ""
+        } else {
+            r#" xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main""#
+        };
+        let paragraph = format!(
+            r#"<w:p{local}><w:commentRangeStart w:id="{id}"/><w:r><w:t>A</w:t></w:r><q:fldSimple q:instr=" PAGE "><q:r><q:t>7</q:t></q:r></q:fldSimple><w:r><w:t>B</w:t></w:r><w:commentRangeEnd w:id="{id}"/><w:r><w:commentReference w:id="{id}"/></w:r></w:p>"#
+        );
+        let selected_body = if block {
+            format!(
+                r#"<w:sdt xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:sdtPr/><w:sdtContent>{paragraph}</w:sdtContent></w:sdt>"#
+            )
+        } else {
+            paragraph
+        };
+        let body = if aliased {
+            format!(
+                r#"<a:p><a:pPr><a:keepNext a:val="1"/><a:jc a:val="center"/></a:pPr><a:r><a:t>UNRELATED</a:t></a:r></a:p>{selected_body}"#
+            )
+        } else {
+            selected_body
+        };
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+                .unwrap();
+        let source = if aliased {
+            wrap_word_body(&body).replacen("<w:document", r#"<w:document xmlns:a="http://schemas.openxmlformats.org/wordprocessingml/2006/main""#, 1)
+        } else {
+            wrap_word_body(&body)
+        };
+        package.set_part("/word/document.xml", source.into_bytes());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+        let before = document.to_bytes().unwrap();
+        let stories = document.stories().unwrap();
+        let metadata = document
+            .comments()
+            .iter()
+            .map(|c| (c.id(), c.text(), c.parent_id(), c.resolved()))
+            .collect::<Vec<_>>();
+        let text = document.comment_anchor_text(id).map_err(|e| e.to_string());
+        if text.as_ref().ok().and_then(|s| s.as_deref()) != Some("A7B") {
+            outcomes.push(format!("block={block}, aliased={aliased}: {text:?}"));
+            continue;
+        }
+        let range = document.comment_anchor(id).unwrap().unwrap();
+        assert_eq!(range.start.location.story(), range.end.location.story());
+        assert_eq!(document.stories().unwrap(), stories);
+        assert_eq!(document.to_bytes().unwrap(), before);
+        document.move_comment(id, range).unwrap();
+        assert_eq!(
+            document.comment_anchor_text(id).unwrap().as_deref(),
+            Some("A7B")
+        );
+        assert_eq!(
+            document
+                .comments()
+                .iter()
+                .map(|c| (c.id(), c.text(), c.parent_id(), c.resolved()))
+                .collect::<Vec<_>>(),
+            metadata
+        );
+        let saved = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&saved).unwrap();
+        assert_eq!(
+            reopened.comment_anchor_text(id).unwrap().as_deref(),
+            Some("A7B")
+        );
+    }
+    assert!(outcomes.is_empty(), "rich imported fields: {outcomes:?}");
+}
+
+#[test]
+fn comment_anchor_namespace_context_does_not_promote_or_guess_story_owners() {
+    for promoted in [false, true] {
+        let mut seed = Document::new();
+        seed.add_paragraph("SOURCE");
+        let id = seed
+            .add_comment_on_text("SOURCE", 0, "Ada", None, "Review", None)
+            .unwrap();
+        let payload = if promoted {
+            r#"<w:r><w:pict><v:shape xmlns:v="urn:schemas-microsoft-com:vml"><v:textbox><q:txbxContent><q:p><q:r><q:t>OTHER</q:t></q:r></q:p></q:txbxContent></v:textbox></v:shape></w:pict></w:r>"#
+        } else {
+            r#"<w:r><w:object xmlns:q="urn:foreign"><q:fldSimple q:instr=" PAGE "><q:r><q:t>FOREIGN</q:t></q:r></q:fldSimple></w:object></w:r>"#
+        };
+        let body = format!(
+            r#"<w:p xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:commentRangeStart w:id="{id}"/><w:r><w:t>A</w:t></w:r>{payload}<w:r><w:t>B</w:t></w:r><w:commentRangeEnd w:id="{id}"/><w:r><w:commentReference w:id="{id}"/></w:r></w:p>"#
+        );
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+                .unwrap();
+        package.set_part("/word/document.xml", wrap_word_body(&body).into_bytes());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+        let before = document.to_bytes().unwrap();
+        let stories = document.stories().unwrap();
+        if promoted {
+            let error = document.comment_anchor_text(id).unwrap_err().to_string();
+            assert!(error.contains("changes story ownership"), "{error}");
+            assert!(document.comment_anchor(id).is_err());
+        } else {
+            assert_eq!(
+                document.comment_anchor_text(id).unwrap().as_deref(),
+                Some("AB")
+            );
+            assert!(document.comment_anchor(id).unwrap().is_some());
+        }
+        assert_eq!(document.to_bytes().unwrap(), before);
+        assert_eq!(document.stories().unwrap(), stories);
+    }
+}

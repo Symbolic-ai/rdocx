@@ -3290,6 +3290,45 @@ impl PyDocument {
         Ok(id)
     }
 
+    /// Move a root comment to a checked current story range atomically.
+    fn move_comment(
+        &mut self,
+        id: i32,
+        range: PyRef<'_, PyStoryRunRange>,
+        py: Python<'_>,
+    ) -> PyResult<()> {
+        let start = rdocx::StoryRunPosition {
+            location: self.native_location(py, &range.start.item)?,
+            run_index: range.start.run_index,
+        };
+        let end = rdocx::StoryRunPosition {
+            location: self.native_location(py, &range.end.item)?,
+            run_index: range.end.run_index,
+        };
+        py.detach(|| {
+            self.inner
+                .move_comment(id, rdocx::StoryRunRange { start, end })
+        })
+        .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.revisions.bump();
+        Ok(())
+    }
+
+    /// Move a root comment onto the selected literal main-story occurrence.
+    #[pyo3(signature = (id, anchor, *, occurrence = 0))]
+    fn move_comment_to_text(
+        &mut self,
+        id: i32,
+        anchor: &str,
+        occurrence: usize,
+        py: Python<'_>,
+    ) -> PyResult<()> {
+        py.detach(|| self.inner.move_comment_to_text(id, anchor, occurrence))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.revisions.bump();
+        Ok(())
+    }
+
     #[pyo3(signature = (parent_id, *, author, text, date = None))]
     fn reply_to(
         &mut self,
