@@ -2215,6 +2215,15 @@ arithmetic, references, SUM, AVERAGE, MIN, MAX and IF. Chart authoring is not a
 requested first-cut need. Rendering is a desired second step. These are inputs
 to F-184, not S90 implementation or an approved earlier release boundary.
 
+The [maintainer commitment](https://github.com/tensorbee/rdocx/issues/281#issuecomment-6064533994)
+confirms preservation tests and the review workflow first, then reading and
+styled edits with explicit stale-cache handling. A bounded evaluator and
+rendering follow, with chart authoring deferred. Pivot refresh, Power Query
+and scripting remain longer-term goals. F-184 must reconcile the scheduled
+stories and any proposed reader/editor distribution boundary with that order
+before approving implementation. S90 records this direction without claiming
+that the conditional spreadsheet programme or an earlier release is approved.
+
 #### Sprint S96, Styles, tables and structured references
 
 **Goal**: model the indexed formatting and structured data semantics that
