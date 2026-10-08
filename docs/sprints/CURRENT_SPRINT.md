@@ -32,7 +32,7 @@ the full pinned Word bibliography source, style and locale catalogue.
 | F-X179 | Correct multi-paragraph comment threads from PR 271 | S | done | - |
 | F-X180 | Correct cell nil and none border precedence | S | in-progress | codex |
 | F-X181 | Ignore page and column breaks inside table cells | S | in-progress | codex |
-| F-X182 | Honor direct table alignment | M | in-progress | codex |
+| F-X182 | Honor direct table alignment | M | done | - |
 | F-X183 | Correct table margins and legacy positioning | M | pending | - |
 
 ## Sequencing note

@@ -17775,3 +17775,63 @@ through sprint close. Freeze2 diff a308cf94da2e and clean microscope bc8ef8f0828
 bind32 scoped receipts. Integration review7a8418d292fe confirms mechanical
 plan reconciliation. F-282 may consume this completed shared-file prefix.
 Issue264 remains excluded. No push, main merge, tag or GitHub closure occurred.
+
+### F-X182, Honor direct table alignment
+
+**Sprint.** S90
+**Completed.** 2026-10-08
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Direct table alignment survives the base-first style
+cascade. Left, center, right, start and end values override style alignment,
+while direct width and existing indentation rules remain intact. This
+integrates hadim's PR279 against Issue277.
+
+**Non-obvious choices.** Compatibility compensation and absent side-margin
+behavior remain separately owned by F-X183. The source-built matrix keeps
+existing RTL and nested placement as controls. Native Arial positions support
+relative geometry, with no absolute bundled Caladea parity claim.
+
+**Deviations from the design plan.** None. The production correction removes
+seven lines. Archive measurement and README policy tuples track the resulting
+published source.
+
+**Spec sections touched.** Exactly HLD08, table alignment and style cascade.
+
+**Tests.** direct_table_alignment_overrides_style_and_reopens passes across480
+combinations and three lifecycle states, plus indent and margin controls.
+Actual compiled reversion fails at runtime and exact restoration passes. The
+contributed gate also fails before and passes after. Final prepare rerun
+passes in38.57seconds. Scoped facade suites pass500 units,360 integrations
+and867 regressions, CLI3 units and58 integrations, layout317 units and three
+doctests, retaining existing ignores. Warnings-denied Clippy and docs, format,
+prose and26 adapters pass. Workflow140 passes with2 existing skips, including
+27 README examples and22 archive inventories. Both affected locally patched
+publish dry runs verify without upload. Recorded compressed footprints are
+1520783 and308929 bytes, both below10MiB. A later regenerated layout archive
+is308928 bytes with exact normalized1671932 member bytes and15 members,
+within the existing64-byte policy. Its source and README members are exact.
+
+Independent delta and all-aspect microscope passes each report zero findings.
+Authenticated Word16.113.2 build16.113.26092012 controls retain source bytes
+and separately qualify minimal and official Grid contexts. Integration is
+conflict-free, and every reviewed crate, gate script, baseline, README and
+rendering HLD byte equals the worker code Head. No integration source
+reconciliation requires additional checks.
+
+**Hash harness.** Exactly five intentional entries change: invoice page-one
+PNG, invoice PDF bytes and pages, and quote PDF bytes and pages. The totals
+tables translate right by36pt. All44 other entries, source XML and PDF
+resources remain exact. Only invoice changes in seven golden buffers. Its
+6853 changed pixels lie in the reviewed totals region at150DPI, using pinned
+Poppler26.01.0. The delta was independently reviewed before local recording.
+
+**Notes for future sessions.** Worker codee3c26ac7 precedes handoff-only
+39964296. Integration1f03e789 consumes the validated handoff. This scoped
+dependency checkpoint permits F-X183 to start. Full integrated sprint
+verification, union risk riders and sprint review remain due. Retain
+work/f-x182-codex through sprint close. The measured implementation checkpoint
+to freeze interval is19m57s, excluding earlier reading and root native work.
+Backlog summary counts were regenerated from actual feature rows, removing
+previously counted table headers. Issue264 remains excluded. No push, main
+merge, tag, publication or GitHub closure occurred.

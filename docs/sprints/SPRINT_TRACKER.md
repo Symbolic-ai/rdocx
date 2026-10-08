@@ -573,6 +573,8 @@ defended.
 
 | F-281 | S90 | L | 5 | 1 | 2026-10-08 | Added atomic indexes, figures and authority tables, namespace-safe owned caches and one post-insertion snapshot, clean worker and integration reviews and49 unchanged integrated hashes |
 
+| F-X182 | S90 | M | 2 | 1 | 2026-10-08 | Integrated hadim PR279 for Issue277, 480 alignment combinations, clean delta and ALL reviews, five explained hash changes and invoice-only golden delta |
+
 ## Velocity
 
 Recalculated at each sprint close. The backlog assumes about 2 stories per week
@@ -808,3 +810,14 @@ criterion passes, including XML parent and done rows and multiline authoring
 through all existing entry points. Reconcile both records only after the
 verified S90 merge is pushed through `/close-sprint`, with contributor thanks
 and links to the feature integration and main merge. Issue 264 is excluded.
+
+
+Issue [281](https://github.com/tensorbee/rdocx/issues/281), raised by Hadrien
+Mary (`hadim`), is assessed in the existing F-184 decision at S95. The go
+requires a material combined-lifecycle gap and an explicit preserve, edit and
+execute boundary. The roadmap stages reading and loss-aware editing before
+calculation and pivots. Rendering and distribution remain scheduled for S104.
+The request for a unified CLI/Python workflow and an earlier usable package
+adds integration and release tradeoffs to that decision. Keep the discussion
+open, and provide this scheduling answer with contributor thanks during
+verified S90 sprint-close reconciliation.
