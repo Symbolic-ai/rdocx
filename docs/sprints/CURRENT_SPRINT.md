@@ -35,7 +35,7 @@ the full pinned Word bibliography source, style and locale catalogue.
 | F-X182 | Honor direct table alignment | M | done | - |
 | F-X183 | Correct table margins and legacy positioning | M | in-progress | codex |
 | F-X184 | Safe comment ownership during content removal | L | done | - |
-| F-X185 | Expose comment anchor text and story location | M | pending | - |
+| F-X185 | Expose comment anchor text and story location | M | in-progress | codex |
 | F-X186 | Move comment anchors without losing threads | M | pending | - |
 | F-X187 | Scoped paragraph and cell text replacement | M | pending | - |
 
