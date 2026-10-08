@@ -3751,3 +3751,39 @@ runtime checks local mismatch attributes and pickling, invalid text, stale
 handles, zero no-op and positive publication. Typed call shapes independently
 cover Paragraph, Cell and detached StoryItem operations. All 49 deterministic
 hash entries remain unchanged. These controls require no external native oracle.
+
+
+### Whole-story comment ownership and glossary transfer
+
+`whole_story_removal_and_replacement_preserve_comment_closure` demonstrates
+header replacement and glossary removal orphan failures against the exact
+claim Base. Separate compiled Base controls cover raw and image replacement,
+direct glossary replacement and fragment update. The complete create, reverse
+capture and generic cross-document import before control exposes main comment
+definition import into a glossary destination. Same-part selected and unselected footnote/endnote controls prove forward
+create and update ignore unrelated opaque or malformed review carriers, retain
+source bytes and import only the selected note. Recursive footnote textbox
+references reach selected endnotes before review dependency capture. Selected
+bad carriers still refuse atomically. A retained foreign background with an
+opaque qualified comment carrier cannot block plain-body glossary creation or
+update, while the same carrier inside selected content refuses atomically.
+Source bytes and unselected root payload remain intact. Current-before regressions
+separately expose producer note review recapture and orphan local companion
+mapping acceptance before their repairs.
+
+The after matrix executes all ten installer entrances, all six Header/Footer
+variants, imported shared physical targets through different relation ids,
+inherited uses, main and non-main opaque uses and unknown-use refusal. It proves
+last-use marker removal while retaining producer parts and unrelated bytes.
+Actual whole footnote and endnote removal tests retain unrelated thread and
+companion rows. A real glossary-local comments relationship and commentsExtended
+part coexist with equal-id main definitions, proving reverse omission, local
+cleanup and metadata-only preservation. Invalid local mappings and orphan
+local companion edges refuse atomically. Public building-block creation,
+fragment update and insertion cover same and different documents, selected
+notes and textboxes, and retained source bytes. Legacy raw/image panic controls
+retain original bytes after provisional allocations. A real final OPC reopen
+entry-limit failure and preparation refusal discard complete candidates.
+Actual rebuilt Python tests prove checked setter errors and once-only revision
+publication. Strict typing and CLI validation are separate execution evidence.
+All 49 deterministic hash entries remain unchanged.

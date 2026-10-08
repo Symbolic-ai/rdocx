@@ -4204,3 +4204,65 @@ fn comment_move_outputs_reopen_with_unchanged_thread() {
     assert_eq!(reopened.comments()[1].parent_id(), Some(id));
     assert_eq!(fs::read(&input).unwrap(), before);
 }
+
+#[test]
+fn whole_story_outputs_validate_without_comment_orphans() {
+    let workspace = TempWorkspace::new("whole-story-ownership");
+    let mut document = Document::new();
+    document.add_paragraph("main retained");
+    document.set_header("old header");
+    let story = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|s| s.kind() == rdocx::StoryKind::Header)
+        .unwrap();
+    let location = document.story_items(&story).unwrap()[0].location().clone();
+    let root = document
+        .add_story_comment(
+            rdocx::StoryRunRange {
+                start: rdocx::StoryRunPosition {
+                    location: location.clone(),
+                    run_index: 0,
+                },
+                end: rdocx::StoryRunPosition {
+                    location,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "root",
+        )
+        .unwrap();
+    let reply = document.reply_to(root, "Ben", "reply").unwrap();
+    document.reply_to(reply, "Cyd", "grandchild").unwrap();
+    let before = document.to_bytes().unwrap();
+    document.try_set_header("new header").unwrap();
+    let valid = workspace.path.join("valid.docx");
+    document.save(&valid).unwrap();
+    assert_success(
+        &cli(&["validate", path_text(&valid)]),
+        "whole-story cleanup validate",
+    );
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(before)).unwrap();
+    package.set_part("/annotations/broken-ids.xml", b"<not-xml".to_vec());
+    package.content_types.add_override(
+        "/annotations/broken-ids.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsIds+xml",
+    );
+    package.get_or_create_part_rels("/word/document.xml").add(
+        "http://schemas.microsoft.com/office/2016/09/relationships/commentsIds",
+        "/annotations/broken-ids.xml",
+    );
+    let mut source = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut source).unwrap();
+    let mut document = Document::from_bytes(source.get_ref()).unwrap();
+    let before = document.to_bytes().unwrap();
+    assert!(document.try_set_header("refused").is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let refused = workspace.path.join("refused.docx");
+    document.save(&refused).unwrap();
+    let result = cli(&["validate", path_text(&refused)]);
+    assert!(!result.status.success());
+}

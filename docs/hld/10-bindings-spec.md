@@ -1285,9 +1285,30 @@ The additive pre-1.0 Rust surface also exposes `create_building_block`,
 content. Fragment creation and insertion use `FragmentConflictPolicy` and
 the source package dependency closure. Mutation checks the complete
 `BuildingBlockInfo` snapshot, rejecting stale ordinals and changed values.
+Glossary transfers omit review anchors and definition import before dependency
+capture, including selected note and textbox review content. Reverse capture
+omits before main-owned fragment construction. Dependency-free typed creation
+retains comment-marker refusal. Direct replacement omits newly supplied review
+markers while metadata-only updates preserve the original body. Actual local
+comment relationships isolate their numeric ids from main comments. Unproved
+local ownership and glossary-local note projection refuse atomically.
+
 Placeholder binding keeps the existing control discriminator and updates
 selection properties only on existing document-part control variants.
 Python, WASM, and CLI bindings remain unchanged.
+
+The additive pre-1.0 native whole-story text surface exposes `try_set_header`,
+`try_set_footer`, `try_set_first_page_header` and `try_set_first_page_footer`,
+each returning `Result<()>`. Existing infallible signatures remain compatibility
+wrappers with their established panic convention. Complete header/footer
+output proof refuses XML-invalid supplied text before publication, retaining
+the OPC part and code-point diagnostic through the fallible route and exact
+original bytes through either route. Raw and image setters stage
+all dependency allocation and remapping before reconciliation and publication.
+Python's existing `set_header(text)` and `set_footer(text)` return `None`,
+propagate checked native errors, and bump the document revision once only after
+success. Refusal preserves package bytes and live handles. No additional
+Python, WASM or CLI setter surface is introduced.
 
 The native document renderer copies those defaults into the concrete optional
 `rdocx_layout::LayoutInput::math_properties` field. This field addition is a

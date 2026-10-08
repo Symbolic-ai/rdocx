@@ -3185,6 +3185,11 @@ fn import_fragment_content_with_state(
         .ok_or_else(|| Error::Other("document fragment main part is missing".to_owned()))?
         .to_vec();
     fragment.prepare_staged_package()?;
+    if document.glossary_part_name.as_deref() == Some(destination_part) {
+        // The prepared physical body selects current note ids, excluding root payload.
+        fragment_xml =
+            fragment.omit_glossary_selected_body_comments(include_final_section_properties)?;
+    }
     let final_section_properties = fragment.document.body.sect_pr.take();
     if include_final_section_properties && let Some(section_properties) = final_section_properties {
         let mut paragraph = CT_P::new();
@@ -3198,9 +3203,18 @@ fn import_fragment_content_with_state(
             .content
             .push(BodyContent::Paragraph(paragraph));
     }
-    prune_document_fragment_dependencies(&mut fragment)?;
+    let dependency_source = if document.glossary_part_name.as_deref() == Some(destination_part) {
+        wrap_fragment_companion(&crate::document::package_authoritative_body_fragment(
+            &fragment.document.to_xml()?,
+            false,
+            &BTreeMap::new(),
+        )?)
+    } else {
+        fragment.document.to_xml()?
+    };
+    prune_document_fragment_dependencies(&mut fragment, &dependency_source)?;
     let mut fragment_identity_values = body_identity_values(&fragment_xml)?;
-    for companion in fragment_dependency_companions(&fragment)? {
+    for companion in fragment_dependency_companions(&fragment, &dependency_source)? {
         for id in body_identity_values(&wrap_fragment_companion(&companion))?.comment_ids {
             if !fragment_identity_values.comment_ids.contains(&id) {
                 fragment_identity_values.comment_ids.push(id);
@@ -3931,9 +3945,9 @@ fn equivalent_fragment_leaf_part(
         })
 }
 
-fn prune_document_fragment_dependencies(fragment: &mut Document) -> Result<()> {
-    let mut body_xml = fragment.document.to_xml()?;
-    for companion in fragment_dependency_companions(fragment)? {
+fn prune_document_fragment_dependencies(fragment: &mut Document, selected: &[u8]) -> Result<()> {
+    let mut body_xml = selected.to_vec();
+    for companion in fragment_dependency_companions(fragment, selected)? {
         body_xml.extend(companion);
     }
     let mut used_numbering = word_value_attributes(&body_xml, &[b"numId"])?
@@ -4332,8 +4346,8 @@ fn unwrap_fragment_companion(xml: &[u8]) -> Vec<u8> {
     xml[prefix_len..xml.len() - b"</f276:body></f276:document>".len()].to_vec()
 }
 
-fn fragment_dependency_companions(fragment: &Document) -> Result<Vec<Vec<u8>>> {
-    let mut pending = vec![fragment.document.to_xml()?];
+fn fragment_dependency_companions(fragment: &Document, selected: &[u8]) -> Result<Vec<Vec<u8>>> {
+    let mut pending = vec![selected.to_vec()];
     let mut companions = Vec::new();
     let mut seen_notes = HashSet::new();
     let mut seen_comments = HashSet::new();
@@ -4568,7 +4582,7 @@ fn fragment_store_item_ids(xml: &[u8]) -> Result<BTreeSet<String>> {
     }
 }
 
-fn fragment_note_references(xml: &[u8]) -> Result<Vec<(StoryKind, i32)>> {
+pub(crate) fn fragment_note_references(xml: &[u8]) -> Result<Vec<(StoryKind, i32)>> {
     let mut reader = NsReader::from_reader(xml);
     let mut buffer = Vec::new();
     let mut references = Vec::new();

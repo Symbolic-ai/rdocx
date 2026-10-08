@@ -1,6 +1,6 @@
 # F-X188, Preserve comment ownership when replacing or removing whole stories
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S90
 **Size**: L
 **Depends on**: F-X184
@@ -62,6 +62,18 @@ exclusion to Issue281, which remains open for F-184. Issue291 is included
 as a separate field snapshot correction after this story. Issue264 remains
 excluded. This story's ownership implementation scope is unchanged.
 
+The updated contribution is assessed only through isolated Issue292 commit
+`33ac78278aacbcd981f2e59c737f0c16d97732ea` by `hadim`, retained patch SHA256
+`b452fd61a19eee973b1cd737374760f7470e617711768ae28841b0af7f3edb05`.
+Updated PR290 head `f7841769bdf4c68e886f9e52657f1ba159cfcd12` and PR287 head
+`39945370bbd18fc45ee0a1626e5bc8e9f73560da` carry separately assessed Issue291
+ancestry. No entire stack is imported into this story. Omission preserves
+carrier shells and refuses malformed qualified marker ids or opaque marker
+payload. Real producer reverse-note controls require private selected closure
+omission before capture. Glossary-local note relationships refuse ambiguous
+main numeric projection. Local companions without definitions refuse, while
+absence of all local review edges retains legacy main ownership proof.
+
 F-X184 is completed. Run this story in exclusive wave15 after F-X187 because
 document.rs, Python bindings and existing regression entrypoints overlap.
 Keep full-catalogue F-282 paused at its authenticated checkpoint through this
@@ -117,9 +129,9 @@ For Issue292, `create_building_block_from_fragment` and
 `update_building_block_from_fragment` omit namespace-qualified comment markers
 and their definition import from the private transferred content before
 dependency capture and import. Include selected note and textbox dependencies
-so no companion transfer reintroduces main-owned orphan comments. Apply the
-documented omission policy to supplied bodies in plain creation and direct
-replacement as well. Preserve metadata-only updates. Reverse
+so no companion transfer reintroduces main-owned orphan comments. Plain dependency-free creation retains its existing atomic refusal of
+qualified comment-bearing bodies. Direct replacement omits qualified markers
+from newly supplied bodies. Preserve metadata-only updates. Reverse
 `building_block_fragment` and `insert_building_block` omit selected glossary
 markers before constructing a main-owned fragment, never pairing numeric ids
 with unrelated main definitions. Existing general fragment behavior and
@@ -140,6 +152,13 @@ wrong-root or malformed local ownership refuses atomically. Existing local
 entry cleanup must prove its complete thread and companion closure through
 the existing strict graph machinery with the physical owner explicit, or
 refuse. Never delete an equal-id main thread or claim omitted local cleanup.
+
+A normalized physical marker-bearing note source cannot belong to both main
+and glossary review graphs. Each graph can otherwise accept the same numeric
+anchor with its own definition, so qualified source overlap refuses before
+cleanup or validation. Shared note parts without qualified comment markers
+remain supported. This applies the existing physical-owner proof, not a
+second id inventory or a blanket shared-note restriction.
 
 Shared header/footer ownership is resolved by normalized physical target,
 including two relationship ids reaching one part and opaque references.
@@ -229,12 +248,17 @@ Unexpected deltas block acceptance rather than earning a replacement baseline.
 ## Implementation checklist
 
 - [x] Read complete issue, verify prerequisite completion and approve design with explicit workflow-file permission.
-- [ ] Claim wave15 only after exclusive prior waves release source and Cargo.
-- [ ] Capture genuine exact-Base failures for all uncovered destructive routes.
-- [ ] Implement shared reconciliation and fallible Python-bound text setters with complete preservation and shared-reference semantics.
-- [ ] Pass exact native, Python, typing, CLI and atomic refusal controls.
-- [ ] Update exactly the HLD impact files, pass scoped riders and zero-finding microscope.
-- [ ] Prepare and validate the structured handoff, then integrate and record complete acceptance before sprint close.
+- [x] Claim wave15 only after exclusive prior waves release source and Cargo.
+- [x] Capture genuine exact-Base failures for all uncovered destructive routes.
+- [x] Implement shared reconciliation and fallible Python-bound text setters with complete preservation and shared-reference semantics.
+- [x] Pass exact native, Python, typing, CLI and atomic refusal controls.
+- [x] Update exactly the HLD impact files, pass scoped riders and zero-finding microscope.
+- [x] Prepare and validate the structured worker handoff for integration.
+
+Worker completion records reviewed code and scoped evidence only. Canonical
+integration, delivery ledgers and complete issue acceptance remain pending
+with the integrator before sprint close. The handoff names the feature
+CodeHead, with a later handoff-only commit on the worker branch.
 
 ## Open questions
 
@@ -243,3 +267,59 @@ requested inclusion before publication. Root selects complete owned cleanup,
 recoverable fallible native/Python refusals and retained legacy wrapper
 conventions. A measured unsupported source or preservation conflict must be
 reported before changing these criteria.
+
+
+## Installer output validation clarification
+
+Full affected native tests identified live identifier changes when the new
+installer boundaries published the reparsed output. Existing numbering handles
+and raw image relationship identities must remain stable until save. The ten
+new boundaries therefore reconcile the complete staged candidate, validate
+its cloned complete output through actual preparation and reopen, then commit
+the original staged candidate once. This follows existing output-validation
+precedent and preserves deterministic subsequent save output. Other glossary
+and mutation reopen behavior is unchanged. All four existing regression
+assertions and real final-reopen failure atomicity remain required.
+
+
+## Invalid header text refusal clarification
+
+Complete installer output proof also rejects XML-invalid header text before
+publication. The fallible setter returns the original OPC part and code-point
+diagnostic. Its legacy wrapper follows the established panic convention and
+keeps exact pre-operation bytes. The existing regression's header subsection
+now proves both paths. Unrelated paragraph and footnote deferred save-refusal
+controls remain unchanged. This intentional early refusal changes no valid
+document output and requires no hash baseline delta.
+
+
+## Formal D1 selected closure clarification
+
+Forward glossary omission visits only the prepared selected main body and its
+recursive referenced footnote and endnote owners, including textbox content.
+It does not scan unrelated note owners in a retained related part. The same
+bounded note traversal serves forward actual-main ownership and reverse
+glossary transfer. Physical main identity permits main note relationships,
+while genuine glossary-local note ambiguity still refuses before numeric
+lookup. Derive the forward closure after package preparation so canonical
+note ids remain aligned. Same-part selected/unselected opaque and malformed
+carriers exercise create and update success, selected-carrier atomic refusal,
+source-byte retention and actual selected note presence. Current-before
+evidence is distinct from the original claimed Base.
+
+
+## Selected body clarification after formal D2
+Forward glossary transfer obtains namespace-complete selected content from the
+prepared physical body through the existing package-authoritative extraction.
+Initial note selection, marker omission and glossary dependency capture exclude
+retained main-root producer payload. Generic transfer retains its existing
+dependency inputs and ownership admission. Clean content replaces only its physical interval. Final
+section properties are omitted separately only when the fragment includes
+them, retaining their original section owner for existing downstream handling.
+Excluded final section bytes and all outside-body bytes remain private source
+payload. Existing generic fragment identity admission is unchanged, including
+its refusal of incomplete comment triples within retained body descendants.
+A current-before producer background control executes creation and update
+failure and selected-body atomic refusal. Its after control requires successful
+plain transfer with source bytes unchanged. This is later-current evidence,
+not an additional exact claimed Base run.

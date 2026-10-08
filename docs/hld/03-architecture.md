@@ -1865,6 +1865,16 @@ paragraph, as `w15:commentEx` keys it, each line of a comment text is one
 paragraph. Resolution applies to the thread root, and removal deletes the
 selected comment plus descendant replies without
 deleting unrelated runs or producer XML.
+Whole-story header/footer setters stage the complete text, raw XML or image
+operation and reconcile removed comment ownership. A clone of that candidate
+prepares and reopens the complete output once before the original candidate
+publishes, preserving live authoring identities until save. Glossary deletion and body replacement reuse that same strict graph.
+The graph accepts an explicit physical main or glossary owner, so equal numeric
+ids never join unrelated review parts. Imported retired section parts stay in
+the package. Their qualified markers are removed only after every modeled,
+inherited and proved opaque physical use disappears. Unknown incoming use
+refuses. Glossary raw edits refresh the typed model before a later flush.
+
 The additive `add_comment_with_date` and `reply_to_with_date` operations own
 validated optional timestamps. The original operations delegate with no date.
 

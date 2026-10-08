@@ -3932,3 +3932,56 @@ def test_scoped_control_paragraph_handles_use_direct_owner_ordinals():
     assert nested_unsupported
     assert nested.to_bytes() == nested_before
     assert held_nested.text == "Version nested"
+
+
+@pytest.mark.parametrize("kind", ["header", "footer"])
+def test_whole_story_comment_refusals_preserve_bytes_and_revision(kind):
+    import rdocx
+
+    def fixture(partial=False, malformed=False):
+        document = rdocx.Document()
+        document.add_paragraph("main retained")
+        getattr(document, f"set_{kind}")("old story")
+        item = next(item for item in document.story_items
+                    if item.kind == "paragraph" and item.story.kind == kind)
+        root = document.add_comment(rdocx.StoryRunRange(
+            start=rdocx.StoryRunPosition(item=item, run_index=0),
+            end=rdocx.StoryRunPosition(item=item, run_index=1)),
+            author="Ada", text="root")
+        reply = document.reply_to(root, author="Ben", text="reply")
+        document.reply_to(reply, author="Cyd", text="grandchild")
+        if not partial and not malformed:
+            return rdocx.Document.from_bytes(document.to_bytes())
+        output = io.BytesIO()
+        with zipfile.ZipFile(io.BytesIO(document.to_bytes())) as source:
+            with zipfile.ZipFile(output, "w") as target:
+                for info in source.infolist():
+                    data = source.read(info.filename)
+                    if partial:
+                        marker = f'<w:commentRangeStart w:id="{root}"/>'.encode()
+                        if info.filename.startswith(f"word/{kind}") and info.filename.endswith(".xml"):
+                            data = data.replace(marker, b"")
+                        if info.filename == "word/document.xml":
+                            data = data.replace(b"<w:p>", b"<w:p>" + marker, 1)
+                    if malformed and info.filename == "word/commentsExtended.xml":
+                        data = re.sub(rb'(w15:paraId=")[^"]+', rb'\g<1>DEADBEEF', data, count=1)
+                    target.writestr(info, data)
+        return rdocx.Document.from_bytes(output.getvalue())
+
+    document = fixture()
+    held = document.paragraphs[0]
+    getattr(document, f"set_{kind}")("new story")
+    assert document.comments == ()
+    with pytest.raises(rdocx.StaleElementError, match="revision 0.*revision 1"):
+        held.text
+    assert rdocx.Document.from_bytes(document.to_bytes()).comments == ()
+    for partial, malformed, text in ((True, False, "new"),
+                                     (False, True, "new"),
+                                     (False, False, "invalid \x01")):
+        document = fixture(partial, malformed)
+        held = document.paragraphs[0]
+        before = document.to_bytes()
+        with pytest.raises(rdocx.RdocxError):
+            getattr(document, f"set_{kind}")(text)
+        assert document.to_bytes() == before
+        assert held.text == "main retained"

@@ -367,3 +367,7 @@ def scoped_replacement_signatures_cover_paragraph_cell_and_story_item(document: 
     assert_type(paragraph.replace_text("old", "new", expect=1), int)
     assert_type(cell.replace_text(old="old", new="new", expect=1), int)
     assert_type(document.replace_text_at(item, "old", "new", expect=1), int)
+
+def whole_story_setter_signatures(document: Document) -> None:
+    assert_type(document.set_header(text="header"), None)
+    assert_type(document.set_footer(text="footer"), None)

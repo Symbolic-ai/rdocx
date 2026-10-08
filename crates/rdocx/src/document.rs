@@ -4735,7 +4735,7 @@ fn reserve_part_from_set(
     }
 }
 
-fn part_name_identity(part_name: &str) -> String {
+pub(crate) fn part_name_identity(part_name: &str) -> String {
     part_name.to_ascii_lowercase()
 }
 
@@ -5478,6 +5478,7 @@ thread_local! {
     static LAYOUT_INVOCATIONS: Cell<usize> = const { Cell::new(0) };
     static FAIL_NEXT_HEADER_FOOTER_SERIALIZATION: Cell<bool> = const { Cell::new(false) };
     static FAIL_NEXT_SCOPED_REOPEN: Cell<bool> = const { Cell::new(false) };
+    static FAIL_NEXT_STAGED_REOPEN: Cell<bool> = const { Cell::new(false) };
     static STORY_SOURCE_BUILDS: Cell<usize> = const { Cell::new(0) };
     static STORY_TEXT_PREFIX_BYTES: Cell<usize> = const { Cell::new(0) };
 }
@@ -7767,6 +7768,10 @@ pub(crate) fn set_story_source_xml(
         document.footnotes = rdocx_oxml::footnotes::CT_Footnotes::from_xml(&xml)?;
         document.package.set_part(part_name, xml);
         document.footnotes_dirty = false;
+    } else if document.glossary_part_name.as_deref() == Some(part_name) {
+        document.glossary = Some(rdocx_oxml::glossary::CT_GlossaryDocument::from_xml(&xml)?);
+        document.package.set_part(part_name, xml);
+        document.glossary_dirty = false;
     } else {
         document.package.set_part(part_name, xml);
     }
@@ -14727,6 +14732,13 @@ impl Document {
 
     pub(crate) fn prepare_and_reopen_staged(mut self) -> Result<Self> {
         self.prepare_staged_package()?;
+        #[cfg(test)]
+        if FAIL_NEXT_STAGED_REOPEN.replace(false) {
+            return self.reopen_prepared_staged_with_limits(PackageReadLimits {
+                max_entries: 0,
+                ..PackageReadLimits::UNBOUNDED
+            });
+        }
         self.reopen_prepared_staged()
     }
 
@@ -19022,6 +19034,96 @@ impl Document {
         self.note_story(StoryKind::Endnote, id)
     }
 
+    /// Omit review state only within transferred body content and its selected notes.
+    pub(crate) fn omit_glossary_selected_body_comments(
+        &mut self,
+        include_final_section_properties: bool,
+    ) -> Result<Vec<u8>> {
+        let part = self.doc_part_name.clone();
+        let mut xml = self
+            .package
+            .get_part(&part)
+            .ok_or_else(|| Error::Other("fragment main source disappeared".into()))?
+            .to_vec();
+        let owner = scan_story_owners(&xml, StoryKind::Body)?
+            .into_iter()
+            .find(|owner| owner.kind == StoryKind::Body)
+            .ok_or_else(|| Error::Other("document fragment has no main body".into()))?;
+        let start = direct_story_content_items(&xml, &owner)?
+            .first()
+            .map(|item| item.full.start)
+            .ok_or_else(|| Error::Other("document fragment main body is empty".into()))?;
+        let end = story_owner_content_end(&xml, &owner)?;
+        let selected = package_authoritative_body_fragment(&xml, false, &BTreeMap::new())?;
+        self.omit_glossary_fragment_note_comments(&part, &selected)?;
+        let omitted = Self::omit_comment_markers(&selected)?;
+        if include_final_section_properties {
+            for item in scan_story_items(&xml, &owner)? {
+                if item.direct_owner_child
+                    && item.kind == StoryItemKind::PreservedNode
+                    && content_fragment_root_is_section_properties(&xml, &item)?
+                {
+                    let scope = story_namespace_scope_at(&xml, item.full.start)?;
+                    let section =
+                        close_content_fragment_namespaces(&xml[item.full.clone()], &scope)?;
+                    self.omit_glossary_fragment_note_comments(&part, &section)?;
+                    xml.splice(item.full, Self::omit_comment_markers(&section)?);
+                    break;
+                }
+            }
+        }
+        xml.splice(start..end, omitted);
+        set_story_source_xml(self, &part, xml.clone())?;
+        Ok(xml)
+    }
+
+    /// Omit only selected note review markers before glossary dependency capture.
+    pub(crate) fn omit_glossary_fragment_note_comments(
+        &mut self,
+        source_part: &str,
+        selected: &[u8],
+    ) -> Result<()> {
+        let mut pending = crate::field::fragment_note_references(selected)?;
+        let mut seen = HashSet::new();
+        while let Some((kind, id)) = pending.pop() {
+            if !seen.insert((kind, id)) {
+                continue;
+            }
+            let relationship_type = match kind {
+                StoryKind::Footnote => rel_types::FOOTNOTES,
+                StoryKind::Endnote => rel_types::ENDNOTES,
+                _ => return Err(Error::Other("invalid glossary note dependency kind".into())),
+            };
+            if part_name_identity(source_part) != part_name_identity(&self.doc_part_name)
+                && self
+                    .package
+                    .get_part_rels(source_part)
+                    .iter()
+                    .flat_map(|rels| &rels.items)
+                    .any(|relationship| relationship.rel_type == relationship_type)
+            {
+                return Err(Error::Other(format!(
+                    "cannot project glossary-local {kind:?} {id} through main numeric note ownership"
+                )));
+            }
+            let story = self.note_story(kind, id)?.ok_or_else(|| {
+                Error::Other(format!(
+                    "glossary fragment {kind:?} {id} has no proved main note owner"
+                ))
+            })?;
+            let (source, owner) = self.story_source_and_owner(&story)?;
+            let part = source.part_name;
+            let mut xml = source.xml.into_owned();
+            let scope = story_namespace_scope_at(&xml, owner.full.start)?;
+            let note = close_content_fragment_namespaces(&xml[owner.full.clone()], &scope)?;
+            pending.extend(crate::field::fragment_note_references(&note)?);
+            let omitted = Self::omit_comment_markers(&note)?;
+            xml.splice(owner.full, omitted);
+            set_story_source_xml(self, &part, xml)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn fragment_note_dependency(
         &self,
         kind: StoryKind,
@@ -20575,44 +20677,72 @@ impl Document {
     /// Creates a header part with the given text and references it from
     /// the section properties.
     pub fn set_header(&mut self, text: &str) {
+        self.try_set_header(text)
+            .expect("an in-memory document can install a header");
+    }
+
+    /// Replace the header atomically, refusing unsafe comment removal.
+    pub fn try_set_header(&mut self, text: &str) -> Result<()> {
         let mut candidate = self.clone_for_staging();
         candidate.invalidate_layout();
-        candidate
-            .set_header_footer_part(text, true, HdrFtrType::Default)
-            .expect("an in-memory document can install a header");
+        candidate.set_header_footer_part(text, true, HdrFtrType::Default)?;
+        candidate.reconcile_comment_removal(self)?;
+        candidate.clone_for_staging().prepare_and_reopen_staged()?;
         self.commit_staged_mutation(candidate);
+        Ok(())
     }
 
     /// Set the default footer text.
     pub fn set_footer(&mut self, text: &str) {
+        self.try_set_footer(text)
+            .expect("an in-memory document can install a footer");
+    }
+
+    /// Replace the footer atomically, refusing unsafe comment removal.
+    pub fn try_set_footer(&mut self, text: &str) -> Result<()> {
         let mut candidate = self.clone_for_staging();
         candidate.invalidate_layout();
-        candidate
-            .set_header_footer_part(text, false, HdrFtrType::Default)
-            .expect("an in-memory document can install a footer");
+        candidate.set_header_footer_part(text, false, HdrFtrType::Default)?;
+        candidate.reconcile_comment_removal(self)?;
+        candidate.clone_for_staging().prepare_and_reopen_staged()?;
         self.commit_staged_mutation(candidate);
+        Ok(())
     }
 
     /// Set the first-page header text.
     pub fn set_first_page_header(&mut self, text: &str) {
+        self.try_set_first_page_header(text)
+            .expect("an in-memory document can install a first page header");
+    }
+
+    /// Replace the first page header atomically, refusing unsafe comment removal.
+    pub fn try_set_first_page_header(&mut self, text: &str) -> Result<()> {
         let mut candidate = self.clone_for_staging();
         candidate.invalidate_layout();
         candidate.set_different_first_page(true);
-        candidate
-            .set_header_footer_part(text, true, HdrFtrType::First)
-            .expect("an in-memory document can install a first-page header");
+        candidate.set_header_footer_part(text, true, HdrFtrType::First)?;
+        candidate.reconcile_comment_removal(self)?;
+        candidate.clone_for_staging().prepare_and_reopen_staged()?;
         self.commit_staged_mutation(candidate);
+        Ok(())
     }
 
     /// Set the first-page footer text.
     pub fn set_first_page_footer(&mut self, text: &str) {
+        self.try_set_first_page_footer(text)
+            .expect("an in-memory document can install a first page footer");
+    }
+
+    /// Replace the first page footer atomically, refusing unsafe comment removal.
+    pub fn try_set_first_page_footer(&mut self, text: &str) -> Result<()> {
         let mut candidate = self.clone_for_staging();
         candidate.invalidate_layout();
         candidate.set_different_first_page(true);
-        candidate
-            .set_header_footer_part(text, false, HdrFtrType::First)
-            .expect("an in-memory document can install a first-page footer");
+        candidate.set_header_footer_part(text, false, HdrFtrType::First)?;
+        candidate.reconcile_comment_removal(self)?;
+        candidate.clone_for_staging().prepare_and_reopen_staged()?;
         self.commit_staged_mutation(candidate);
+        Ok(())
     }
 
     /// Get the default header text, if set.
@@ -20657,6 +20787,13 @@ impl Document {
                 HdrFtrType::Default,
             )
             .expect("an in-memory document can install a header image");
+        candidate
+            .reconcile_comment_removal(self)
+            .expect("whole-story replacement cannot remove partial or malformed comment ownership");
+        candidate
+            .clone_for_staging()
+            .prepare_and_reopen_staged()
+            .expect("whole-story replacement package preflight failed");
         self.commit_staged_mutation(candidate);
     }
 
@@ -20990,6 +21127,13 @@ impl Document {
                 HdrFtrType::Default,
             )
             .expect("an in-memory document can install a footer image");
+        candidate
+            .reconcile_comment_removal(self)
+            .expect("whole-story replacement cannot remove partial or malformed comment ownership");
+        candidate
+            .clone_for_staging()
+            .prepare_and_reopen_staged()
+            .expect("whole-story replacement package preflight failed");
         self.commit_staged_mutation(candidate);
     }
 
@@ -21014,6 +21158,13 @@ impl Document {
         candidate
             .set_raw_hdr_ftr_with_images(header_xml, images, true, hdr_type)
             .expect("raw header package preflight failed");
+        candidate
+            .reconcile_comment_removal(self)
+            .expect("whole-story replacement cannot remove partial or malformed comment ownership");
+        candidate
+            .clone_for_staging()
+            .prepare_and_reopen_staged()
+            .expect("whole-story replacement package preflight failed");
         self.commit_staged_mutation(candidate);
     }
 
@@ -21029,6 +21180,13 @@ impl Document {
         candidate
             .set_raw_hdr_ftr_with_images(footer_xml, images, false, hdr_type)
             .expect("raw footer package preflight failed");
+        candidate
+            .reconcile_comment_removal(self)
+            .expect("whole-story replacement cannot remove partial or malformed comment ownership");
+        candidate
+            .clone_for_staging()
+            .prepare_and_reopen_staged()
+            .expect("whole-story replacement package preflight failed");
         self.commit_staged_mutation(candidate);
     }
 
@@ -21058,6 +21216,13 @@ impl Document {
                 HdrFtrType::Default,
             )
             .expect("an in-memory document can install a header background image");
+        candidate
+            .reconcile_comment_removal(self)
+            .expect("whole-story replacement cannot remove partial or malformed comment ownership");
+        candidate
+            .clone_for_staging()
+            .prepare_and_reopen_staged()
+            .expect("whole-story replacement package preflight failed");
         self.commit_staged_mutation(candidate);
     }
 
@@ -21082,6 +21247,13 @@ impl Document {
                 HdrFtrType::First,
             )
             .expect("an in-memory document can install a first-page header image");
+        candidate
+            .reconcile_comment_removal(self)
+            .expect("whole-story replacement cannot remove partial or malformed comment ownership");
+        candidate
+            .clone_for_staging()
+            .prepare_and_reopen_staged()
+            .expect("whole-story replacement package preflight failed");
         self.commit_staged_mutation(candidate);
     }
 
@@ -23287,6 +23459,7 @@ impl Document {
         let mut candidate = self.clone_for_staging();
         candidate.flush_to_package()?;
         let story = candidate.install_empty_section_story(section_index, kind, hdr_type)?;
+        candidate.reconcile_comment_removal(self)?;
         let reopened = candidate.prepare_and_reopen_staged()?;
         let result = reopened
             .section_story(section_index, kind, hdr_type)?
@@ -23880,6 +24053,75 @@ impl Document {
             .collect::<HashSet<_>>();
         let opaque_ids = self.opaque_relationship_ids_from_serialized_story(&modeled_ids)?;
         active_ids.extend(opaque_ids.iter().map(String::as_str));
+        // Imported producer parts stay in the package. Retire only their qualified
+        // marker spans when no modeled, inherited or opaque physical use survives.
+        let retired_targets = removed
+            .iter()
+            .map(|reference| {
+                let relationship = self
+                    .package
+                    .get_part_rels(&self.doc_part_name)
+                    .and_then(|rels| rels.items.iter().find(|rel| rel.id == reference.rel_id))
+                    .ok_or_else(|| {
+                        Error::Other(format!(
+                            "retired section relationship {} is missing",
+                            reference.rel_id
+                        ))
+                    })?;
+                if !relationship_is_internal(relationship)
+                    || !matches!(
+                        relationship.rel_type.as_str(),
+                        rel_types::HEADER | rel_types::FOOTER
+                    )
+                {
+                    return Err(Error::Other(
+                        "retired section relationship is not an internal story".into(),
+                    ));
+                }
+                Ok(OpcPackage::resolve_rel_target(
+                    &self.doc_part_name,
+                    &relationship.target,
+                ))
+            })
+            .collect::<Result<HashSet<_>>>()?;
+        for target in retired_targets {
+            let identity = part_name_identity(&target);
+            let mut used = false;
+            for (owner, relationships) in &self.package.part_rels {
+                for relationship in &relationships.items {
+                    if !relationship_is_internal(relationship)
+                        || part_name_identity(&OpcPackage::resolve_rel_target(
+                            owner,
+                            &relationship.target,
+                        )) != identity
+                    {
+                        continue;
+                    }
+                    if part_name_identity(owner) == part_name_identity(&self.doc_part_name) {
+                        used |= active_ids.contains(relationship.id.as_str());
+                    } else {
+                        let xml = self.package.get_part(owner).ok_or_else(|| {
+                            Error::Other(format!(
+                                "cannot prove incoming section-story ownership from missing {owner}"
+                            ))
+                        })?;
+                        if !xml_relationship_ids_in_order(xml)?.contains(&relationship.id) {
+                            return Err(Error::Other(format!(
+                                "cannot prove opaque incoming section-story relationship {} from {owner}",
+                                relationship.id
+                            )));
+                        }
+                        used = true;
+                    }
+                }
+            }
+            if !used && let Some(xml) = self.package.get_part(&target) {
+                let omitted = Self::omit_comment_markers(xml)?;
+                if omitted != xml {
+                    set_story_source_xml(self, &target, omitted)?;
+                }
+            }
+        }
         let removable_ids = removed
             .iter()
             .map(|reference| reference.rel_id.as_str())
@@ -41672,6 +41914,23 @@ mod odttf_tests {
         );
         assert!(result.unwrap_err().to_string().contains("entry count"));
         assert_eq!(document.document, model);
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+    #[test]
+    fn whole_story_final_reopen_and_preparation_failures_discard_candidates() {
+        let mut document = Document::new();
+        document.add_paragraph("live");
+        document.set_header("original");
+        let before = document.to_bytes().unwrap();
+        let model = document.document.clone();
+        FAIL_NEXT_STAGED_REOPEN.set(true);
+        let result = document.try_set_first_page_header("new");
+        let missed = FAIL_NEXT_STAGED_REOPEN.replace(false);
+        assert!(!missed, "actual final reopen boundary reached");
+        assert!(result.unwrap_err().to_string().contains("entry count"));
+        assert_eq!(document.document, model);
+        assert_eq!(document.to_bytes().unwrap(), before);
+        assert!(document.try_set_header("invalid \u{1}").is_err());
         assert_eq!(document.to_bytes().unwrap(), before);
     }
 }

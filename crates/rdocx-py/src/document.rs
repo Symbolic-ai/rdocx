@@ -3174,14 +3174,18 @@ impl PyDocument {
             .map_err(|error| rdocx_to_pyerr(py, error))
     }
 
-    fn set_header(&mut self, text: &str) {
-        self.inner.set_header(text);
+    fn set_header(&mut self, py: Python<'_>, text: &str) -> PyResult<()> {
+        py.detach(|| self.inner.try_set_header(text))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
         self.revisions.bump();
+        Ok(())
     }
 
-    fn set_footer(&mut self, text: &str) {
-        self.inner.set_footer(text);
+    fn set_footer(&mut self, py: Python<'_>, text: &str) -> PyResult<()> {
+        py.detach(|| self.inner.try_set_footer(text))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
         self.revisions.bump();
+        Ok(())
     }
 
     fn set_story_text(

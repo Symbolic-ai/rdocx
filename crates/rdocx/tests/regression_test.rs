@@ -42778,10 +42778,19 @@ fn text_xml_cannot_carry_is_refused_at_entry_and_never_saved() {
     );
 
     let mut document = Document::new();
-    document.set_header("Header \u{ffff}");
-    let error = document.to_bytes().unwrap_err().to_string();
+    let before = document.to_bytes().unwrap();
+    let error = document
+        .try_set_header("Header \u{ffff}")
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("holds U+FFFF at line"), "{error}");
     assert!(error.contains("/word/header"), "{error}");
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        document.set_header("Header \u{ffff}");
+    }));
+    assert!(refused.is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
 
     let mut document = Document::new();
     document.add_footnote("note \u{2}");
@@ -60323,4 +60332,1774 @@ fn scoped_control_paragraph_ordinals_match_reopened_comment_anchors() {
     assert_eq!(reopened.paragraphs()[6].text(), "Version p5");
     assert_eq!(reopened.paragraphs()[3].text(), "Version nested");
     assert_eq!(reopened.paragraphs()[5].text(), "Version cell");
+}
+
+// Issues 288 and 292, reported by hadim. Build producer-owned source in memory.
+fn x188_commented_story(glossary: bool) -> Document {
+    let mut seed = Document::new();
+    seed.add_paragraph("anchor");
+    seed.set_header("header");
+    seed.create_building_block(f277_block("entry", "autoTxt"))
+        .unwrap();
+    let root = seed
+        .add_comment(
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "root",
+        )
+        .unwrap();
+    let reply = seed.reply_to(root, "Ben", "reply").unwrap();
+    seed.reply_to(reply, "Cyd", "grandchild").unwrap();
+    let header = f254_story(&seed, StoryKind::Header);
+    let entry = seed.building_blocks().unwrap().remove(0);
+    let bytes = seed.to_bytes().unwrap();
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let original =
+        String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let start = original.find("<w:p>").unwrap();
+    let end = original[start..].find("</w:p>").unwrap() + start + 6;
+    let paragraph = &original[start..end];
+    package.set_part(
+        "/word/document.xml",
+        original
+            .replace(paragraph, "<w:p><w:r><w:t>main retained</w:t></w:r></w:p>")
+            .into_bytes(),
+    );
+    if glossary {
+        let xml =
+            String::from_utf8(package.get_part(&entry.glossary_part).unwrap().to_vec()).unwrap();
+        package.set_part(
+            &entry.glossary_part,
+            xml.replace("<w:docPartBody>", &format!("<w:docPartBody>{paragraph}"))
+                .into_bytes(),
+        );
+    } else {
+        package.set_part(
+            header.part_name(),
+            format!(r#"<w:hdr xmlns:w="{W_NS}">{paragraph}</w:hdr>"#).into_bytes(),
+        );
+    }
+    let mut output = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut output).unwrap();
+    Document::from_bytes(output.get_ref()).unwrap()
+}
+
+#[test]
+fn whole_story_removal_and_replacement_preserve_comment_closure() {
+    let mut failed = Vec::new();
+    for glossary in [false, true] {
+        let mut document = x188_commented_story(glossary);
+        assert_eq!(document.comments().len(), 3);
+        if glossary {
+            let entry = document.building_blocks().unwrap().remove(0);
+            document.remove_building_block(&entry).unwrap();
+        } else {
+            document.set_header("replacement");
+        }
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        if !reopened.comments().is_empty() {
+            failed.push(if glossary {
+                "glossary removal"
+            } else {
+                "header replacement"
+            });
+        }
+    }
+    assert!(
+        failed.is_empty(),
+        "whole-story operations left orphan definitions: {failed:?}"
+    );
+}
+
+#[test]
+fn whole_story_glossary_replacement_reconciles_old_definitions() {
+    let mut document = x188_commented_story(true);
+    let entry = document.building_blocks().unwrap().remove(0);
+    document
+        .replace_building_block(
+            &entry.glossary_part,
+            entry.ordinal,
+            f277_block("replacement", "autoTxt"),
+        )
+        .unwrap();
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert!(
+        reopened.comments().is_empty(),
+        "replacing the glossary body orphaned the old thread"
+    );
+}
+
+#[test]
+fn whole_story_raw_and_image_replacements_remove_old_threads() {
+    let mut failed = Vec::new();
+    for image in [false, true] {
+        let mut document = x188_commented_story(false);
+        if image {
+            document.set_header_image(
+                b"x188-image",
+                "image.png",
+                Length::pt(12.0),
+                Length::pt(12.0),
+            );
+        } else {
+            document.set_raw_header_with_images(
+                format!(r#"<w:hdr xmlns:w="{W_NS}"><w:p/></w:hdr>"#).into_bytes(),
+                &[],
+                HdrFtrType::Default,
+            );
+        }
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        if !reopened.comments().is_empty() {
+            failed.push(image);
+        }
+    }
+    assert!(
+        failed.is_empty(),
+        "raw/image replacements left old definitions (image flags): {failed:?}"
+    );
+}
+
+#[test]
+fn whole_story_glossary_fragment_update_removes_old_threads() {
+    let mut document = x188_commented_story(true);
+    let entry = document.building_blocks().unwrap().remove(0);
+    let mut source = Document::new();
+    source.add_paragraph("replacement");
+    let story = f254_story(&source, StoryKind::Body);
+    let fragment = DocumentFragment::from_range(
+        &source,
+        &f254_item(&source, &story, 0),
+        &ContentLocation::end(story),
+        false,
+    )
+    .unwrap();
+    document
+        .update_building_block_from_fragment(
+            &entry,
+            f277_block("replacement", "autoTxt"),
+            &fragment,
+            rdocx::FragmentConflictPolicy::default(),
+        )
+        .unwrap();
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert!(
+        reopened.comments().is_empty(),
+        "fragment replacement orphaned old definitions"
+    );
+}
+
+#[test]
+fn building_block_transfer_omits_comments_before_definition_import() {
+    let mut source = x188_commented_story(false);
+    let story = f254_story(&source, StoryKind::Header);
+    let fragment = DocumentFragment::from_range(
+        &source,
+        &f254_item(&source, &story, 0),
+        &ContentLocation::end(story),
+        false,
+    )
+    .unwrap();
+    let before = source.to_bytes().unwrap();
+    let mut destination = Document::new();
+    let entry = destination
+        .create_building_block_from_fragment(
+            f277_block("commented", "autoTxt"),
+            &fragment,
+            rdocx::FragmentConflictPolicy::default(),
+        )
+        .unwrap();
+    let fragment = destination.building_block_fragment(&entry).unwrap();
+    let mut inserted = Document::new();
+    let body = f254_story(&inserted, StoryKind::Body);
+    inserted
+        .import_fragment(
+            &ContentLocation::end(body),
+            &fragment,
+            rdocx::FragmentConflictPolicy::default(),
+        )
+        .unwrap();
+    assert_eq!(source.to_bytes().unwrap(), before);
+    assert!(
+        destination.comments().is_empty(),
+        "glossary import populated main definitions"
+    );
+    assert!(
+        inserted.comments().is_empty(),
+        "reverse glossary capture carried main comments"
+    );
+}
+
+fn x188_variant(is_header: bool, variant: HdrFtrType) -> Document {
+    let mut document = x188_commented_story(false);
+    let header = f254_story(&document, StoryKind::Header);
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let variant_name = match variant {
+        HdrFtrType::Default => "default",
+        HdrFtrType::First => "first",
+        HdrFtrType::Even => "even",
+    };
+    let main = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let main = main.replace("w:type=\"default\"", &format!("w:type=\"{variant_name}\""));
+    package.set_part(
+        "/word/document.xml",
+        if is_header {
+            main
+        } else {
+            main.replace("headerReference", "footerReference")
+        }
+        .into_bytes(),
+    );
+    if !is_header {
+        for relationship in &mut package.get_or_create_part_rels("/word/document.xml").items {
+            if relationship.rel_type == oxml_opc::relationship::rel_types::HEADER {
+                relationship.rel_type = oxml_opc::relationship::rel_types::FOOTER.into();
+            }
+        }
+        let xml = String::from_utf8(package.get_part(header.part_name()).unwrap().to_vec())
+            .unwrap()
+            .replace("w:hdr", "w:ftr");
+        package.set_part(header.part_name(), xml.into_bytes());
+        package.content_types.add_override(
+            header.part_name(),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml",
+        );
+    }
+    Document::from_bytes(&f236_package_bytes(package)).unwrap()
+}
+
+#[test]
+fn whole_story_all_ten_installers_and_six_variants_reconcile_threads() {
+    let mut cases = vec![
+        (true, HdrFtrType::Default, 0),
+        (false, HdrFtrType::Default, 1),
+        (true, HdrFtrType::First, 2),
+        (false, HdrFtrType::First, 3),
+        (true, HdrFtrType::Default, 4),
+        (false, HdrFtrType::Default, 5),
+        (true, HdrFtrType::Default, 6),
+        (true, HdrFtrType::First, 7),
+    ];
+    for header in [true, false] {
+        for variant in [HdrFtrType::Default, HdrFtrType::First, HdrFtrType::Even] {
+            cases.push((header, variant, 8));
+        }
+    }
+    for (header, variant, operation) in cases {
+        let mut document = x188_variant(header, variant);
+        let kept = document
+            .add_comment(
+                RunRange {
+                    start: RunPosition {
+                        body_index: 0,
+                        run_index: 0,
+                    },
+                    end: RunPosition {
+                        body_index: 0,
+                        run_index: 1,
+                    },
+                },
+                "Dee",
+                None,
+                "keep",
+            )
+            .unwrap();
+        document.validate_comment_ownership().unwrap();
+        let size = Length::pt(12.0);
+        match operation {
+            0 => document.try_set_header("new").unwrap(),
+            1 => document.try_set_footer("new").unwrap(),
+            2 => document.try_set_first_page_header("new").unwrap(),
+            3 => document.try_set_first_page_footer("new").unwrap(),
+            4 => document.set_header_image(b"image", "x.png", size, size),
+            5 => document.set_footer_image(b"image", "x.png", size, size),
+            6 => document.set_header_image_with_background(b"image", "x.png", size, size, "FFFFFF"),
+            7 => document.set_first_page_header_image(b"image", "x.png", size, size),
+            _ => {
+                let root = if header { "hdr" } else { "ftr" };
+                let xml = format!(
+                    r#"<w:{root} xmlns:w="{W_NS}"><w:p><w:r><w:t>new</w:t></w:r></w:p></w:{root}>"#
+                )
+                .into_bytes();
+                if header {
+                    document.set_raw_header_with_images(xml, &[], variant);
+                } else {
+                    document.set_raw_footer_with_images(xml, &[], variant);
+                }
+            }
+        }
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(
+            reopened
+                .comments()
+                .iter()
+                .map(|c| c.id())
+                .collect::<Vec<_>>(),
+            vec![kept],
+            "{header} {variant:?} {operation}"
+        );
+        reopened.validate_comment_ownership().unwrap();
+        assert_eq!(reopened.paragraphs()[0].text(), "main retained");
+    }
+}
+
+fn x188_local_glossary() -> Document {
+    let mut document = Document::new();
+    document.add_paragraph("MAIN");
+    let root = document
+        .add_comment(
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "main root",
+        )
+        .unwrap();
+    let reply = document.reply_to(root, "Ben", "main reply").unwrap();
+    document.reply_to(reply, "Cyd", "main grandchild").unwrap();
+    let entry = document
+        .create_building_block(f277_block("local", "autoTxt"))
+        .unwrap();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let main = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let start = main.find("<w:p>").unwrap();
+    let end = main[start..].find("</w:p>").unwrap() + start + 6;
+    let paragraph = main[start..end].replace("MAIN", "LOCAL");
+    let glossary =
+        String::from_utf8(package.get_part(&entry.glossary_part).unwrap().to_vec()).unwrap();
+    package.set_part(
+        &entry.glossary_part,
+        glossary
+            .replace("<w:docPartBody>", &format!("<w:docPartBody>{paragraph}"))
+            .into_bytes(),
+    );
+    let rels = package
+        .get_part_rels("/word/document.xml")
+        .unwrap()
+        .items
+        .clone();
+    for rel in rels.into_iter().filter(|rel| {
+        rel.rel_type == oxml_opc::relationship::rel_types::COMMENTS
+            || rel.rel_type.ends_with("/commentsExtended")
+    }) {
+        let source = oxml_opc::OpcPackage::resolve_rel_target("/word/document.xml", &rel.target);
+        let name = source.rsplit('/').next().unwrap();
+        let target = format!("/word/glossary/{name}");
+        let xml = String::from_utf8(package.get_part(&source).unwrap().to_vec())
+            .unwrap()
+            .replace("main ", "local ");
+        let content_type = package
+            .content_types
+            .override_for(&source)
+            .unwrap()
+            .to_owned();
+        package.set_part(&target, xml.into_bytes());
+        package.content_types.add_override(&target, &content_type);
+        package
+            .get_or_create_part_rels(&entry.glossary_part)
+            .items
+            .push(oxml_opc::Relationship {
+                id: rel.id,
+                rel_type: rel.rel_type,
+                target: name.into(),
+                target_mode: None,
+            });
+    }
+    Document::from_bytes(&f236_package_bytes(package)).unwrap()
+}
+
+#[test]
+fn whole_story_glossary_local_owner_never_deletes_equal_id_main_thread() {
+    let mut document = x188_local_glossary();
+    document.validate_comment_ownership().unwrap();
+    let before = document.to_bytes().unwrap();
+    let source = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&before)).unwrap();
+    let entry = document.building_blocks().unwrap().remove(0);
+    let fragment = document.building_block_fragment(&entry).unwrap();
+    let mut destination = Document::new();
+    let body = f254_story(&destination, StoryKind::Body);
+    destination
+        .import_fragment(
+            &ContentLocation::end(body),
+            &fragment,
+            FragmentConflictPolicy::default(),
+        )
+        .unwrap();
+    assert!(destination.comments().is_empty());
+    assert_eq!(destination.paragraphs()[0].text(), "LOCAL");
+    assert_eq!(document.to_bytes().unwrap(), before);
+    document.remove_building_block(&entry).unwrap();
+    let output = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&output)).unwrap();
+    for part in [
+        "/word/document.xml",
+        "/word/comments.xml",
+        "/word/commentsExtended.xml",
+    ] {
+        assert_eq!(source.get_part(part), package.get_part(part), "{part}");
+    }
+    assert_eq!(document.comments().len(), 3);
+    let local = String::from_utf8_lossy(package.get_part("/word/glossary/comments.xml").unwrap());
+    assert!(!local.contains("local root"));
+    assert!(
+        package
+            .get_part("/word/glossary/commentsExtended.xml")
+            .is_some()
+    );
+    Document::from_bytes(&output)
+        .unwrap()
+        .validate_comment_ownership()
+        .unwrap();
+}
+
+#[test]
+fn shared_story_comment_ownership_survives_until_last_reference() {
+    for header in [true, false] {
+        for variant in [HdrFtrType::Default, HdrFtrType::First, HdrFtrType::Even] {
+            for opaque in 0..4 {
+                let kind = if header {
+                    HeaderFooterKind::Header
+                } else {
+                    HeaderFooterKind::Footer
+                };
+                let mut document = x188_variant(header, variant);
+                let story = f252_section_story(&document, 0, kind, variant);
+                document.insert_section(1).unwrap();
+                document.insert_section(2).unwrap();
+                document
+                    .link_section_story(1, kind, variant, &story)
+                    .unwrap();
+                let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(
+                    document.to_bytes().unwrap(),
+                ))
+                .unwrap();
+                let relation = package
+                    .get_part_rels("/word/document.xml")
+                    .unwrap()
+                    .items
+                    .iter()
+                    .find(|r| {
+                        oxml_opc::OpcPackage::resolve_rel_target("/word/document.xml", &r.target)
+                            == story.part_name()
+                    })
+                    .unwrap()
+                    .clone();
+                let mut shared = relation.clone();
+                shared.id = "rIdX188Shared".into();
+                shared.target = story.part_name().replace("/word/", "/word/./");
+                package
+                    .get_or_create_part_rels("/word/document.xml")
+                    .items
+                    .push(shared);
+                let mut xml =
+                    String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec())
+                        .unwrap();
+                let old = format!("r:id=\"{}\"", relation.id);
+                let index = xml.rfind(&old).unwrap();
+                xml.replace_range(index..index + old.len(), "r:id=\"rIdX188Shared\"");
+                if opaque == 1 {
+                    xml = xml.replace("</w:body>", r#"<w:customXml xmlns:x="urn:producer" x:keep="exact" r:id="rIdX188Shared"/></w:body>"#);
+                }
+                package.set_part("/word/document.xml", xml.into_bytes());
+                if opaque >= 2 {
+                    package.set_part("/producer/owner.xml", if opaque == 2 { br#"<x:owner xmlns:x="urn:producer" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="incoming"/>"#.to_vec() } else { br#"<x:owner xmlns:x="urn:producer"/>"#.to_vec() });
+                    package
+                        .content_types
+                        .add_override("/producer/owner.xml", "application/xml");
+                    package
+                        .get_or_create_part_rels("/producer/owner.xml")
+                        .items
+                        .push(oxml_opc::Relationship {
+                            id: "incoming".into(),
+                            rel_type: "urn:producer:story".into(),
+                            target: story.part_name().into(),
+                            target_mode: None,
+                        });
+                }
+                let mut document = Document::from_bytes(&f236_package_bytes(package)).unwrap();
+                document.validate_comment_ownership().unwrap();
+                assert!(
+                    document
+                        .section_story(2, kind, variant)
+                        .unwrap()
+                        .unwrap()
+                        .is_inherited()
+                );
+                let before = document.to_bytes().unwrap();
+                let source =
+                    oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&before)).unwrap();
+                if opaque == 3 {
+                    assert!(document.remove_section_story(0, kind, variant).is_err());
+                    assert_eq!(document.to_bytes().unwrap(), before);
+                    continue;
+                }
+                document.remove_section_story(0, kind, variant).unwrap();
+                let first = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(
+                    document.to_bytes().unwrap(),
+                ))
+                .unwrap();
+                for part in [
+                    story.part_name(),
+                    "/word/comments.xml",
+                    "/word/commentsExtended.xml",
+                ] {
+                    assert_eq!(
+                        source.get_part(part),
+                        first.get_part(part),
+                        "first removal {header} {variant:?} {part}"
+                    );
+                }
+                document.remove_section_story(1, kind, variant).unwrap();
+                let output = document.to_bytes().unwrap();
+                let final_package =
+                    oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&output)).unwrap();
+                assert!(
+                    final_package.get_part(story.part_name()).is_some(),
+                    "retained producer target"
+                );
+                if opaque == 0 {
+                    assert!(document.comments().is_empty(), "{header} {variant:?}");
+                    let original =
+                        String::from_utf8(source.get_part(story.part_name()).unwrap().to_vec())
+                            .unwrap();
+                    let expected = original
+                        .replace(r#"<w:commentRangeStart w:id="0"/>"#, "")
+                        .replace(r#"<w:commentRangeEnd w:id="0"/>"#, "")
+                        .replace(r#"<w:commentReference w:id="0"/>"#, "");
+                    assert_eq!(
+                        final_package.get_part(story.part_name()).unwrap(),
+                        expected.as_bytes()
+                    );
+                } else {
+                    assert_eq!(document.comments().len(), 3);
+                    assert_eq!(
+                        final_package.get_part(story.part_name()),
+                        source.get_part(story.part_name())
+                    );
+                }
+                Document::from_bytes(&output)
+                    .unwrap()
+                    .validate_comment_ownership()
+                    .unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn whole_story_glossary_local_mapping_failures_are_atomic() {
+    let mut seed = x188_local_glossary();
+    let bytes = seed.to_bytes().unwrap();
+    let entry = seed.building_blocks().unwrap().remove(0);
+    for mode in [
+        "duplicate",
+        "external",
+        "missing",
+        "wrong-root",
+        "malformed",
+    ] {
+        let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+        let relation = package
+            .get_part_rels(&entry.glossary_part)
+            .unwrap()
+            .items
+            .iter()
+            .find(|r| r.rel_type == oxml_opc::relationship::rel_types::COMMENTS)
+            .unwrap()
+            .clone();
+        match mode {
+            "duplicate" => {
+                let mut duplicate = relation.clone();
+                duplicate.id = "another".into();
+                package
+                    .get_or_create_part_rels(&entry.glossary_part)
+                    .items
+                    .push(duplicate);
+            }
+            "external" => {
+                package
+                    .get_or_create_part_rels(&entry.glossary_part)
+                    .items
+                    .iter_mut()
+                    .find(|r| r.id == relation.id)
+                    .unwrap()
+                    .target_mode = Some("External".into());
+            }
+            "missing" => {
+                package.remove_part("/word/glossary/comments.xml");
+            }
+            "wrong-root" => package.set_part(
+                "/word/glossary/comments.xml",
+                format!(r#"<w:notComments xmlns:w="{W_NS}"/>"#).into_bytes(),
+            ),
+            _ => package.set_part("/word/glossary/comments.xml", b"<not-xml".to_vec()),
+        }
+        let mut document = Document::from_bytes(&f236_package_bytes(package)).unwrap();
+        let before = document.to_bytes().unwrap();
+        let current = document.building_blocks().unwrap().remove(0);
+        assert!(
+            document.building_block_fragment(&current).is_err(),
+            "reverse {mode}"
+        );
+        assert!(
+            document.remove_building_block(&current).is_err(),
+            "remove {mode}"
+        );
+        assert_eq!(document.to_bytes().unwrap(), before, "{mode}");
+    }
+}
+
+#[test]
+fn building_block_transfer_update_and_public_insertion_omit_review_state() {
+    let mut source = x188_commented_story(false);
+    let story = f254_story(&source, StoryKind::Header);
+    let fragment = DocumentFragment::from_range(
+        &source,
+        &f254_item(&source, &story, 0),
+        &ContentLocation::end(story),
+        false,
+    )
+    .unwrap();
+    let source_before = source.to_bytes().unwrap();
+    let mut destination = Document::new();
+    destination.add_paragraph("keep");
+    let entry = destination
+        .create_building_block_from_fragment(
+            f277_block("first", "autoTxt"),
+            &fragment,
+            FragmentConflictPolicy::default(),
+        )
+        .unwrap();
+    let updated = destination
+        .update_building_block_from_fragment(
+            &entry,
+            f277_block("updated", "autoTxt"),
+            &fragment,
+            FragmentConflictPolicy::default(),
+        )
+        .unwrap();
+    let body = f254_story(&destination, StoryKind::Body);
+    destination
+        .insert_building_block(
+            &ContentLocation::end(body),
+            &updated,
+            FragmentConflictPolicy::default(),
+        )
+        .unwrap();
+    assert!(destination.comments().is_empty());
+    destination.validate_comment_ownership().unwrap();
+    assert_eq!(destination.paragraphs().last().unwrap().text(), "anchor");
+    let reverse = destination.building_block_fragment(&updated).unwrap();
+    let mut cross = Document::new();
+    let copied = cross
+        .create_building_block_from_fragment(
+            f277_block("cross", "autoTxt"),
+            &reverse,
+            FragmentConflictPolicy::default(),
+        )
+        .unwrap();
+    let body = f254_story(&cross, StoryKind::Body);
+    cross
+        .insert_building_block(
+            &ContentLocation::end(body),
+            &copied,
+            FragmentConflictPolicy::default(),
+        )
+        .unwrap();
+    Document::from_bytes(&cross.to_bytes().unwrap())
+        .unwrap()
+        .validate_comment_ownership()
+        .unwrap();
+    assert!(cross.comments().is_empty());
+    assert_eq!(cross.paragraphs()[0].text(), "anchor");
+    assert_eq!(source.to_bytes().unwrap(), source_before);
+    let mut local = x188_local_glossary();
+    let entry = local.building_blocks().unwrap().remove(0);
+    let before =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(local.to_bytes().unwrap())).unwrap();
+    let mut metadata = entry.block.clone();
+    metadata.description = Some("metadata only".into());
+    local.update_building_block(&entry, metadata).unwrap();
+    let after =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(local.to_bytes().unwrap())).unwrap();
+    for part in [
+        "/word/comments.xml",
+        "/word/commentsExtended.xml",
+        "/word/glossary/comments.xml",
+        "/word/glossary/commentsExtended.xml",
+    ] {
+        assert_eq!(
+            before.get_part(part),
+            after.get_part(part),
+            "metadata {part}"
+        );
+    }
+    local.validate_comment_ownership().unwrap();
+    let mut body = CT_Body::new();
+    body.sect_pr = None;
+    body.content.push(BodyContent::Paragraph(CT_P::from_xml_fragment(format!(r#"<w:p xmlns:w="{W_NS}"><w:commentRangeStart w:id="0"/><w:r><w:t>new supplied</w:t></w:r><w:commentRangeEnd w:id="0"/><w:r><w:commentReference w:id="0"/></w:r></w:p>"#).as_bytes()).unwrap()));
+    let mut supplied = f277_block("supplied", "autoTxt");
+    supplied.body = body;
+    let bytes = local.to_bytes().unwrap();
+    assert!(local.create_building_block(supplied.clone()).is_err());
+    assert_eq!(local.to_bytes().unwrap(), bytes);
+    let entry = local.building_blocks().unwrap().remove(0);
+    local
+        .replace_building_block(&entry.glossary_part, entry.ordinal, supplied)
+        .unwrap();
+    assert_eq!(local.comments().len(), 3);
+    local.validate_comment_ownership().unwrap();
+}
+
+#[test]
+fn whole_note_removal_reconciles_comment_companions() {
+    for endnote in [false, true] {
+        let mut seed = Document::new();
+        seed.add_paragraph("main retained");
+        let kept = seed
+            .add_comment(
+                RunRange {
+                    start: RunPosition {
+                        body_index: 0,
+                        run_index: 0,
+                    },
+                    end: RunPosition {
+                        body_index: 0,
+                        run_index: 1,
+                    },
+                },
+                "Dee",
+                None,
+                "unrelated",
+            )
+            .unwrap();
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+                .unwrap();
+        let (root_name, item_name, relationship, content_type, kind) = if endnote {
+            (
+                "endnotes",
+                "endnote",
+                oxml_opc::relationship::rel_types::ENDNOTES,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml",
+                StoryKind::Endnote,
+            )
+        } else {
+            (
+                "footnotes",
+                "footnote",
+                oxml_opc::relationship::rel_types::FOOTNOTES,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml",
+                StoryKind::Footnote,
+            )
+        };
+        let part = "/notes/relocated.xml";
+        package.set_part(part, format!(r#"<q:{root_name} xmlns:q="{W_NS}" xmlns:x="urn:foreign"><q:{item_name} q:id="2"><q:p><q:r><q:t>note anchor</q:t></q:r></q:p></q:{item_name}><x:commentReference x:id="999"/></q:{root_name}>"#).into_bytes());
+        package.content_types.add_override(part, content_type);
+        package
+            .get_or_create_part_rels("/word/document.xml")
+            .add(relationship, "../notes/relocated.xml");
+        let mut document = Document::from_bytes(&f236_package_bytes(package)).unwrap();
+        let story = f254_story(&document, kind);
+        let location = f254_item(&document, &story, 0);
+        let root = document
+            .add_story_comment(
+                rdocx::StoryRunRange {
+                    start: rdocx::StoryRunPosition {
+                        location: location.clone(),
+                        run_index: 0,
+                    },
+                    end: rdocx::StoryRunPosition {
+                        location,
+                        run_index: 1,
+                    },
+                },
+                "Ada",
+                None,
+                "note root",
+            )
+            .unwrap();
+        let reply = document.reply_to(root, "Ben", "reply").unwrap();
+        document.reply_to(reply, "Cyd", "grandchild").unwrap();
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+                .unwrap();
+        let comments = rdocx_oxml::comments::CT_Comments::from_xml(
+            package.get_part("/word/comments.xml").unwrap(),
+        )
+        .unwrap();
+        let mut ids = String::from(
+            r#"<ci:commentsIds xmlns:ci="http://schemas.microsoft.com/office/word/2016/wordml/cid">"#,
+        );
+        let mut extensible = String::from(
+            r#"<ce:commentsExtensible xmlns:ce="http://schemas.microsoft.com/office/word/2018/wordml/cex">"#,
+        );
+        for comment in &comments.comments {
+            let para = comment.paragraph_ids.last().unwrap().as_ref().unwrap();
+            let durable = format!("{:08X}", comment.id + 16);
+            ids.push_str(&format!(
+                r#"<ci:commentId ci:paraId="{para}" ci:durableId="{durable}"/>"#
+            ));
+            extensible.push_str(&format!(
+                r#"<ce:commentExtensible ce:durableId="{durable}"/>"#
+            ));
+        }
+        ids.push_str("</ci:commentsIds>");
+        extensible.push_str("</ce:commentsExtensible>");
+        for (target, relationship, content_type, xml) in [
+            (
+                "/annotations/ids.xml",
+                "http://schemas.microsoft.com/office/2016/09/relationships/commentsIds",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsIds+xml",
+                ids,
+            ),
+            (
+                "/annotations/extensible.xml",
+                "http://schemas.microsoft.com/office/2018/08/relationships/commentsExtensible",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtensible+xml",
+                extensible,
+            ),
+        ] {
+            package.set_part(target, xml.into_bytes());
+            package.content_types.add_override(target, content_type);
+            package
+                .get_or_create_part_rels("/word/document.xml")
+                .add(relationship, target);
+        }
+        let mut document = Document::from_bytes(&f236_package_bytes(package)).unwrap();
+        document.validate_comment_ownership().unwrap();
+        if endnote {
+            document.remove_endnote(2).unwrap();
+        } else {
+            document.remove_footnote(2).unwrap();
+        }
+        let bytes = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        reopened.validate_comment_ownership().unwrap();
+        assert_eq!(
+            reopened
+                .comments()
+                .iter()
+                .map(|c| c.id())
+                .collect::<Vec<_>>(),
+            vec![kept]
+        );
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+        assert!(
+            String::from_utf8_lossy(package.get_part(part).unwrap())
+                .contains(r#"<x:commentReference x:id="999"/>"#)
+        );
+        for target in ["/annotations/ids.xml", "/annotations/extensible.xml"] {
+            let xml = String::from_utf8_lossy(package.get_part(target).unwrap());
+            assert!(xml.contains("00000010"));
+            assert!(!xml.contains("00000011"));
+            assert!(!xml.contains("00000012"));
+            assert!(!xml.contains("00000013"));
+        }
+    }
+}
+
+#[test]
+fn whole_story_partial_and_malformed_companions_refuse_without_publication() {
+    for glossary in [false, true] {
+        for partial in [false, true] {
+            let mut seed = x188_commented_story(glossary);
+            let entry = seed.building_blocks().unwrap().remove(0);
+            let story = f254_story(&seed, StoryKind::Header);
+            let mut package =
+                oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+                    .unwrap();
+            if partial {
+                let target = if glossary {
+                    entry.glossary_part.as_str()
+                } else {
+                    story.part_name()
+                };
+                let marker = r#"<w:commentRangeStart w:id="0"/>"#;
+                let xml = String::from_utf8(package.get_part(target).unwrap().to_vec())
+                    .unwrap()
+                    .replace(marker, "");
+                package.set_part(target, xml.into_bytes());
+                let main =
+                    String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec())
+                        .unwrap()
+                        .replacen("<w:p>", &format!("<w:p>{marker}"), 1);
+                package.set_part("/word/document.xml", main.into_bytes());
+            } else {
+                package.set_part("/annotations/broken-ids.xml", b"<not-xml".to_vec());
+                package.content_types.add_override("/annotations/broken-ids.xml", "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsIds+xml");
+                package.get_or_create_part_rels("/word/document.xml").add(
+                    "http://schemas.microsoft.com/office/2016/09/relationships/commentsIds",
+                    "/annotations/broken-ids.xml",
+                );
+            }
+            let mut document = Document::from_bytes(&f236_package_bytes(package)).unwrap();
+            let before = document.to_bytes().unwrap();
+            if glossary {
+                let current = document.building_blocks().unwrap().remove(0);
+                assert!(document.remove_building_block(&current).is_err());
+                assert!(
+                    document
+                        .replace_building_block(
+                            &current.glossary_part,
+                            current.ordinal,
+                            f277_block("new", "autoTxt")
+                        )
+                        .is_err()
+                );
+            } else {
+                assert!(document.try_set_header("new").is_err());
+            }
+            assert_eq!(
+                document.to_bytes().unwrap(),
+                before,
+                "glossary={glossary} partial={partial}"
+            );
+        }
+    }
+}
+
+#[test]
+fn building_block_transfer_omits_selected_note_and_textbox_review_dependencies() {
+    let mut source = Document::new();
+    source.add_paragraph("body anchor");
+    source.add_footnote("note anchor");
+    let zero = Length::pt(0.0);
+    source
+        .add_text_box_to_story(
+            &f254_story(&source, StoryKind::Body),
+            "box anchor",
+            rdocx::TextBoxOptions {
+                width: Length::pt(144.0),
+                height: Length::pt(54.0),
+                anchor: rdocx::PictureAnchor {
+                    horizontal_relative_from: rdocx::DrawingHorizontalRelativeFrom::Column,
+                    horizontal_offset: zero,
+                    horizontal_alignment: None,
+                    vertical_relative_from: rdocx::DrawingVerticalRelativeFrom::Paragraph,
+                    vertical_offset: zero,
+                    vertical_alignment: None,
+                    wrap: rdocx::DrawingWrap::TopAndBottom,
+                    distance_top: zero,
+                    distance_bottom: zero,
+                    distance_left: zero,
+                    distance_right: zero,
+                    relative_height: 1,
+                    behind_text: false,
+                },
+                rotation_degrees: 0.0,
+                text_direction: rdocx::TextBoxDirection::Horizontal,
+                fill_color: None,
+            },
+        )
+        .unwrap();
+    for kind in [StoryKind::Body, StoryKind::Footnote, StoryKind::TextBox] {
+        let story = f254_story(&source, kind);
+        let location = f254_item(&source, &story, 0);
+        let root = source
+            .add_story_comment(
+                rdocx::StoryRunRange {
+                    start: rdocx::StoryRunPosition {
+                        location: location.clone(),
+                        run_index: 0,
+                    },
+                    end: rdocx::StoryRunPosition {
+                        location,
+                        run_index: 1,
+                    },
+                },
+                "Ada",
+                None,
+                "root",
+            )
+            .unwrap();
+        source.reply_to(root, "Ben", "reply").unwrap();
+    }
+    source.validate_comment_ownership().unwrap();
+    let before = source.to_bytes().unwrap();
+    let story = f254_story(&source, StoryKind::Body);
+    let fragment = DocumentFragment::from_range(
+        &source,
+        &f254_item(&source, &story, 0),
+        &ContentLocation::end(story),
+        false,
+    )
+    .unwrap();
+    let mut destination = Document::new();
+    let entry = destination
+        .create_building_block_from_fragment(
+            f277_block("closure", "autoTxt"),
+            &fragment,
+            FragmentConflictPolicy::default(),
+        )
+        .unwrap();
+    let story = f254_story(&destination, StoryKind::Body);
+    destination
+        .insert_building_block(
+            &ContentLocation::end(story),
+            &entry,
+            FragmentConflictPolicy::default(),
+        )
+        .unwrap();
+    let bytes = destination.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    reopened.validate_comment_ownership().unwrap();
+    assert!(reopened.comments().is_empty());
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    for part in package.parts.values() {
+        assert!(!String::from_utf8_lossy(part).contains("commentReference"));
+    }
+    assert_eq!(source.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn whole_story_legacy_raw_and_image_panics_discard_allocated_candidates() {
+    let mut cases = Vec::new();
+    for header in [true, false] {
+        for variant in [HdrFtrType::Default, HdrFtrType::First, HdrFtrType::Even] {
+            cases.push((header, variant, 0));
+        }
+    }
+    cases.extend([
+        (true, HdrFtrType::Default, 1),
+        (false, HdrFtrType::Default, 2),
+        (true, HdrFtrType::Default, 3),
+        (true, HdrFtrType::First, 4),
+    ]);
+    for (header, variant, image) in cases {
+        let mut seed = x188_variant(header, variant);
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+                .unwrap();
+        package.set_part("/annotations/broken-ids.xml", b"<not-xml".to_vec());
+        package.content_types.add_override(
+            "/annotations/broken-ids.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsIds+xml",
+        );
+        package.get_or_create_part_rels("/word/document.xml").add(
+            "http://schemas.microsoft.com/office/2016/09/relationships/commentsIds",
+            "/annotations/broken-ids.xml",
+        );
+        let mut document = Document::from_bytes(&f236_package_bytes(package)).unwrap();
+        let before = document.to_bytes().unwrap();
+        let size = Length::pt(12.0);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match image {
+            1 => document.set_header_image(b"new-image", "new.png", size, size),
+            2 => document.set_footer_image(b"new-image", "new.png", size, size),
+            3 => document.set_header_image_with_background(
+                b"new-image",
+                "new.png",
+                size,
+                size,
+                "FFFFFF",
+            ),
+            4 => document.set_first_page_header_image(b"new-image", "new.png", size, size),
+            _ => {
+                let root = if header { "hdr" } else { "ftr" };
+                let xml = format!(r#"<w:{root} xmlns:w="{W_NS}"><w:p/></w:{root}>"#).into_bytes();
+                let images = [("image", b"allocated-image".as_slice(), "new.png")];
+                if header {
+                    document.set_raw_header_with_images(xml, &images, variant);
+                } else {
+                    document.set_raw_footer_with_images(xml, &images, variant);
+                }
+            }
+        }));
+        assert!(result.is_err(), "{header} {variant:?} {image}");
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+}
+
+fn x188_producer_glossary_note(local: bool) -> Document {
+    let mut document = Document::new();
+    document.add_paragraph("main retained");
+    let note_id = document.add_footnote("MAIN NOTE");
+    let story = document.footnote_story(note_id).unwrap().unwrap();
+    let location = f254_item(&document, &story, 0);
+    document
+        .add_story_comment(
+            rdocx::StoryRunRange {
+                start: rdocx::StoryRunPosition {
+                    location: location.clone(),
+                    run_index: 0,
+                },
+                end: rdocx::StoryRunPosition {
+                    location,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "note review",
+        )
+        .unwrap();
+    let entry = document
+        .create_building_block(f277_block("producer note", "autoTxt"))
+        .unwrap();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let xml = String::from_utf8(package.get_part(&entry.glossary_part).unwrap().to_vec()).unwrap();
+    package.set_part(
+        &entry.glossary_part,
+        xml.replace(
+            "<w:docPartBody>",
+            &format!(
+                r#"<w:docPartBody><w:p><w:r><w:footnoteReference w:id="{note_id}"/></w:r></w:p>"#
+            ),
+        )
+        .into_bytes(),
+    );
+    if local {
+        package.set_part("/word/glossary/footnotes.xml", format!(r#"<w:footnotes xmlns:w="{W_NS}"><w:footnote w:id="{note_id}"><w:p><w:r><w:t>LOCAL NOTE</w:t></w:r><w:r><w:commentReference w:id="0"/></w:r></w:p></w:footnote></w:footnotes>"#).into_bytes());
+        package.content_types.add_override(
+            "/word/glossary/footnotes.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml",
+        );
+        package.get_or_create_part_rels(&entry.glossary_part).add(
+            oxml_opc::relationship::rel_types::FOOTNOTES,
+            "footnotes.xml",
+        );
+    }
+    Document::from_bytes(&f236_package_bytes(package)).unwrap()
+}
+
+#[test]
+fn building_block_reverse_omits_producer_note_review_dependencies() {
+    let mut source = x188_producer_glossary_note(false);
+    let entry = source.building_blocks().unwrap().remove(0);
+    let before = source.to_bytes().unwrap();
+    let fragment = source.building_block_fragment(&entry).unwrap();
+    assert_eq!(source.to_bytes().unwrap(), before);
+    let mut destination = Document::new();
+    let body = f254_story(&destination, StoryKind::Body);
+    destination
+        .import_fragment(
+            &ContentLocation::end(body),
+            &fragment,
+            FragmentConflictPolicy::default(),
+        )
+        .unwrap();
+    let cross_clean = destination.comments().is_empty();
+    let body = f254_story(&source, StoryKind::Body);
+    source
+        .insert_building_block(
+            &ContentLocation::end(body),
+            &entry,
+            FragmentConflictPolicy::default(),
+        )
+        .unwrap();
+    let same_clean = source.comments().len() == 1;
+    assert!(
+        cross_clean && same_clean,
+        "reverse note review transferred: cross_clean={cross_clean} same_clean={same_clean}"
+    );
+}
+
+#[test]
+fn building_block_reverse_refuses_ambiguous_local_note_owner_atomically() {
+    let mut source = x188_producer_glossary_note(true);
+    let entry = source.building_blocks().unwrap().remove(0);
+    let before = source.to_bytes().unwrap();
+    assert!(
+        source.building_block_fragment(&entry).is_err(),
+        "local note numeric id must not select an equal-id main note"
+    );
+    let body = f254_story(&source, StoryKind::Body);
+    assert!(
+        source
+            .insert_building_block(
+                &ContentLocation::end(body),
+                &entry,
+                FragmentConflictPolicy::default()
+            )
+            .is_err()
+    );
+    assert_eq!(source.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn building_block_local_companions_without_definitions_refuse_atomically() {
+    let mut seed = x188_local_glossary();
+    let entry = seed.building_blocks().unwrap().remove(0);
+    let bytes = seed.to_bytes().unwrap();
+    let mut failures = Vec::new();
+    for family in ["commentsExtended", "commentsIds", "commentsExtensible"] {
+        for mode in ["malformed", "external", "missing", "duplicate"] {
+            let mut package =
+                oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+            package
+                .get_or_create_part_rels(&entry.glossary_part)
+                .items
+                .clear();
+            let relationship = match family {
+                "commentsExtended" => {
+                    "http://schemas.microsoft.com/office/2011/relationships/commentsExtended"
+                }
+                "commentsIds" => {
+                    "http://schemas.microsoft.com/office/2016/09/relationships/commentsIds"
+                }
+                _ => "http://schemas.microsoft.com/office/2018/08/relationships/commentsExtensible",
+            };
+            package.set_part("/word/glossary/orphan.xml", b"<not-xml".to_vec());
+            package
+                .content_types
+                .add_override("/word/glossary/orphan.xml", "application/xml");
+            if mode == "missing" {
+                package.remove_part("/word/glossary/orphan.xml");
+            }
+            package
+                .get_or_create_part_rels(&entry.glossary_part)
+                .items
+                .push(oxml_opc::Relationship {
+                    id: "orphan".into(),
+                    rel_type: relationship.into(),
+                    target: "orphan.xml".into(),
+                    target_mode: (mode == "external").then(|| "External".into()),
+                });
+            if mode == "duplicate" {
+                let mut relation =
+                    package.get_part_rels(&entry.glossary_part).unwrap().items[0].clone();
+                relation.id = "second".into();
+                package
+                    .get_or_create_part_rels(&entry.glossary_part)
+                    .items
+                    .push(relation);
+            }
+            let mut document = Document::from_bytes(&f236_package_bytes(package)).unwrap();
+            let before = document.to_bytes().unwrap();
+            let current = document.building_blocks().unwrap().remove(0);
+            if document.building_block_fragment(&current).is_ok() {
+                failures.push(format!("{family}/{mode}"));
+            }
+            assert_eq!(document.to_bytes().unwrap(), before);
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "local companion mapping accepted without definitions: {failures:?}"
+    );
+}
+
+fn x188_shared_review_note(annotated: bool) -> Document {
+    let mut source = x188_local_glossary();
+    let entry = source.building_blocks().unwrap().remove(0);
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(source.to_bytes().unwrap()))
+            .unwrap();
+    let original =
+        String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let start = original.find("<w:p>").unwrap();
+    let end = original[start..].find("</w:p>").unwrap() + start + 6;
+    let mut paragraph = original[start..end].to_owned();
+    let markers = [
+        r#"<w:commentRangeStart w:id="0"/>"#,
+        r#"<w:commentRangeEnd w:id="0"/>"#,
+        r#"<w:commentReference w:id="0"/>"#,
+    ];
+    if !annotated {
+        for marker in markers {
+            paragraph = paragraph.replace(marker, "");
+        }
+    }
+    for part in ["/word/document.xml", entry.glossary_part.as_str()] {
+        let mut xml = String::from_utf8(package.get_part(part).unwrap().to_vec()).unwrap();
+        if annotated {
+            for marker in markers {
+                xml = xml.replace(marker, "");
+            }
+        }
+        xml = xml.replacen(
+            "<w:p>",
+            r#"<w:p><w:r><w:footnoteReference w:id="1"/></w:r>"#,
+            1,
+        );
+        package.set_part(part, xml.into_bytes());
+        package.get_or_create_part_rels(part).add(
+            oxml_opc::relationship::rel_types::FOOTNOTES,
+            "/word/shared-notes.xml",
+        );
+    }
+    package.set_part("/word/shared-notes.xml", format!(r#"<w:footnotes xmlns:w="{W_NS}"><w:footnote w:id="1">{paragraph}</w:footnote></w:footnotes>"#).into_bytes());
+    package.content_types.add_override(
+        "/word/shared-notes.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml",
+    );
+    Document::from_bytes(&f236_package_bytes(package)).unwrap()
+}
+
+#[test]
+fn glossary_review_graphs_refuse_one_shared_physical_marked_note() {
+    let mut document = x188_shared_review_note(true);
+    let before = document.to_bytes().unwrap();
+    assert!(
+        document.validate_comment_ownership().is_err(),
+        "both physical owners independently accepted the same note anchor"
+    );
+    let entry = document.building_blocks().unwrap().remove(0);
+    assert!(document.remove_building_block(&entry).is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn glossary_review_graphs_preserve_shared_unannotated_notes() {
+    let mut document = x188_shared_review_note(false);
+    document.validate_comment_ownership().unwrap();
+    let before =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let entry = document.building_blocks().unwrap().remove(0);
+    let mut metadata = entry.block.clone();
+    metadata.description = Some("metadata".into());
+    let entry = document.update_building_block(&entry, metadata).unwrap();
+    document.remove_building_block(&entry).unwrap();
+    document.validate_comment_ownership().unwrap();
+    assert_eq!(document.comments().len(), 3);
+    let after =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    assert_eq!(
+        before.get_part("/word/shared-notes.xml"),
+        after.get_part("/word/shared-notes.xml")
+    );
+    assert_eq!(
+        before.get_part("/word/comments.xml"),
+        after.get_part("/word/comments.xml")
+    );
+}
+
+fn x188_forward_note_selection(opaque: bool, kind: StoryKind) -> Document {
+    let mut source = Document::new();
+    source.add_paragraph("plain selection");
+    source.add_paragraph("safe note selection");
+    source.add_paragraph("bad note selection");
+    let part_name = if kind == StoryKind::Footnote {
+        let safe = source.add_footnote("SAFE_SELECTED_NOTE");
+        let bad = source.add_footnote("UNSELECTED_NOTE");
+        source.paragraph_mut(1).unwrap().add_footnote_ref(safe);
+        source.paragraph_mut(2).unwrap().add_footnote_ref(bad);
+        "/word/footnotes.xml"
+    } else {
+        let body = f254_story(&source, StoryKind::Body);
+        source
+            .create_endnote(&f254_item(&source, &body, 1), "SAFE_SELECTED_NOTE")
+            .unwrap();
+        let body = f254_story(&source, StoryKind::Body);
+        source
+            .create_endnote(&f254_item(&source, &body, 2), "UNSELECTED_NOTE")
+            .unwrap();
+        "/word/endnotes.xml"
+    };
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(source.to_bytes().unwrap()))
+            .unwrap();
+    let carrier = if opaque {
+        r#"<w:commentReference w:id="700"><producer:payload xmlns:producer="urn:x188:opaque" producer:keep="yes"/></w:commentReference>"#
+    } else {
+        r#"<producer:opaque xmlns:producer="urn:x188:opaque"><w:commentReference w:id="not-an-integer"/></producer:opaque>"#
+    };
+    let xml = String::from_utf8(package.get_part(part_name).unwrap().to_vec()).unwrap();
+    assert!(xml.contains("<w:t>UNSELECTED_NOTE</w:t>"));
+    package.set_part(
+        part_name,
+        xml.replace(
+            "<w:t>UNSELECTED_NOTE</w:t>",
+            &format!("<w:t>UNSELECTED_NOTE</w:t>{carrier}"),
+        )
+        .into_bytes(),
+    );
+    Document::from_bytes(&f236_package_bytes(package)).unwrap()
+}
+
+#[test]
+fn building_block_forward_omission_ignores_unselected_note_carriers() {
+    let mut failures = Vec::new();
+    for (opaque, kind) in [
+        (false, StoryKind::Footnote),
+        (true, StoryKind::Footnote),
+        (false, StoryKind::Endnote),
+        (true, StoryKind::Endnote),
+    ] {
+        let mut source = x188_forward_note_selection(opaque, kind);
+        let before = source.to_bytes().unwrap();
+        let body = f254_story(&source, StoryKind::Body);
+        for selected in [0, 1] {
+            let fragment = DocumentFragment::from_range(
+                &source,
+                &f254_item(&source, &body, selected),
+                &f254_item(&source, &body, selected + 1),
+                false,
+            )
+            .unwrap();
+            for update in [false, true] {
+                let mut destination = Document::new();
+                let entry = destination
+                    .create_building_block(f277_block("old", "autoTxt"))
+                    .unwrap();
+                let destination_before = destination.to_bytes().unwrap();
+                let result = if update {
+                    destination.update_building_block_from_fragment(
+                        &entry,
+                        f277_block("updated", "autoTxt"),
+                        &fragment,
+                        FragmentConflictPolicy::default(),
+                    )
+                } else {
+                    destination.create_building_block_from_fragment(
+                        f277_block("new", "autoTxt"),
+                        &fragment,
+                        FragmentConflictPolicy::default(),
+                    )
+                };
+                match result {
+                    Ok(_) => {
+                        let bytes = destination.to_bytes().unwrap();
+                        Document::from_bytes(&bytes)
+                            .unwrap()
+                            .validate_comment_ownership()
+                            .unwrap();
+                        let package =
+                            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+                        assert!(
+                            package.parts.values().all(
+                                |xml| !String::from_utf8_lossy(xml).contains("UNSELECTED_NOTE")
+                            )
+                        );
+                        assert_eq!(
+                            package
+                                .parts
+                                .values()
+                                .any(|xml| String::from_utf8_lossy(xml)
+                                    .contains("SAFE_SELECTED_NOTE")),
+                            selected == 1,
+                            "{kind:?} opaque={opaque} selected={selected} update={update}"
+                        );
+                    }
+                    Err(error) => {
+                        failures.push(format!(
+                            "opaque={opaque} selected={selected} update={update}: {error}"
+                        ));
+                        assert_eq!(destination.to_bytes().unwrap(), destination_before);
+                    }
+                }
+                assert_eq!(source.to_bytes().unwrap(), before);
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "unselected note blocked valid selected transfer: {failures:?}"
+    );
+}
+
+#[test]
+fn building_block_forward_selected_bad_note_refuses_atomically() {
+    for (opaque, kind) in [
+        (false, StoryKind::Footnote),
+        (true, StoryKind::Footnote),
+        (false, StoryKind::Endnote),
+        (true, StoryKind::Endnote),
+    ] {
+        let mut source = x188_forward_note_selection(opaque, kind);
+        let before = source.to_bytes().unwrap();
+        let body = f254_story(&source, StoryKind::Body);
+        let fragment = DocumentFragment::from_range(
+            &source,
+            &f254_item(&source, &body, 2),
+            &ContentLocation::end(body),
+            false,
+        )
+        .unwrap();
+        for update in [false, true] {
+            let mut destination = Document::new();
+            let entry = destination
+                .create_building_block(f277_block("old", "autoTxt"))
+                .unwrap();
+            let destination_before = destination.to_bytes().unwrap();
+            let result = if update {
+                destination.update_building_block_from_fragment(
+                    &entry,
+                    f277_block("updated", "autoTxt"),
+                    &fragment,
+                    FragmentConflictPolicy::default(),
+                )
+            } else {
+                destination.create_building_block_from_fragment(
+                    f277_block("new", "autoTxt"),
+                    &fragment,
+                    FragmentConflictPolicy::default(),
+                )
+            };
+            assert!(result.is_err(), "opaque={opaque} update={update}");
+            assert_eq!(destination.to_bytes().unwrap(), destination_before);
+            assert_eq!(source.to_bytes().unwrap(), before);
+        }
+    }
+}
+
+#[test]
+fn building_block_forward_recurses_from_footnote_textbox_to_endnote() {
+    let mut source = Document::new();
+    source.add_paragraph("selected body");
+    source.add_paragraph("unselected body");
+    let footnote = source.add_footnote("RECURSIVE_FOOTNOTE");
+    source.paragraph_mut(0).unwrap().add_footnote_ref(footnote);
+    let body = f254_story(&source, StoryKind::Body);
+    let endnote = source
+        .create_endnote(&f254_item(&source, &body, 0), "RECURSIVE_ENDNOTE")
+        .unwrap();
+    let note = source.footnote_story(footnote).unwrap().unwrap();
+    let zero = Length::pt(0.0);
+    source
+        .add_text_box_to_story(
+            &note,
+            "RECURSIVE_BOX",
+            rdocx::TextBoxOptions {
+                width: Length::pt(144.0),
+                height: Length::pt(54.0),
+                anchor: rdocx::PictureAnchor {
+                    horizontal_relative_from: rdocx::DrawingHorizontalRelativeFrom::Column,
+                    horizontal_offset: zero,
+                    horizontal_alignment: None,
+                    vertical_relative_from: rdocx::DrawingVerticalRelativeFrom::Paragraph,
+                    vertical_offset: zero,
+                    vertical_alignment: None,
+                    wrap: rdocx::DrawingWrap::TopAndBottom,
+                    distance_top: zero,
+                    distance_bottom: zero,
+                    distance_left: zero,
+                    distance_right: zero,
+                    relative_height: 1,
+                    behind_text: false,
+                },
+                rotation_degrees: 0.0,
+                text_direction: rdocx::TextBoxDirection::Horizontal,
+                fill_color: None,
+            },
+        )
+        .unwrap();
+    for kind in [StoryKind::Footnote, StoryKind::Endnote, StoryKind::TextBox] {
+        let story = f254_story(&source, kind);
+        let location = f254_item(&source, &story, 0);
+        let root = source
+            .add_story_comment(
+                rdocx::StoryRunRange {
+                    start: rdocx::StoryRunPosition {
+                        location: location.clone(),
+                        run_index: 0,
+                    },
+                    end: rdocx::StoryRunPosition {
+                        location,
+                        run_index: 1,
+                    },
+                },
+                "Ada",
+                None,
+                "selected note review",
+            )
+            .unwrap();
+        source.reply_to(root, "Ben", "reply").unwrap();
+    }
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(source.to_bytes().unwrap()))
+            .unwrap();
+    let reference = format!(r#"<w:endnoteReference w:id="{endnote}"/>"#);
+    let body_xml =
+        String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    assert!(body_xml.contains(&reference));
+    package.set_part(
+        "/word/document.xml",
+        body_xml.replace(&reference, "").into_bytes(),
+    );
+    let notes =
+        String::from_utf8(package.get_part("/word/footnotes.xml").unwrap().to_vec()).unwrap();
+    assert!(notes.contains("RECURSIVE_BOX</w:t>"), "{notes}");
+    let updated_notes = notes.replace(
+        "RECURSIVE_BOX</w:t>",
+        &format!("RECURSIVE_BOX</w:t>{reference}"),
+    );
+    assert!(updated_notes.contains(&reference));
+    package.set_part("/word/footnotes.xml", updated_notes.into_bytes());
+    let mut source = Document::from_bytes(&f236_package_bytes(package)).unwrap();
+    source.validate_comment_ownership().unwrap();
+    let before = source.to_bytes().unwrap();
+    let body = f254_story(&source, StoryKind::Body);
+    let fragment = DocumentFragment::from_range(
+        &source,
+        &f254_item(&source, &body, 0),
+        &f254_item(&source, &body, 1),
+        false,
+    )
+    .unwrap();
+    for update in [false, true] {
+        let mut destination = Document::new();
+        let old = destination
+            .create_building_block(f277_block("old", "autoTxt"))
+            .unwrap();
+        let entry = if update {
+            destination
+                .update_building_block_from_fragment(
+                    &old,
+                    f277_block("recursive", "autoTxt"),
+                    &fragment,
+                    FragmentConflictPolicy::default(),
+                )
+                .unwrap()
+        } else {
+            destination
+                .create_building_block_from_fragment(
+                    f277_block("recursive", "autoTxt"),
+                    &fragment,
+                    FragmentConflictPolicy::default(),
+                )
+                .unwrap()
+        };
+        let body = f254_story(&destination, StoryKind::Body);
+        destination
+            .insert_building_block(
+                &ContentLocation::end(body),
+                &entry,
+                FragmentConflictPolicy::default(),
+            )
+            .unwrap();
+        let bytes = destination.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        reopened.validate_comment_ownership().unwrap();
+        assert!(reopened.comments().is_empty());
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+        for text in ["RECURSIVE_FOOTNOTE", "RECURSIVE_ENDNOTE", "RECURSIVE_BOX"] {
+            assert!(
+                package
+                    .parts
+                    .values()
+                    .any(|xml| String::from_utf8_lossy(xml).contains(text)),
+                "{text}"
+            );
+        }
+        assert!(
+            package
+                .parts
+                .values()
+                .all(|xml| !String::from_utf8_lossy(xml).contains("commentReference"))
+        );
+        assert_eq!(source.to_bytes().unwrap(), before);
+    }
+}
+
+#[test]
+fn building_block_forward_omission_ignores_unselected_background_carrier() {
+    let carrier = r#"<w:commentReference w:id="700"><producer:payload xmlns:producer="urn:x188:opaque" producer:keep="yes"/></w:commentReference>"#;
+    let background = format!(
+        r#"<producer:background xmlns:producer="urn:x188:background" producer:keep="yes">{carrier}</producer:background>"#
+    );
+    let mut failures = Vec::new();
+    for selected_carrier in [false, true] {
+        let mut initial = Document::new();
+        initial.add_paragraph("SELECTED_BODY_PAYLOAD");
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(initial.to_bytes().unwrap()))
+                .unwrap();
+        let xml =
+            String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+        let xml = if selected_carrier {
+            xml.replace("</w:r>", &format!("{carrier}</w:r>"))
+        } else {
+            xml.replace("<w:body>", &format!("{background}<w:body>"))
+        };
+        package.set_part("/word/document.xml", xml.into_bytes());
+        let mut source = Document::from_bytes(&f236_package_bytes(package)).unwrap();
+        let source_before = source.to_bytes().unwrap();
+        let body = f254_story(&source, StoryKind::Body);
+        let fragment = DocumentFragment::from_range(
+            &source,
+            &f254_item(&source, &body, 0),
+            &ContentLocation::end(body),
+            false,
+        )
+        .unwrap();
+        for update in [false, true] {
+            let mut destination = Document::new();
+            let entry = destination
+                .create_building_block(f277_block("old", "autoTxt"))
+                .unwrap();
+            let before = destination.to_bytes().unwrap();
+            let result = if update {
+                destination.update_building_block_from_fragment(
+                    &entry,
+                    f277_block("updated", "autoTxt"),
+                    &fragment,
+                    FragmentConflictPolicy::default(),
+                )
+            } else {
+                destination.create_building_block_from_fragment(
+                    f277_block("new", "autoTxt"),
+                    &fragment,
+                    FragmentConflictPolicy::default(),
+                )
+            };
+            if selected_carrier {
+                assert!(
+                    result.is_err(),
+                    "selected opaque carrier must refuse update={update}"
+                );
+                assert_eq!(destination.to_bytes().unwrap(), before);
+            } else {
+                match result {
+                    Ok(_) => {
+                        let bytes = destination.to_bytes().unwrap();
+                        Document::from_bytes(&bytes)
+                            .unwrap()
+                            .validate_comment_ownership()
+                            .unwrap();
+                        let package =
+                            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+                        let glossary = String::from_utf8_lossy(
+                            package.get_part("/word/glossary/document.xml").unwrap(),
+                        );
+                        assert!(glossary.contains("SELECTED_BODY_PAYLOAD"));
+                        assert!(!glossary.contains("producer:background"));
+                        assert!(!glossary.contains("commentReference"));
+                    }
+                    Err(error) => {
+                        failures.push(format!("update={update}: {error}"));
+                        assert_eq!(destination.to_bytes().unwrap(), before);
+                    }
+                }
+                let source_package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(
+                    source.to_bytes().unwrap(),
+                ))
+                .unwrap();
+                assert!(
+                    String::from_utf8_lossy(source_package.get_part("/word/document.xml").unwrap())
+                        .contains(&background)
+                );
+            }
+            assert_eq!(source.to_bytes().unwrap(), source_before);
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "unselected background blocked valid selected transfer: {failures:?}"
+    );
 }

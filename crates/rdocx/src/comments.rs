@@ -525,7 +525,7 @@ impl Document {
         candidate.anchor_existing_comment_on_text(id, anchor, occurrence)?;
         candidate.restore_comment_reference_run(id, reference)?;
         candidate.flush_to_package()?;
-        candidate.comment_ownership()?;
+        candidate.comment_ownership_at(&candidate.doc_part_name)?;
         let reopened = candidate.prepare_and_reopen_staged()?;
         self.commit_staged_mutation(reopened);
         Ok(())
@@ -534,7 +534,7 @@ impl Document {
     fn checked_movable_comment(&self, id: i32) -> Result<StoryRangeRef> {
         let mut proof = self.clone_for_staging();
         proof.flush_to_package()?;
-        let ownership = proof.comment_ownership()?;
+        let ownership = proof.comment_ownership_at(&proof.doc_part_name)?;
         match ownership.parents.get(&id) {
             None => return Err(Error::Other(format!("unknown comment {id}"))),
             Some(Some(_)) => {
@@ -584,7 +584,7 @@ impl Document {
             let mut candidate = self.clone_for_staging();
             candidate.move_comment_story_range(selected, &range, *id)?;
             candidate.flush_to_package()?;
-            candidate.comment_ownership()?;
+            candidate.comment_ownership_at(&candidate.doc_part_name)?;
             candidate.story_ranges()?;
             let reopened = candidate.prepare_and_reopen_staged()?;
             self.commit_staged_mutation(reopened);
@@ -1642,9 +1642,9 @@ impl Document {
         }
         let mut candidate = self.clone_for_staging();
         candidate.flush_to_package()?;
-        let ownership = candidate.comment_ownership()?;
+        let ownership = candidate.comment_ownership_at(&candidate.doc_part_name)?;
         let removed = ownership.descendants(id);
-        candidate.remove_comment_ids_staged(&removed)?;
+        candidate.remove_comment_ids_staged_at(&candidate.doc_part_name.clone(), &removed)?;
         // An inverse add/remove can recover the complete retained producer source.
         // Compare every modeled value and raw child, ignoring only declarations
         // introduced by the intermediate canonical serialization.
@@ -2650,7 +2650,7 @@ impl Document {
     ) -> Result<BTreeMap<i32, (Option<StoryRunRange>, Option<String>)>> {
         let mut source = self.clone_for_staging();
         source.flush_to_package()?;
-        let ownership = source.comment_owned_graph()?;
+        let ownership = source.comment_owned_graph_at(&source.doc_part_name)?;
         if let Some(id) = selected
             && !ownership.parents.contains_key(&id)
         {
@@ -2775,11 +2775,136 @@ impl Document {
         Ok(snapshots)
     }
 
-    fn comment_relationship_part(&self, relationship_type: &str) -> Result<Option<String>> {
+    /// Classify glossary review ownership from one actual internal relationship.
+    pub(crate) fn glossary_comment_owner(&self) -> Result<Option<String>> {
+        let Some(owner) = self.glossary_part_name.as_deref() else {
+            return Ok(None);
+        };
+        let Some(_part) =
+            self.comment_relationship_part_at(owner, oxml_opc::relationship::rel_types::COMMENTS)?
+        else {
+            if self.package.get_part_rels(owner).iter().flat_map(|rels| &rels.items).any(|relationship| {
+                matches!(relationship.rel_type.as_str(), COMMENTS_EXTENDED_REL_TYPE
+                    | "http://schemas.microsoft.com/office/2016/09/relationships/commentsIds"
+                    | "http://schemas.microsoft.com/office/2018/08/relationships/commentsExtensible")
+            }) {
+                return Err(Error::Other("glossary comment companions have no owned definitions relationship".into()));
+            }
+            return Ok(None);
+        };
+        self.comment_definition_entries_at(owner)?;
+        self.comment_owned_graph_at(owner)?;
+        // Two review graphs cannot claim the same physical part.
+        for local in self
+            .package
+            .get_part_rels(owner)
+            .iter()
+            .flat_map(|rels| &rels.items)
+        {
+            if !matches!(
+                local.rel_type.as_str(),
+                oxml_opc::relationship::rel_types::COMMENTS
+                    | COMMENTS_EXTENDED_REL_TYPE
+                    | "http://schemas.microsoft.com/office/2016/09/relationships/commentsIds"
+                    | "http://schemas.microsoft.com/office/2018/08/relationships/commentsExtensible"
+            ) {
+                continue;
+            }
+            if !crate::document::relationship_is_internal(local) {
+                return Err(Error::Other(
+                    "glossary comment companion is external".into(),
+                ));
+            }
+            let target = OpcPackage::resolve_rel_target(owner, &local.target);
+            if self
+                .package
+                .get_part_rels(&self.doc_part_name)
+                .iter()
+                .flat_map(|rels| &rels.items)
+                .any(|main| {
+                    crate::document::relationship_is_internal(main)
+                        && crate::document::part_name_identity(&OpcPackage::resolve_rel_target(
+                            &self.doc_part_name,
+                            &main.target,
+                        )) == crate::document::part_name_identity(&target)
+                })
+            {
+                return Err(Error::Other(
+                    "glossary and main comment owners share a dependency target".into(),
+                ));
+            }
+        }
+        // Shared unannotated notes are harmless. A marked physical source,
+        // however, cannot belong to both independent review graphs.
+        let main_sources = self.word_story_part_names();
+        for local in self
+            .package
+            .get_part_rels(owner)
+            .iter()
+            .flat_map(|rels| &rels.items)
+        {
+            if !crate::document::relationship_is_internal(local)
+                || !matches!(
+                    local.rel_type.as_str(),
+                    oxml_opc::relationship::rel_types::FOOTNOTES
+                        | oxml_opc::relationship::rel_types::ENDNOTES
+                )
+            {
+                continue;
+            }
+            let target = OpcPackage::resolve_rel_target(owner, &local.target);
+            let identity = crate::document::part_name_identity(&target);
+            if main_sources.iter().any(|part| {
+                crate::document::part_name_identity(part) == identity
+                    && crate::document::part_name_identity(part)
+                        != crate::document::part_name_identity(owner)
+            }) && let Some(xml) = self.package.get_part(&target)
+                && !comment_source_markers(xml)?.is_empty()
+            {
+                return Err(Error::Other(
+                    "glossary and main review owners share a marked physical source".into(),
+                ));
+            }
+        }
+        Ok(Some(owner.to_owned()))
+    }
+
+    /// Omit only qualified marker spans, retaining mixed runs and opaque siblings.
+    pub(crate) fn omit_comment_markers(xml: &[u8]) -> Result<Vec<u8>> {
+        let markers = comment_source_markers(xml)?;
+        let mut result = xml.to_vec();
+        for marker in markers.into_iter().rev() {
+            let mut reader = quick_xml::Reader::from_reader(&xml[marker.span.clone()]);
+            if matches!(
+                reader
+                    .read_event()
+                    .map_err(|error| Error::Other(error.to_string()))?,
+                Event::Start(_)
+            ) && !matches!(
+                reader
+                    .read_event()
+                    .map_err(|error| Error::Other(error.to_string()))?,
+                Event::End(_)
+            ) {
+                return Err(Error::Other(format!(
+                    "cannot omit comment {} with opaque marker content",
+                    marker.id
+                )));
+            }
+            result.drain(marker.span);
+        }
+        Ok(result)
+    }
+
+    fn comment_relationship_part_at(
+        &self,
+        owner: &str,
+        relationship_type: &str,
+    ) -> Result<Option<String>> {
         let mut target = None;
         for relationship in self
             .package
-            .get_part_rels(&self.doc_part_name)
+            .get_part_rels(owner)
             .iter()
             .flat_map(|rels| &rels.items)
             .filter(|relationship| relationship.rel_type == relationship_type)
@@ -2789,7 +2914,7 @@ impl Document {
                     "comment part ownership is external or ambiguous".into(),
                 ));
             }
-            let part = OpcPackage::resolve_rel_target(&self.doc_part_name, &relationship.target);
+            let part = OpcPackage::resolve_rel_target(owner, &relationship.target);
             if self.package.get_part(&part).is_none() {
                 return Err(Error::Other(format!(
                     "comment relationship targets missing part {part}"
@@ -2800,12 +2925,46 @@ impl Document {
         Ok(target)
     }
 
-    fn comment_source_inventory(&self) -> Result<BTreeMap<String, Vec<CommentSourceMarker>>> {
+    fn comment_source_inventory_at(
+        &self,
+        owner: &str,
+    ) -> Result<BTreeMap<String, Vec<CommentSourceMarker>>> {
         if self.package.get_part(&self.doc_part_name).is_none() {
             return Err(Error::Other("main comment source part is missing".into()));
         }
         let mut markers = BTreeMap::new();
-        for part in self.word_story_part_names() {
+        let local = if owner == self.doc_part_name {
+            self.glossary_comment_owner()?
+        } else {
+            None
+        };
+        let parts = if owner == self.doc_part_name {
+            self.word_story_part_names()
+                .into_iter()
+                .filter(|part| local.as_deref() != Some(part.as_str()))
+                .collect::<Vec<_>>()
+        } else {
+            let mut parts = vec![owner.to_owned()];
+            for relationship in self
+                .package
+                .get_part_rels(owner)
+                .iter()
+                .flat_map(|rels| &rels.items)
+            {
+                if crate::document::relationship_is_internal(relationship)
+                    && matches!(
+                        relationship.rel_type.as_str(),
+                        oxml_opc::relationship::rel_types::COMMENTS
+                            | oxml_opc::relationship::rel_types::FOOTNOTES
+                            | oxml_opc::relationship::rel_types::ENDNOTES
+                    )
+                {
+                    parts.push(OpcPackage::resolve_rel_target(owner, &relationship.target));
+                }
+            }
+            parts
+        };
+        for part in parts {
             // Dangling story relationships contain no source to inventory.
             // Package validation diagnoses them independently of comment ownership.
             if let Some(xml) = self.package.get_part(&part) {
@@ -2815,11 +2974,14 @@ impl Document {
         Ok(markers)
     }
 
-    fn comment_definition_entries(&self) -> Result<Option<(String, Vec<CommentPartEntry>)>> {
+    fn comment_definition_entries_at(
+        &self,
+        owner: &str,
+    ) -> Result<Option<(String, Vec<CommentPartEntry>)>> {
         let Some(part) =
-            self.comment_relationship_part(oxml_opc::relationship::rel_types::COMMENTS)?
+            self.comment_relationship_part_at(owner, oxml_opc::relationship::rel_types::COMMENTS)?
         else {
-            if self.comments_part_name.is_some() {
+            if owner == self.doc_part_name && self.comments_part_name.is_some() {
                 return Err(Error::Other(
                     "owned comment definition relationship is missing".into(),
                 ));
@@ -2848,13 +3010,13 @@ impl Document {
         Ok(Some((part, entries)))
     }
 
-    fn comment_owned_graph(&self) -> Result<CommentOwnership> {
+    fn comment_owned_graph_at(&self, owner: &str) -> Result<CommentOwnership> {
         let mut ownership = CommentOwnership {
-            markers: self.comment_source_inventory()?,
+            markers: self.comment_source_inventory_at(owner)?,
             parents: BTreeMap::new(),
             entries: BTreeMap::new(),
         };
-        let source_definitions = self.comment_definition_entries()?;
+        let source_definitions = self.comment_definition_entries_at(owner)?;
         let comments = if let Some((part, _)) = &source_definitions {
             CT_Comments::from_xml(self.package.get_part(part).expect("checked part"))?
         } else {
@@ -2944,7 +3106,7 @@ impl Document {
                 "durableId",
             ),
         ] {
-            let Some(part) = self.comment_relationship_part(relationship)? else {
+            let Some(part) = self.comment_relationship_part_at(owner, relationship)? else {
                 continue;
             };
             let xml = self.package.get_part(&part).expect("checked part");
@@ -3019,12 +3181,12 @@ impl Document {
         Ok(ownership)
     }
 
-    fn comment_ownership(&self) -> Result<CommentOwnership> {
-        let ownership = self.comment_owned_graph()?;
+    fn comment_ownership_at(&self, owner: &str) -> Result<CommentOwnership> {
+        let ownership = self.comment_owned_graph_at(owner)?;
         let counts = CommentOwnership::marker_counts(&ownership.markers);
         if !counts.is_empty()
             && self
-                .comment_relationship_part(oxml_opc::relationship::rel_types::COMMENTS)?
+                .comment_relationship_part_at(owner, oxml_opc::relationship::rel_types::COMMENTS)?
                 .is_none()
         {
             return Err(Error::Other(
@@ -3046,19 +3208,23 @@ impl Document {
     pub fn validate_comment_ownership(&self) -> Result<()> {
         let mut candidate = self.clone_for_staging();
         candidate.flush_to_package()?;
-        let ownership = candidate.comment_ownership()?;
-        let counts = CommentOwnership::marker_counts(&ownership.markers);
-        for (&id, parent) in &ownership.parents {
-            let count = counts.get(&id).copied().unwrap_or_default();
-            if count.iter().any(|count| *count > 1) || count[0] != count[1] {
-                return Err(Error::Other(format!(
-                    "comment {id} has duplicate or unmatched source markers"
-                )));
-            }
-            if parent.is_none() && count == [0; 3] {
-                return Err(Error::Other(format!(
-                    "comment {id} is an orphan root with no source range or reference"
-                )));
+        let mut owners = vec![candidate.doc_part_name.clone()];
+        owners.extend(candidate.glossary_comment_owner()?);
+        for owner in owners {
+            let ownership = candidate.comment_ownership_at(&owner)?;
+            let counts = CommentOwnership::marker_counts(&ownership.markers);
+            for (&id, parent) in &ownership.parents {
+                let count = counts.get(&id).copied().unwrap_or_default();
+                if count.iter().any(|count| *count > 1) || count[0] != count[1] {
+                    return Err(Error::Other(format!(
+                        "comment {id} has duplicate or unmatched source markers"
+                    )));
+                }
+                if parent.is_none() && count == [0; 3] {
+                    return Err(Error::Other(format!(
+                        "comment {id} is an orphan root with no source range or reference"
+                    )));
+                }
             }
         }
         Ok(())
@@ -3066,11 +3232,28 @@ impl Document {
 
     /// Compare one unpublished destructive edit with its frozen source inventory.
     pub(crate) fn reconcile_comment_removal(&mut self, before: &Document) -> Result<()> {
+        let mut owners = vec![before.doc_part_name.clone()];
+        let local = before.glossary_comment_owner()?;
+        if local != self.glossary_comment_owner()? {
+            return Err(Error::Other(
+                "glossary comment relationship owner changed during edit".into(),
+            ));
+        }
+        owners.extend(local);
+        for owner in owners {
+            self.reconcile_comment_removal_at(before, &owner)?;
+        }
+        Ok(())
+    }
+
+    fn reconcile_comment_removal_at(&mut self, before: &Document, owner: &str) -> Result<()> {
         let mut source = before.clone_for_staging();
         source.flush_to_package()?;
         self.flush_to_package()?;
-        let before_counts = CommentOwnership::marker_counts(&source.comment_source_inventory()?);
-        let after_counts = CommentOwnership::marker_counts(&self.comment_source_inventory()?);
+        let before_counts =
+            CommentOwnership::marker_counts(&source.comment_source_inventory_at(owner)?);
+        let after_counts =
+            CommentOwnership::marker_counts(&self.comment_source_inventory_at(owner)?);
         // Only source ownership decreases need deletion proof. Unchanged
         // or cloned anchors must not validate or repair unrelated producer
         // definitions. Explicit deletion and CLI validation remain strict.
@@ -3086,7 +3269,7 @@ impl Document {
         // A demonstrably undefined source marker cannot orphan an absent
         // definition. Retain its established editing/comparison lifecycle.
         // Raw qualified entries prove absence even if typed projection omits one.
-        let definitions = source.comment_definition_entries()?;
+        let definitions = source.comment_definition_entries_at(owner)?;
         let defined_decrease = definitions.as_ref().is_some_and(|(_, entries)| {
             entries.iter().any(|entry| {
                 let id = entry.attributes["id"]
@@ -3103,8 +3286,8 @@ impl Document {
         if !defined_decrease {
             return Ok(());
         }
-        let original = source.comment_ownership()?;
-        let remaining = self.comment_ownership()?;
+        let original = source.comment_ownership_at(owner)?;
+        let remaining = self.comment_ownership_at(owner)?;
         let before_counts = CommentOwnership::marker_counts(&original.markers);
         let after_counts = CommentOwnership::marker_counts(&remaining.markers);
         let mut removed = HashSet::new();
@@ -3132,7 +3315,7 @@ impl Document {
             }
         }
         if !removed.is_empty() {
-            self.remove_comment_ids_staged(&removed)?;
+            self.remove_comment_ids_staged_at(owner, &removed)?;
         }
         Ok(())
     }
@@ -3147,8 +3330,8 @@ impl Document {
         Ok(())
     }
 
-    fn remove_comment_ids_staged(&mut self, ids: &HashSet<i32>) -> Result<()> {
-        let ownership = self.comment_ownership()?;
+    fn remove_comment_ids_staged_at(&mut self, owner: &str, ids: &HashSet<i32>) -> Result<()> {
+        let ownership = self.comment_ownership_at(owner)?;
         for (part, entries) in &ownership.entries {
             for (_, span) in entries.iter().filter(|(id, _)| ids.contains(id)) {
                 if let Some(marker) =
@@ -3219,10 +3402,12 @@ impl Document {
             }
             crate::document::set_story_source_xml(self, &part, xml)?;
         }
-        self.identifiers
-            .retire_authored_comment_ids(ids.iter().copied());
-        self.remove_owned_empty_comment_parts();
-        self.comments_dirty = false;
+        if owner == self.doc_part_name {
+            self.identifiers
+                .retire_authored_comment_ids(ids.iter().copied());
+            self.remove_owned_empty_comment_parts();
+            self.comments_dirty = false;
+        }
         self.invalidate_layout();
         Ok(())
     }
@@ -4145,5 +4330,25 @@ mod tests {
             .expect("plist value is utf8")
             .trim()
             .to_owned()
+    }
+    #[test]
+    fn glossary_omission_preserves_mixed_carriers_and_refuses_opaque_marker_payload() {
+        let marker = r#"<q:commentReference q:id="4"/>"#;
+        let xml = format!(
+            r#"<q:p xmlns:q="{}" xmlns:x="urn:producer"><q:r x:keep="yes"><q:rPr><q:b/></q:rPr><?keep same?>{marker}<!--stay--><x:commentReference x:id="4"/></q:r></q:p>"#,
+            rdocx_oxml::namespace::W_NS
+        );
+        assert_eq!(
+            Document::omit_comment_markers(xml.as_bytes()).unwrap(),
+            xml.replace(marker, "").as_bytes()
+        );
+        for invalid in [
+            r#"<q:commentReference/>"#,
+            r#"<q:commentReference q:id="bad"/>"#,
+            r#"<q:commentReference q:id="4"><x:opaque/></q:commentReference>"#,
+        ] {
+            let invalid = xml.replace(marker, invalid);
+            assert!(Document::omit_comment_markers(invalid.as_bytes()).is_err());
+        }
     }
 }

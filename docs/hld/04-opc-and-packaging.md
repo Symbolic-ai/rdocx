@@ -458,6 +458,37 @@ replacement, removal and placeholder binding enter canonical staged
 preparation and provenance-reconciling reopen before publication. Fragment
 content resolves its dependency closure from the physical glossary owner.
 Typed creation rejects dependency references requiring a source package.
+Fragment creation, fragment body update, reverse capture and insertion omit
+qualified comment markers before review dependency capture. Omission includes
+selected note and textbox content and retains mixed run properties, wrappers,
+foreign lookalikes, comments and PIs. New direct replacement bodies follow the
+same marker omission policy. Dependency-free typed creation retains its
+existing refusal of comment-bearing bodies. Metadata-only updates keep the
+existing body and review state.
+
+A glossary comments relationship identifies an independent physical review
+owner only when exactly one valid internal target has qualified comment
+content. The same strict thread and companion graph handles main and local
+cleanup. Shared physical review dependencies, ambiguous, external, missing or
+malformed local mappings refuse. A physical note source with qualified comment
+markers cannot belong to both review owners. Shared unannotated notes remain
+valid. Local companion relationships without local
+comments definitions also refuse. With no local review edges, legacy
+main-owned glossary markers retain strict main ownership proof. Local producer
+comment parts and relationships remain retained after complete owned cleanup.
+Forward transfer bounds marker omission and initial note selection to the
+namespace-complete prepared body content being transferred. Retained root
+producer payload stays outside that interval and glossary dependency capture.
+Generic transfer keeps its existing dependency admission. Final section properties join
+omission only when the fragment includes them, retaining their physical
+section owner and existing generic identity admission. Forward transfer derives its recursive note closure from the prepared selected
+main body, omitting only referenced note owners and their selected textbox
+content. Unselected owners in the same physical note part retain their bytes
+and do not affect omission refusal. Reverse capture uses the same bounded
+main-owned note traversal before constructing a main-owned fragment. A glossary-local note
+relationship refuses projection through main numeric note ownership. It never
+selects an unrelated equal-id main note.
+
 
 Both facades resolve core properties through the package-level
 `CORE_PROPERTIES` relationship and retain its normalized target. Immutable
