@@ -8557,6 +8557,7 @@ pub(crate) fn layout_paragraph_with_grid(
         None,
         None,
         doc_grid,
+        false,
     )
 }
 
@@ -8585,6 +8586,7 @@ pub(crate) fn layout_paragraph_with_source(
         None,
         None,
         None,
+        false,
     )
 }
 
@@ -8616,6 +8618,7 @@ pub(crate) fn layout_paragraph_with_source_and_direction(
         None,
         Some(&mut direction),
         doc_grid,
+        false,
     )?;
     Ok((block, direction))
 }
@@ -8650,6 +8653,7 @@ pub(crate) fn layout_paragraph_with_source_in_table(
         table_run_properties,
         Some(&mut direction),
         doc_grid,
+        true,
     )?;
     Ok((block, direction))
 }
@@ -8669,6 +8673,7 @@ fn layout_paragraph_with_source_and_table(
     table_run_properties: Option<&rdocx_oxml::properties::CT_RPr>,
     reflow_direction_out: Option<&mut TextDirection>,
     doc_grid: Option<&CT_DocGrid>,
+    in_table_cell: bool,
 ) -> Result<ParagraphBlock> {
     // Resolve paragraph properties
     let para_style_id = para.properties.as_ref().and_then(|p| p.style_id.as_deref());
@@ -9224,8 +9229,11 @@ fn layout_paragraph_with_source_and_table(
                 RunContent::Tab => {
                     inline_items.push(InlineItem::Tab);
                 }
+                // Word drops a page or column break inside a table cell, so
+                // the text on either side of it joins on one line.
                 RunContent::Break(bt) => match bt {
                     BreakType::Line => inline_items.push(InlineItem::LineBreak),
+                    BreakType::Page | BreakType::Column if in_table_cell => {}
                     BreakType::Page => inline_items.push(InlineItem::PageBreak),
                     BreakType::Column => inline_items.push(InlineItem::ColumnBreak),
                 },
@@ -9564,7 +9572,14 @@ fn layout_paragraph_with_source_and_table(
                                 }));
                             }
                             if let Some(control) = control {
-                                inline_items.push(control);
+                                let dropped = in_table_cell
+                                    && matches!(
+                                        control,
+                                        InlineItem::PageBreak | InlineItem::ColumnBreak
+                                    );
+                                if !dropped {
+                                    inline_items.push(control);
+                                }
                                 start = index + character.len_utf8();
                             }
                         }

@@ -1523,6 +1523,12 @@ drawing element, and fields contribute one cached display. Schema-required
 physical run splitting does not change that logical order. Deterministic font
 mode is the acceptance path for the resulting PDF.
 
+Inside ordinary or nested table cells, page and column run breaks emit no
+inline item. Text on either side joins without an added line or space, and the
+row retains its no-break height. Line breaks remain line breaks. Form feed and
+vertical tab in a field display follow the same cell policy. Body page and
+column transitions remain intact. Layout leaves authored break XML unchanged.
+
 Line breaking records the exact explicit break that ended each `LayoutLine` as
 `ForcedBreakKind::Line`, `Page`, or `Column`. Word pagination splits a paragraph
 immediately after a page-marked line when continuation content exists, before

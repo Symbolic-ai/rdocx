@@ -56116,3 +56116,286 @@ fn issue_272_cell_borders_match_all_seven_word_topologies() {
     assert_eq!(heights[1] - heights[0], 1.5, "three half-point bands");
     assert_eq!(heights[1] - heights[5], 0.5, "top band removed");
 }
+
+#[test]
+fn page_and_column_breaks_inside_a_table_cell_are_dropped() {
+    // Word 16.111 drops a page or column break inside a table cell, nested
+    // tables included: the text on either side of it joins on one line.
+    let text_lines = |break_kind: Option<BreakKind>| {
+        let mut document = Document::new();
+        {
+            let mut table = document.add_table(1, 2);
+            {
+                let mut cell = table.cell(0, 0).expect("left cell");
+                let mut paragraph = cell.paragraph_mut(0).expect("left paragraph");
+                let mut run = paragraph.add_run("AAA");
+                if let Some(kind) = break_kind {
+                    run.add_break(kind);
+                }
+                run.add_text("BBB");
+            }
+            table.cell(0, 1).expect("right cell").set_text("Right");
+        }
+        document.add_paragraph("After");
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        let result = reopened.layout_deterministic().unwrap();
+        let pages = &result.layout.pages;
+        assert_eq!(
+            pages.len(),
+            1,
+            "{break_kind:?} inside a cell broke the page"
+        );
+        let mut lines = Vec::new();
+        oxml_layout::walk(&pages[0].elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Text(run) = element {
+                lines.push((run.text.clone(), run.origin.y));
+            }
+        });
+        lines
+    };
+
+    let plain = text_lines(None);
+    let baseline = |lines: &[(String, f64)], text: &str| {
+        lines
+            .iter()
+            .find(|(run, _)| run == text)
+            .unwrap_or_else(|| panic!("{text} missing from {lines:?}"))
+            .1
+    };
+    for kind in [BreakKind::Page, BreakKind::Column] {
+        let broken = text_lines(Some(kind));
+        let row = baseline(&broken, "Right");
+        for (text, y) in &broken {
+            if text != "After" {
+                assert_eq!(*y, row, "{kind:?}: {text} left the first line: {broken:?}");
+            }
+        }
+        assert_eq!(
+            baseline(&broken, "After"),
+            baseline(&plain, "After"),
+            "{kind:?} made the row taller"
+        );
+    }
+}
+
+#[test]
+fn table_cell_break_matrix_matches_authenticated_word_topology_and_preserves_xml() {
+    // Word16.113.2 build16.113.26092012, schema-ordered source3ed26a7c...
+    // Native PDF2848c32e..., independent45-binding audit188680c6... .
+    // Pages8..23: ordinary/nested x inline/leading x absent/page/column/line.
+    // Page/column have zero baseline and After deltas against their own absent
+    // control. Line moves native BBB13.92pt and After13.68pt. We use bundled
+    // Caladea12 and compare topology/relative own-control geometry, not Arial metrics.
+    const ORACLE: &str = "Microsoft Word for Mac16.113.2 build16.113.26092012";
+    const SOURCE_SHA: &str = "3ed26a7c88179f9e2673edcccb5a23cbbd71e54b22d892ee0ddb7ed8eb815904";
+    const EXPORT_SHA: &str = "2848c32edea9aae1a06b2b95def1ea0fc17e45c91707e07f2bb9e541d53ba3c9";
+    fn paragraph(content: &str) -> String {
+        format!(r#"<w:p><w:pPr><w:spacing w:after="0" w:before="0"/></w:pPr>{content}</w:p>"#)
+    }
+    fn run(content: &str) -> String {
+        format!(
+            r#"<w:r><w:rPr><w:rFonts w:ascii="Caladea" w:hAnsi="Caladea"/><w:sz w:val="24"/></w:rPr>{content}</w:r>"#
+        )
+    }
+    fn table(left: &str) -> String {
+        format!(
+            r#"<w:tbl><w:tblPr><w:tblW w:w="8640" w:type="dxa"/><w:tblBorders><w:top w:val="single" w:sz="4" w:color="112233"/><w:left w:val="single" w:sz="4" w:color="112233"/><w:bottom w:val="single" w:sz="4" w:color="112233"/><w:right w:val="single" w:sz="4" w:color="112233"/><w:insideH w:val="single" w:sz="4" w:color="112233"/><w:insideV w:val="single" w:sz="4" w:color="112233"/></w:tblBorders><w:tblLayout w:type="fixed"/><w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/><w:left w:w="0" w:type="dxa"/><w:right w:w="0" w:type="dxa"/></w:tblCellMar></w:tblPr><w:tblGrid><w:gridCol w:w="4320"/><w:gridCol w:w="4320"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcW w:w="4320" w:type="dxa"/></w:tcPr>{left}</w:tc><w:tc><w:tcPr><w:tcW w:w="4320" w:type="dxa"/></w:tcPr>{}</w:tc></w:tr></w:tbl>"#,
+            paragraph(&run("<w:t>Right</w:t>"))
+        )
+    }
+    let render = |nested: bool, leading: bool, kind: &str, field: bool| {
+        let control = match kind {
+            "absent" => "",
+            "page" => r#"<w:br w:type="page"/>"#,
+            "column" => r#"<w:br w:type="column"/>"#,
+            "line" => r#"<w:br w:type="textWrapping"/>"#,
+            _ => unreachable!(),
+        };
+        let content = format!(
+            "{}{control}<w:t>BBB</w:t>",
+            if leading { "" } else { "<w:t>AAA</w:t>" }
+        );
+        let mut left = paragraph(&if field {
+            // Valid OOXML typed cache controls project into FF/VT scalar display
+            // segments. This exercises the field-result branch without invalid XML.
+            format!(
+                r#"<w:fldSimple w:instr=" UNKNOWN ">{}</w:fldSimple>"#,
+                run(&content)
+            )
+        } else {
+            run(&content)
+        });
+        if nested {
+            left = format!("{}{}", table(&left), paragraph(&run("<w:t/>")));
+        }
+        let xml = format!(
+            r#"<w:document xmlns:w="{W_NS}" xmlns:x="urn:retained"><w:body>{}{}{}<x:retained x:value="unchanged"/><w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>"#,
+            paragraph(&run("<w:t>Above</w:t>")),
+            table(&left),
+            paragraph(&run("<w:t>After</w:t>"))
+        );
+        let mut document = document_with_content_controls(&xml);
+        let source = document.to_bytes().unwrap();
+        let source_xml = document_xml(&mut document);
+        assert!(source_xml.contains("x:retained"));
+        if !control.is_empty() {
+            assert!(source_xml.contains(control));
+        }
+        if field && kind != "absent" {
+            let fields = document.evaluate_fields(&Default::default()).unwrap();
+            assert_eq!(fields.len(), 1);
+            let scalar_control = match kind {
+                "page" => '\u{000c}',
+                "column" => '\u{000b}',
+                "line" => '\n',
+                _ => unreachable!(),
+            };
+            assert!(
+                fields[0].cached_result.contains(scalar_control),
+                "{fields:?}"
+            );
+        }
+        let layout = document.layout_deterministic().unwrap();
+        assert_eq!(
+            layout.layout.pages.len(),
+            1,
+            "{ORACLE}, source {SOURCE_SHA}, export {EXPORT_SHA}: {nested}/{leading}/{kind}/{field}"
+        );
+        let height = layout.body_layout_fragments(1).unwrap()[0].height;
+        let mut text = Vec::new();
+        oxml_layout::walk(&layout.layout.pages[0].elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Text(run) = element {
+                text.push((run.text.clone(), run.origin.x, run.origin.y));
+            }
+        });
+        assert_eq!(document.to_bytes().unwrap(), source);
+        let mut reopened = Document::from_bytes(&source).unwrap();
+        assert_eq!(document_xml(&mut reopened), source_xml);
+        let second = reopened.layout_deterministic().unwrap();
+        assert_eq!(second.body_layout_fragments(1).unwrap()[0].height, height);
+        let mut painted = Vec::new();
+        oxml_layout::walk(&second.layout.pages[0].elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Text(run) = element {
+                painted.push((run.text.clone(), run.origin.x, run.origin.y));
+            }
+        });
+        assert_eq!(painted, text);
+        (text, height)
+    };
+    let baseline = |text: &[(String, f64, f64)], needle: &str| {
+        text.iter().find(|(s, _, _)| s.contains(needle)).unwrap().2
+    };
+    for nested in [false, true] {
+        for leading in [false, true] {
+            let (plain, height) = render(nested, leading, "absent", false);
+            let target = baseline(&plain, "BBB");
+            let after = baseline(&plain, "After");
+            for field in [false, true] {
+                for kind in ["absent", "page", "column", "line"] {
+                    let (text, row_height) = render(nested, leading, kind, field);
+                    let left = text
+                        .iter()
+                        .filter(|(s, _, _)| !matches!(s.as_str(), "Above" | "Right" | "After"))
+                        .map(|(s, _, _)| s.as_str())
+                        .collect::<String>();
+                    assert_eq!(
+                        left,
+                        if leading { "BBB" } else { "AAABBB" },
+                        "{nested}/{leading}/{kind}/{field}: {text:?}"
+                    );
+                    if kind == "line" {
+                        assert!(baseline(&text, "BBB") > target, "{text:?}");
+                        assert!(baseline(&text, "After") > after, "{text:?}");
+                        assert!(row_height > height);
+                        let (line, line_height) = render(nested, leading, "line", false);
+                        assert_eq!(baseline(&text, "BBB"), baseline(&line, "BBB"));
+                        assert_eq!(row_height, line_height);
+                    } else {
+                        // Compare a nested target with its own nested no-break control,
+                        // never the outer/right-cell baseline (native100.98 vs100.5).
+                        assert_eq!(
+                            baseline(&text, "BBB"),
+                            target,
+                            "{nested}/{leading}/{kind}/{field}: {text:?}"
+                        );
+                        assert_eq!(baseline(&text, "After"), after);
+                        assert_eq!(row_height, height);
+                        if leading {
+                            assert_eq!(
+                                text.iter().find(|(s, _, _)| s.contains("BBB")).unwrap().1,
+                                plain.iter().find(|(s, _, _)| s.contains("BBB")).unwrap().1,
+                                "a dropped leading break must not add horizontal space"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn body_breaks_keep_pagination_and_line_transitions_outside_table_cells() {
+    // Authenticated native body control: BodyAAA page24, BodyBBB page25.
+    // Isolating that same body transition yields two pages. Column/line controls
+    // and typed field-cache variants additionally preserve existing body behavior.
+    for field in [false, true] {
+        for kind in ["page", "column", "textWrapping"] {
+            let content = format!(
+                r#"<w:r><w:t>BodyAAA</w:t><w:br w:type="{kind}"/><w:t>BodyBBB</w:t></w:r>"#
+            );
+            let content = if field {
+                format!(r#"<w:fldSimple w:instr=" UNKNOWN ">{content}</w:fldSimple>"#)
+            } else {
+                content
+            };
+            let xml = format!(
+                r#"<w:document xmlns:w="{W_NS}"><w:body><w:p>{content}</w:p></w:body></w:document>"#
+            );
+            let mut document = document_with_content_controls(&xml);
+            let before = document.to_bytes().unwrap();
+            let layout = document.layout_deterministic().unwrap();
+            assert_eq!(
+                layout.layout.pages.len(),
+                if kind == "page" { 2 } else { 1 },
+                "{kind}/{field}"
+            );
+            let mut owners = Vec::new();
+            for (page, frame) in layout.layout.pages.iter().enumerate() {
+                oxml_layout::walk(&frame.elements, &mut |element, _| {
+                    if let oxml_layout::PositionedElement::Text(run) = element {
+                        owners.push((run.text.clone(), page, run.origin.y));
+                    }
+                });
+            }
+            let first = owners
+                .iter()
+                .find(|(text, _, _)| text == "BodyAAA")
+                .unwrap();
+            let second = owners
+                .iter()
+                .find(|(text, _, _)| text == "BodyBBB")
+                .unwrap();
+            if kind == "page" {
+                assert_eq!((first.1, second.1), (0, 1));
+            } else {
+                assert!(second.2 > first.2, "{owners:?}");
+            }
+            assert_eq!(document.to_bytes().unwrap(), before);
+            let reopened = Document::from_bytes(&before).unwrap();
+            let pages = reopened
+                .layout_deterministic()
+                .unwrap()
+                .layout
+                .pages
+                .iter()
+                .map(|page| f252_page_text(page))
+                .collect::<Vec<_>>();
+            if kind == "page" {
+                assert_eq!(pages, ["BodyAAA", "BodyBBB"]);
+            } else {
+                assert_eq!(pages, ["BodyAAABodyBBB"]);
+            }
+        }
+    }
+}
