@@ -35,6 +35,19 @@ Source reasoning is not runtime proof. The user explicitly approved this
 story's design, review, progress and handoff files. No contribution beyond
 PR287's already assessed ownership work is assumed accepted.
 
+Subsequent intake includes [PR290](https://github.com/tensorbee/rdocx/pull/290)
+by Hadrien Mary (`hadim`), observed immutable head
+`e57f18b963c901f2e81af21b707bb07fbde2d8fc`, stacked on updated PR287 head
+`d823ba2ae205b6e9b9a71a75c4519031664d19d6`. The complete incremental
+contribution and metadata were read. Its three new commits begin at
+`5b0c37ac69fb5faa39427cc0b95b444f4649db2e`. The retained incremental patch
+has SHA256 `69ced5022f302ab58d8ca2de7df4af01b2de67c99a7addfa40460d58e7372e7d`.
+Reuse its destructive caller census, source-built test scenarios and specific
+contributor provenance. Its successful header installation after malformed
+companion cleanup fails conflicts with this approved atomic refusal contract.
+Do not adopt that fallback or its separate absence-of-markers inventory.
+Upstream test and archive measurements are not current acceptance evidence.
+
 F-X184 is completed. Run this story in exclusive wave15 after F-X187 because
 document.rs, Python bindings and existing regression entrypoints overlap.
 Keep full-catalogue F-282 paused at its authenticated checkpoint through this
@@ -77,6 +90,15 @@ other entries and their dependencies intact. Comment-bearing fragment
 detachment retains F-X184's refusal policy. Do not adopt PR287's incompatible
 automatic re-anchoring or carried-thread semantics.
 
+The destructive glossary census also includes `replace_building_block` and
+`update_building_block_from_fragment`. Reconcile old-body ownership after the
+complete staged replacement, including dependency import, and before final
+publication. `update_building_block` delegates to replacement while requiring
+an unchanged body, so its metadata-only control must retain the original
+thread and companions. Prove typed and retained raw glossary coherence so a
+later flush cannot restore removed markers. These are existing entrances to
+the same complete Issue288 contract, with no new public API or file.
+
 Shared header/footer ownership is resolved by normalized physical target,
 including two relationship ids reaching one part and opaque references.
 Removing one section reference preserves a still-used thread and its companion
@@ -114,6 +136,13 @@ unchanged. Record reporter provenance and full acceptance for sprint close.
 | integration | `whole_note_removal_reconciles_comment_companions` | Actual remove_footnote and remove_endnote operations, aliased relocated note parts, root/reply/companion cleanup and unrelated owner preservation |
 | Python | `whole_story_comment_refusals_preserve_bytes_and_revision` | Existing setters use fallible owned route, success bumps once, malformed/partial/preparation/reopen refusal keeps bytes and handles unchanged |
 | CLI | `whole_story_outputs_validate_without_comment_orphans` | Reopened outputs pass strict ownership validation, malformed controls fail with original graph diagnostics |
+
+The existing glossary controls also cover direct replacement, replacement
+from a dependency-backed fragment, and metadata-only update. Demonstrate
+actual before failures for uncovered destructive replacements, complete
+root/reply/companion cleanup, unrelated entry retention and atomic malformed,
+partial-cut and prepare/reopen refusal. Retain PR290's malformed companion
+fixture as a refusal control with original content and revision unchanged.
 
 Extend only existing unit modules and integration entrypoints. No new test
 binary, production file, module, crate or dependency. Prove actual compiled
