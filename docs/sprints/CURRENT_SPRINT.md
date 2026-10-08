@@ -37,7 +37,7 @@ the full pinned Word bibliography source, style and locale catalogue.
 | F-X184 | Safe comment ownership during content removal | L | done | - |
 | F-X185 | Expose comment anchor text and story location | M | done | - |
 | F-X186 | Move comment anchors without losing threads | M | done | - |
-| F-X187 | Scoped paragraph and cell text replacement | M | pending | - |
+| F-X187 | Scoped paragraph and cell text replacement | M | in-progress | codex |
 | F-X188 | Preserve comment ownership when replacing or removing whole stories | L | pending | - |
 | F-X189 | Prepare Word 0.16.0 and PowerPoint 0.14.0 families | L | pending | - |
 
