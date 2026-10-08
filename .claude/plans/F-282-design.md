@@ -42,6 +42,22 @@ The user explicitly selected the full Word catalogue and approved bibliography.r
 
 The intentionally misspelled installed filename ISO690Nmerical.XSL is retained in style identity. These are pinned Word style implementations, not a claim that Chicago or Turabian matches the latest externally published edition. No APA Seventh Edition resource was established. Never copy proprietary XSL formatting logic, execute it as the production formatter, or redistribute those files.
 
+Standard Sources root metadata has no locale slot. BibliographyStyleInfo.locale
+is None for standard style metadata, while unrecognized producer attributes
+remain raw and unchanged. set_bibliography_options atomically sets the standard
+document style and applies locale, locale_filter and tags to existing supported
+BIBLIOGRAPHY instructions. None and empty tags remove the corresponding owned
+formatting, filter and selection switches. Explicit zero remains field-owned
+and distinct. Preserve other instruction switches and producer XML. This setter
+does not rewrite CITATION locales or evaluate stored caches. A malformed or
+ambiguous owner required by the global rewrite aborts the whole operation.
+With no bibliography owner, validate all options and set only standard style
+metadata. Do not invent a persistent root locale default. insert_bibliography
+uses private style-metadata attachment and its new field options, leaving other
+existing bibliography instructions unchanged. Tests cover multiple owners,
+removed selections, exact unrelated switches and caches, malformed atomicity
+and insertion isolation.
+
 Source kind coverage is the seventeen schema values from [Microsoft's DataSourceValues reference](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.bibliography.datasourcevalues?view=openxml-3.0.1): ArticleInAPeriodical, Book, BookSection, JournalArticle, ConferenceProceedings, Report, SoundRecording, Performance, Art, DocumentFromInternetSite, InternetSite, Film, Interview, Patent, ElectronicSource, Case and Misc. Native authoring and formatting cover every kind, including source-specific property and contributor-role choices.
 
 Locale scope is every LCID accepted by the pinned Word bibliography engine, including document-default selection, source LCID, citation locale switches and bibliography locale switches with their observed precedence. Word.sdef's WdLanguageID enumeration has 204 entries and 202 distinct candidate low-word language values, including two sentinel values. Its SHA256 is 7cb51b924cab566320cc3019e92c1516302ae11220a81ae6279f1930c26320e7. Capture preflight maps candidates to actual numeric LCIDs and probes acceptance, rather than assuming AppleEvent enum codes equal LCIDs. The installed style-name metadata lists 24 localized label LCIDs, which must not be mistaken for the complete result-locale set. Regional variants and Word's own locale alias or fallback behavior remain supported with the same resulting text. Record any Word-rejected candidate as a rejected oracle input, not a supported-locale cache fallback. Discover any additional accepted engine LCIDs through the pinned Word language collection and document them in the same manifest. No supported locale may be left unimplemented or silently mapped to en-US.
