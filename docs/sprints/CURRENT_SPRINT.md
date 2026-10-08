@@ -38,6 +38,7 @@ the full pinned Word bibliography source, style and locale catalogue.
 | F-X185 | Expose comment anchor text and story location | M | in-progress | codex |
 | F-X186 | Move comment anchors without losing threads | M | pending | - |
 | F-X187 | Scoped paragraph and cell text replacement | M | pending | - |
+| F-X188 | Preserve comment ownership when replacing or removing whole stories | L | pending | - |
 
 ## Sequencing note
 
@@ -125,6 +126,10 @@ ordinary story inventory contract. Neither issue is closed from similarity to
 an existing fix. Exact integrated evidence and full issue acceptance remain
 required. The seven observed PR heads remain unchanged. Issue264 remains
 excluded.
+
+F-X188 owns exclusive wave15 after F-X187 and before full-catalogue F-282
+resumes. It completes every Issue288 criterion with the approved new design,
+retaining completed F-X184 protections. Issue289 is part of F-X185 acceptance.
 
 ## Definition of done for this sprint
 

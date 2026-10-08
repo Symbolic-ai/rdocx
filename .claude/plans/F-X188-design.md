@@ -1,0 +1,164 @@
+# F-X188, Preserve comment ownership when replacing or removing whole stories
+
+**Status**: approved
+**Sprint**: S90
+**Size**: L
+**Depends on**: F-X184
+
+## Problem
+
+[Issue 288](https://github.com/tensorbee/rdocx/issues/288), reported by Hadrien
+Mary (`hadim`) on 2026-10-08, reproduces whole-story comment orphans against
+main plus the open contributions. Completed F-X184 already reconciles note
+and section-story removal. Text header/footer setters at
+`crates/rdocx/src/document.rs:19610` through19660 and the shared installation
+path at20193 still replace markers without reconciling their owned definitions.
+`crates/rdocx/src/building_block.rs:588` similarly removes a glossary entry
+without comment reconciliation. Authored-only section-part pruning at
+`document.rs:22939` requires explicit imported last-reference coverage.
+
+## Spec reference
+
+- `docs/hld/14-development-backlog.md`, "F-X188, Preserve comment ownership when replacing or removing whole stories (L)", complete Issue288 acceptance.
+- `docs/hld/03-architecture.md`, "Facade conventions", shared ownership reconciliation and atomic publication.
+- `docs/hld/04-opc-and-packaging.md`, "The package" and "Relationship types", physical story ownership, glossary bundles, shared section references and retained producer graphs.
+- `docs/hld/10-bindings-spec.md`, "The chosen design", "The invalidation problem, handled loudly" and "Python API shape", checked document ownership, error propagation and revision publication.
+- `docs/hld/12-testing-strategy.md`, "Test taxonomy", "Binding tests" and "The hash harness", exact-Base regression and retained source evidence.
+
+## Intake and sequencing
+
+The full issue and empty discussion were read against canonical93118299.
+The read-only acceptance map is
+`/private/tmp/S90-Issues288-289-acceptance-map.md`, SHA256
+`b9b6b85de21af177c38c16bb7519717b0dfbdea500a93da93d9310006d418782`.
+Source reasoning is not runtime proof. The user explicitly approved this
+story's design, review, progress and handoff files. No contribution beyond
+PR287's already assessed ownership work is assumed accepted.
+
+F-X184 is completed. Run this story in exclusive wave15 after F-X187 because
+document.rs, Python bindings and existing regression entrypoints overlap.
+Keep full-catalogue F-282 paused at its authenticated checkpoint through this
+wave. Resume it afterward, then F-283 after its formal prerequisites complete.
+Issue289 belongs to the existing F-X185 checked snapshot contract. Issue264
+and F-X178 remain excluded. Final integrated full verification and review
+remain mandatory before publication.
+
+## Approach
+
+Reuse F-X184's qualified raw source inventory, complete thread and companion
+proof, clone staging and prepare/reopen publication. Do not introduce a second
+comment ownership authority or global save-time repair. Census every public
+text, raw, image and section replacement entrance that shares header/footer
+installation, including Default, First and Even through existing HdrFtrType
+APIs. No separate set_even_header API is invented.
+
+Add native `try_set_header(&mut self, text: &str) -> Result<()>`,
+`try_set_footer(&mut self, text: &str) -> Result<()>`,
+`try_set_first_page_header(&mut self, text: &str) -> Result<()>` and
+`try_set_first_page_footer(&mut self, text: &str) -> Result<()>` so Python's
+existing setters propagate checked errors through their owning document.
+Keep existing infallible native signatures as documented compatibility
+wrappers using the existing expect convention. Valid complete removals clean
+up their threads. Callers requiring recoverable refusal use the fallible
+entrances. Never publish a failed candidate or silently convert an error into
+successful output. Test fallible refusal and once-only Python revision changes.
+
+Reconcile at the complete operation boundary after all source changes and
+before one publication, including all raw/image consumers. Remove only safely
+owned roots, descendants and selectively linked commentsExtended, commentsIds
+and commentsExtensible rows. Preserve unrelated comment threads, package
+members, relationships, content types and opaque XML. A partial cut, malformed
+graph or unprovable companion linkage returns a diagnostic naming the affected
+comment where identity is known, with exact original bytes retained.
+
+Glossary removal uses the same reconciliation before its existing reopen,
+retains the valid empty glossary bundle after last-entry removal, and keeps
+other entries and their dependencies intact. Comment-bearing fragment
+detachment retains F-X184's refusal policy. Do not adopt PR287's incompatible
+automatic re-anchoring or carried-thread semantics.
+
+Shared header/footer ownership is resolved by normalized physical target,
+including two relationship ids reaching one part and opaque references.
+Removing one section reference preserves a still-used thread and its companion
+bytes. Removing the final effective reference must not leave a listed orphan
+merely because imported part pruning retains its source. Establish exact
+source behavior with a saved/reopened before control, then reconcile safely
+owned marker and definition closure while preserving retained producer parts
+and opaque references. Do not broaden authored-only package pruning or delete
+producer parts just to make inventory counts decrease. Any concrete conflict
+between complete cleanup and preservation must be reported before narrowing
+the issue contract.
+
+## Rejected alternatives
+
+Global orphan deletion can erase unrelated imported review state. Deleting
+producer-owned header parts changes existing package ownership rules.
+Replacing X184 with PR287's auto-reanchor path abandons the approved atomic
+partial-cut and fragment policy. A helper's presence does not prove an untested
+operation's acceptance.
+
+## Test plan
+
+**Test gate**: regression.
+`whole_story_removal_and_replacement_preserve_comment_closure` fails against
+the exact claimed Base for uncovered replacement and glossary routes, then
+passes source-built cleanup, shared-reference, companion, namespace and atomic
+refusal controls after save and reopen. Existing Rust, Python and CLI
+entrypoints cover the complete issue criteria. All49 hash entries remain
+unchanged. Record reporter provenance and full acceptance for sprint close.
+
+| Category | Test | Asserts |
+|---|---|---|
+| regression | `whole_story_removal_and_replacement_preserve_comment_closure` | Whole roots, replies and grandchildren removed with text/raw/image header/footer content and glossary entries, exact unrelated companions retained |
+| round-trip | `shared_story_comment_ownership_survives_until_last_reference` | Default/First/Even Header/Footer, imported reopen, inherited/shared targets and different relationship ids, first removal preserves and final removal reconciles |
+| integration | `whole_note_removal_reconciles_comment_companions` | Actual remove_footnote and remove_endnote operations, aliased relocated note parts, root/reply/companion cleanup and unrelated owner preservation |
+| Python | `whole_story_comment_refusals_preserve_bytes_and_revision` | Existing setters use fallible owned route, success bumps once, malformed/partial/preparation/reopen refusal keeps bytes and handles unchanged |
+| CLI | `whole_story_outputs_validate_without_comment_orphans` | Reopened outputs pass strict ownership validation, malformed controls fail with original graph diagnostics |
+
+Extend only existing unit modules and integration entrypoints. No new test
+binary, production file, module, crate or dependency. Prove actual compiled
+before failures for the named gate and reported uncovered operations, never
+missing new APIs or deselected tests. Test alias/shadowed namespaces, preserved
+wrappers, foreign attributes, comments and PIs, unselected thread metadata,
+shared producer targets and atomic prepare/reopen failure. Runtime and typing
+acceptance are recorded separately. No native Word capture is needed for these
+package ownership and transaction contracts.
+
+## HLD impact
+
+- `docs/hld/03-architecture.md`
+- `docs/hld/04-opc-and-packaging.md`
+- `docs/hld/10-bindings-spec.md`
+- `docs/hld/12-testing-strategy.md`
+
+## Risk routing
+
+- Parser or serializer: read HLD04 and HLD06. Respect schema child order and namespace-qualified identity. Exact source and package comparisons prove unmodeled subtree retention and refused/no-op atomicity.
+- Published public API: read HLD10 and CLAUDE structural rules. Additive pre-1.0 fallible setters preserve existing signatures. Remeasure changed published archives and affected README inventories, assert the10MiB ceiling and run actual locally patched publication dry runs without upload.
+- PyO3: read HLD10. Compile actual current bindings and run rebuilt Python runtime, exact pinned strict typing and stub agreement. Check both WASM bindings. Linked native workspace tests exclude binding crates as required.
+- Scoped verification includes affected all-target checks, full affected native suites, all-feature denied-warning Clippy, fmt, denied-warning docs, hash49, README, workflow, prose and adapter checks, plus every rider above. Final full workspace verification and sprint review remain due.
+- Workflow files are explicitly approved. No new production file/module/dependency/trait/generic is planned. Shared source, Cargo and hash execution remain exclusive to this wave. No baseline movement is authorized.
+
+## Hash harness
+
+Expected unchanged: all49 deterministic entries and existing PDF/PNG resources.
+Source-built editing controls prove the intentional package behavior separately.
+Unexpected deltas block acceptance rather than earning a replacement baseline.
+
+## Implementation checklist
+
+- [x] Read complete issue, verify prerequisite completion and approve design with explicit workflow-file permission.
+- [ ] Claim wave15 only after exclusive prior waves release source and Cargo.
+- [ ] Capture genuine exact-Base failures for all uncovered destructive routes.
+- [ ] Implement shared reconciliation and fallible Python-bound text setters with complete preservation and shared-reference semantics.
+- [ ] Pass exact native, Python, typing, CLI and atomic refusal controls.
+- [ ] Update exactly the HLD impact files, pass scoped riders and zero-finding microscope.
+- [ ] Prepare and validate the structured handoff, then integrate and record complete acceptance before sprint close.
+
+## Open questions
+
+None requiring a new user decision. The user approved the new records and
+requested inclusion before publication. Root selects complete owned cleanup,
+recoverable fallible native/Python refusals and retained legacy wrapper
+conventions. A measured unsupported source or preservation conflict must be
+reported before changing these criteria.

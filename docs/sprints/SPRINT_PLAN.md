@@ -2004,6 +2004,7 @@ citations, and numbering-aware navigation.
 | F-X185 | Expose comment anchor text and story location | M |
 | F-X186 | Move comment anchors without losing threads | M |
 | F-X187 | Scoped paragraph and cell text replacement | M |
+| F-X188 | Preserve comment ownership when replacing or removing whole stories | L |
 
 F-278 is the field substrate. F-279 uses the S89 note policy, and F-280 uses
 S89 range markers. F-281 follows the field, pagination, and caption work.
@@ -2076,6 +2077,10 @@ ordinary story inventory contract. Neither issue is closed from similarity to
 an existing fix. Exact integrated evidence and full issue acceptance remain
 required. The seven observed PR heads remain unchanged. Issue264 remains
 excluded.
+
+F-X188 owns exclusive wave15 after F-X187 and before full-catalogue F-282
+resumes. Its approved Issue288 contract completes the remaining replacement,
+glossary and shared-reference ownership work. Issue289 is part of F-X185.
 
 #### Sprint S91, Templates, controls, and forms
 
