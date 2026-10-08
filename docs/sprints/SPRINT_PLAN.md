@@ -2079,6 +2079,11 @@ an existing fix. Exact integrated evidence and full issue acceptance remain
 required. The seven observed PR heads remain unchanged. Issue264 remains
 excluded.
 
+Issue292 is included in F-X188 with documented comment omission from
+building-block transfers and physical glossary/main owner isolation.
+Issue291 remains open and excluded at the user's instruction, alongside264.
+Do not import that fix incidentally through an updated contribution.
+
 F-X188 owns exclusive wave15 after F-X187 and before full-catalogue F-282
 resumes. Its approved Issue288 contract completes the remaining replacement,
 glossary and shared-reference ownership work. Issue289 is part of F-X185.

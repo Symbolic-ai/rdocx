@@ -43,6 +43,10 @@ The read-only contribution map is
 `/private/tmp/S90-release-contribution-readiness-map.md`, SHA256
 e9b53254f091635527ea293988be797b961bdb68a132d2c4b98ee184d642fbab.
 It records pending acceptance explicitly and is not a completion authority.
+Fresh intake includes PR290 and Issue292 within F-X188. Reconcile their
+verified contribution evidence in the release inventory. Issues264 and291
+are excluded at the user's instruction and remain open, including when an
+updated stacked PR contains additional changes for291.
 Refresh the inventory and exact previous family tags before writing claims.
 Issue264/F-X178 remain excluded, including release notifications. Preserve
 historical changelog credit without treating it as new S90 work. Issue281

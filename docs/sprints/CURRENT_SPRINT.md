@@ -150,6 +150,14 @@ rehearsal before close. Publication follows close through separate final
 exact-main-SHA approvals, shared family first where Word pins require it.
 Issue264 remains excluded and Issue281 remains open for its roadmap decision.
 
+Issue [292](https://github.com/tensorbee/rdocx/issues/292), reported by
+`hadim`, extends F-X188's building-block ownership contract to creation,
+fragment update, extraction and insertion with isolated comments ownership.
+PR290 and updated PR287 are assessed contributions, not automatic acceptance.
+Issue [291](https://github.com/tensorbee/rdocx/issues/291) remains open and
+excluded at the user's instruction, alongside Issue264. No F-ID is added for
+Issue291. All source, Cargo and shared test execution remains exclusive.
+
 ## Definition of done for this sprint
 
 - Simple, complex and nested fields reopen with identical instruction semantics and ordered cached content.
@@ -169,5 +177,7 @@ Issue264 remains excluded and Issue281 remains open for its roadmap decision.
 - Issues 282 through 285 satisfy comment ownership, typed anchor discovery, identity-preserving moves and scoped replacement criteria with atomic refusal and complete source preservation controls.
 
 - Issues288 and289 satisfy whole-story comment closure and complete checked nested paragraph snapshots.
+
+- Issue292 satisfies documented building-block comment isolation without unanchored main comments. Issues264 and291 remain open and excluded.
 
 - Both approved new release families have exact versions, reviewed notes and contributor inventories, verified packages and installed Python evidence, plus a current reviewed-SHA hosted build-only rehearsal before close. Publication remains separately approved after close.

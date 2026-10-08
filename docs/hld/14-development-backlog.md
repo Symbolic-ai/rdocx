@@ -6573,6 +6573,14 @@ Resolve every criterion of [Issue 282](https://github.com/tensorbee/rdocx/issues
 ### F-X188, Preserve comment ownership when replacing or removing whole stories (L)
 
 Resolve every criterion of [Issue 288](https://github.com/tensorbee/rdocx/issues/288), reported by `hadim`. Extend the completed F-X184 ownership transaction to default and first-page text header/footer replacement, raw and image replacement including even variants, and glossary entry removal. Complete safely owned threads and their selectively linked companions are removed together. Shared story targets retain comments while a section still references them, including reopened producer parts and different relationship ids reaching the same target. Preserve producer-owned parts and opaque references rather than deleting them to manufacture an ownership decrease. Add checked fallible native text setters for Python error propagation while retaining documented legacy wrapper conventions. Ambiguous ownership and partial cuts refuse before publication. Explicitly test whole endnote removal and all Issue288 variants rather than inferring acceptance from common helpers.
+Issue [292](https://github.com/tensorbee/rdocx/issues/292) also requires
+documented omission of comments from building-block creation, replacement,
+fragment update, extraction and insertion. Filter qualified transferred
+markers before comment dependency import. Isolate glossary-local ownership
+from main comments even when numeric ids match, retain unrelated producer
+parts and refuse ambiguous ownership atomically. Metadata-only updates and
+general fragment behavior retain their existing contracts. Issue291 remains
+open and excluded at the user's instruction, alongside Issue264.
 **Depends on**: F-X184.
 **Test gate**: regression. `whole_story_removal_and_replacement_preserve_comment_closure` fails against the exact claimed Base for uncovered replacement and glossary routes, then passes source-built cleanup, shared-reference, companion, namespace and atomic refusal controls after save and reopen. Existing Rust, Python and CLI entrypoints cover the complete issue criteria. All 49 hash entries remain unchanged. Record reporter provenance and full acceptance for sprint close.
 

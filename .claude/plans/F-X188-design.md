@@ -48,6 +48,18 @@ companion cleanup fails conflicts with this approved atomic refusal contract.
 Do not adopt that fallback or its separate absence-of-markers inventory.
 Upstream test and archive measurements are not current acceptance evidence.
 
+Subsequent [Issue292](https://github.com/tensorbee/rdocx/issues/292), reported
+by `hadim` on 2026-10-08 at20:02 UTC, is included in this same ownership
+story. The full issue and source routes were read. A commented fragment
+imported into a glossary entry currently imports definitions into the main
+comments part. Reverse extraction can likewise pair glossary-local markers
+with main definitions of the same numeric id. The reporter permits either
+omitting comments from building blocks or implementing glossary-local review
+parts. This plan selects documented omission from transferred content, with
+qualified owner isolation and successful valid output. Mere refusal of every
+commented creation is not sufficient acceptance. Issue291 remains open and
+excluded at the user's subsequent instruction, alongside Issue264.
+
 F-X184 is completed. Run this story in exclusive wave15 after F-X187 because
 document.rs, Python bindings and existing regression entrypoints overlap.
 Keep full-catalogue F-282 paused at its authenticated checkpoint through this
@@ -99,6 +111,34 @@ thread and companions. Prove typed and retained raw glossary coherence so a
 later flush cannot restore removed markers. These are existing entrances to
 the same complete Issue288 contract, with no new public API or file.
 
+For Issue292, `create_building_block_from_fragment` and
+`update_building_block_from_fragment` omit namespace-qualified comment markers
+and their definition import from the private transferred content before
+dependency capture and import. Include selected note and textbox dependencies
+so no companion transfer reintroduces main-owned orphan comments. Apply the
+documented omission policy to supplied bodies in plain creation and direct
+replacement as well. Preserve metadata-only updates. Reverse
+`building_block_fragment` and `insert_building_block` omit selected glossary
+markers before constructing a main-owned fragment, never pairing numeric ids
+with unrelated main definitions. Existing general fragment behavior and
+destructive commented-fragment detach refusal remain unchanged.
+
+Reuse qualified marker spans and existing dependency closure. Preserve mixed
+reference-run properties, wrappers, foreign lookalikes, comments, PIs and
+unmodeled XML. No arbitrary run or container deletion is authorized. Source
+documents and retained glossary-local comment parts and relationships remain
+unchanged by transfer. All changes publish through one staged transaction.
+
+Resolve glossary comment ownership from its physical relationship owner.
+Exactly one valid internal comments relationship identifies local markers,
+which must not enter the main comment graph even when ids match. No local
+comments relationship permits legacy main-owned processing only through the
+existing strict ownership proof. Duplicate, external, missing-target,
+wrong-root or malformed local ownership refuses atomically. Existing local
+entry cleanup must prove its complete thread and companion closure through
+the existing strict graph machinery with the physical owner explicit, or
+refuse. Never delete an equal-id main thread or claim omitted local cleanup.
+
 Shared header/footer ownership is resolved by normalized physical target,
 including two relationship ids reaching one part and opaque references.
 Removing one section reference preserves a still-used thread and its companion
@@ -143,6 +183,16 @@ actual before failures for uncovered destructive replacements, complete
 root/reply/companion cleanup, unrelated entry retention and atomic malformed,
 partial-cut and prepare/reopen refusal. Retain PR290's malformed companion
 fixture as a refusal control with original content and revision unchanged.
+
+Issue292 controls reproduce actual commented creation, fragment update,
+extraction and same/different-document insertion with the chosen omission
+policy, save/reopen and strict CLI validation. Imported Word-style glossary
+local comments must coexist with equal-id unrelated main comments without
+wrong-owner pairing. Check exact retained source and local package bytes,
+selected note/textbox dependencies, direct supplied bodies, metadata-only
+updates, namespace aliases and shadows, mixed reference runs, foreign
+lookalikes, opaque XML and complete failure atomicity. Source reasoning is
+not an executed before failure. Extend existing entrypoints only.
 
 Extend only existing unit modules and integration entrypoints. No new test
 binary, production file, module, crate or dependency. Prove actual compiled
