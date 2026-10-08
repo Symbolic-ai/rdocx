@@ -17999,3 +17999,90 @@ approved F-X188 wave15. Full-catalogue F-282 remains preserved and paused.
 Issue264 remains excluded. No push, main merge, tag, publication or GitHub
 closure occurred. Complete issue and PR reconciliation waits for verified
 sprint close, with release under its separate reviewed-SHA approval.
+
+### F-X186, Move comment anchors without losing threads
+
+**Sprint.** S90
+**Completed.** 2026-10-08
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Native and Python root-id comment movement and the CLI
+comment move command preserve the existing thread, replies, resolved state,
+metadata and companions across checked supported story destinations. Literal
+text selection shares the existing recursive finder without allocating a
+replacement thread. This addresses [Issue284](https://github.com/tensorbee/rdocx/issues/284),
+reported by Hadrien Mary (`hadim`). Compatible routing and finder ideas from
+[PR287](https://github.com/tensorbee/rdocx/pull/287) were adapted to the stricter
+owned-source transaction contract. The complete PR is not accepted unchanged.
+
+**Non-obvious choices.** Exact typed boundaries own preserved raw reference
+carriers, including attributes and run properties. Independent raw references
+retain bytes even when numeric ids coincide. Source edits rebase destination
+positions and remove only proved emptied marker-only Google wrappers. Ordered
+comments, processing instructions and opaque neighboring payload survive.
+Candidate preparation and reopen precede one publication. Unknown roots,
+replies, stale endpoints, incomplete graphs and ambiguity refuse atomically.
+
+The literal t-only guard preserves zero-width tab and break semantics while
+the rich anchor reader includes displayed field results. Rich queries restore
+proved namespace context without changing canonical locations, fingerprints
+or accepted indices. Paired events and bijective physical story ownership
+prevent namespace replay from promoting or redirecting owners. Redundant
+closed-carrier declarations are omitted only with unique complete-owner,
+retained-declaration and resolved-namespace proof. Existing global replay is
+unchanged. Real comment destination writes preserve source authority, while
+the private endpoint probe remains separate.
+
+**Deviations from the design plan.** None. Qualified implementation details
+are recorded in the completed plan. Unsupported same-owner alias-field forms
+that fail initial save and raw alias SDT forms outside the existing literal
+axis remain explicit boundaries. Saveable paragraph and block field controls
+retain A7B through query, returned-range movement and reopen. Compiled before
+evidence demonstrates paragraph AB only, with the block control already A7B.
+Initially unsaveable table and cell fixtures receive earlier atomic refusal.
+
+**Spec sections touched.** Exactly HLD03 facade conventions, HLD04 namespace
+and package preservation, HLD10 binding movement and HLD12 regression strategy.
+Affected README archive rows and inventory tuples reflect reviewed source.
+
+**Tests.** The named comment_moves_preserve_thread_identity gate fails against
+compiled Base for reference transport, then passes during prepare with one
+executed and909 filtered. Focused anchor13, movement6, Google1 and CLI1 pass.
+Current facade501 unit,364 integration,903 regression and two doctests pass,
+with21 existing ignores. CLI3 unit and62 integration tests pass. The unchanged
+low-level source reuses its631 unit and one doctest result explicitly. Current
+four-crate all-feature Clippy, all-target checks, denied-warning docs, both
+WASM checks, pinned PDF/concurrency2, strict mypy2.3.0 and stubtest pass.
+Actual rebuilt Python core94 passes in16.20s. Current extension SHA
+f61d99e5622983ac507809a7bc800472ef784bb06b93aabe68d846bf281c4c95 is retained
+outside the worker. No post-remediation full35-case parity is claimed.
+
+Current receipts contain5 focused,4 runtime,10 scoped and8 remainder steps,
+all exit zero. Workflow140 passes with two existing skips in62.452s. README
+checks cover27 workspace READMEs and22 publishable inventories, with root4
+and XML1 examples compiled. Prose0, adapters26 and fmt pass. Root and reviewer
+independently authenticate all six archives. Measured compressed/normalized
+bytes/members are XML447612/2784206/32, CLI72545/324047/8 and
+facade1557347/8637890/36. Actual dry-run compressed sizes are447612,72545 and
+1557349, with identical normalized payload tuples and source/test bytes,
+within the unchanged64-byte policy and below10MiB. Genuine locally patched
+publication dry runs use all22 internal patches and upload nothing.
+
+Independent ALL pass4 reports zero defects, smells and nitpicks, review
+a77bc397. Prior nonzero passes and actual failures remain historical records.
+Final freeze d8e1d325 binds20 tracked files and153 artifacts, exact diff7f3e9bbe.
+Prepare changes only completed-plan metadata from that reviewed source.
+
+**Hash harness.** All49 worker entries unchanged. Every integrated source,
+HLD and measurement path matches the reviewed worker code byte for byte.
+No semantic integration conflict or baseline movement occurred. Final full
+integrated sprint verification and review remain due after the remaining waves.
+
+**Notes for future sessions.** CodeHead13fd0241 precedes handoff-only0a987fda.
+Integration a22574b2 consumes validated handoff91bb7bc3. All24 integrated paths
+match the code head. Keep work/f-x186-codex through sprint close and remove only
+its clean completed worktree. Scoped replacement is next in exclusive wave14,
+then whole-story cleanup in wave15. Full-catalogue F-282 remains paused with
+its authenticated backup. Issue264 remains excluded. No push, main merge,
+tag, publication or GitHub closure occurred. Complete issue and PR disposition
+waits for verified sprint close and publication retains separate approval.

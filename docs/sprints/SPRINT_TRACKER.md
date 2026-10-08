@@ -838,3 +838,5 @@ installation and API shape, Rust performance and safety, and later rendering
 are the differentiators. Chart authoring is not requested. HLD14 and the S95
 plan retain these inputs without starting conditional spreadsheet work in S90
 or changing the reviewed release boundary. Keep Issue281 open for F-184.
+
+| F-X186 | S90 | M | 2 | 1 | 2026-10-08 | Identity-preserving native/Python/CLI comment movement for hadim Issue284 and adapted PR287, ALL pass4 clean, facade1770/CLI65/Python94, hash49 unchanged |
