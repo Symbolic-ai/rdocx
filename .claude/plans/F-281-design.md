@@ -166,6 +166,16 @@ in physical story order. Normalize duplicates and page lists according to
 fresh Word captures. Sort with an explicitly declared locale policy rather
 than Rust string ordering masquerading as Word collation. Preserve
 case-sensitive display text and source formatting separately from sort keys.
+
+INDEX and authority ordering use the bounded captured en-US ASCII key policy.
+Case-sensitive display entries remain distinct, while ordering folds ASCII
+letters and places a distinct lowercase entry before its uppercase counterpart.
+Non-ASCII sort keys retain the complete original generated owner and cache
+with a stable diagnostic, including when another supported table rebuilds.
+Caption text is not subject to this collation boundary. Tests cover both an
+isolated refusal and mixed supported and retained owners. This boundary does
+not claim general Unicode or other-locale collation.
+
 Support repeated pages, range bookmark endpoints, cross-reference entries,
 nested index levels, category grouping and captured passim behavior.
 
