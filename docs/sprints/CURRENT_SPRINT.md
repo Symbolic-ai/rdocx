@@ -30,7 +30,7 @@ the full pinned Word bibliography source, style and locale catalogue.
 | F-283 | Complete numbering-aware navigation fields | L | pending | - |
 | F-X178 | Clearable direct run formatting setters | S | pending | - |
 | F-X179 | Correct multi-paragraph comment threads from PR 271 | S | done | - |
-| F-X180 | Correct cell nil and none border precedence | S | pending | - |
+| F-X180 | Correct cell nil and none border precedence | S | in-progress | codex |
 | F-X181 | Ignore page and column breaks inside table cells | S | pending | - |
 
 ## Sequencing note

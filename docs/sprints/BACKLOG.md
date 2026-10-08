@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth                                | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents           | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness        | 54 | 23 | 1 | 30 |
-| X, Cross-cutting (opportunistic)              | 191 | 184 | 0 | 3 |
-| **Total** | **516** | **457** | **1** | **54** |
+| X, Cross-cutting (opportunistic)              | 191 | 184 | 1 | 2 |
+| **Total** | **516** | **457** | **2** | **53** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -733,6 +733,6 @@ regenerated, never hand-edited.
 | F-X177 | Accept unified fontdb source features | S89 | S | done |
 | F-X178 | Clearable direct run formatting setters | S90 | S | pending |
 | F-X179 | Correct multi-paragraph comment threads from PR 271 | S90 | S | done |
-| F-X180 | Correct cell nil and none border precedence | S90 | S | pending |
+| F-X180 | Correct cell nil and none border precedence | S90 | S | in-progress |
 | F-X181 | Ignore page and column breaks inside table cells | S90 | S | pending |
 <!-- AUTOGEN:backlog-MX END -->
