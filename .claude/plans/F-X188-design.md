@@ -255,10 +255,14 @@ Unexpected deltas block acceptance rather than earning a replacement baseline.
 - [x] Update exactly the HLD impact files, pass scoped riders and zero-finding microscope.
 - [x] Prepare and validate the structured worker handoff for integration.
 
-Worker completion records reviewed code and scoped evidence only. Canonical
-integration, delivery ledgers and complete issue acceptance remain pending
-with the integrator before sprint close. The handoff names the feature
-CodeHead, with a later handoff-only commit on the worker branch.
+- [x] Integrate the reviewed feature and record complete scoped acceptance in the canonical delivery ledgers.
+
+Canonical integration1674306a consumes the validated worker handoff and
+matches the reviewed CodeHead exactly. Delivery checkpoint264f5ef2 records
+complete Issues288/292 scoped acceptance. Final full integrated sprint
+verification, sprint review and external disposition remain pending. The
+retained worker branch has the feature CodeHead followed by a handoff-only
+commit.
 
 ## Open questions
 
