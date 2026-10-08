@@ -5659,10 +5659,9 @@ fn render_cell_borders(
 ) {
     // Determine effective border for each edge (cell overrides table)
     let get_edge = |cell_edge: Option<&rdocx_oxml::borders::CT_BorderEdge>,
-                    table_edge: Option<&rdocx_oxml::borders::CT_BorderEdge>,
-                    outer_edge: bool|
+                    table_edge: Option<&rdocx_oxml::borders::CT_BorderEdge>|
      -> Option<BorderEdge> {
-        let edge = crate::table::resolved_cell_edge(cell_edge, table_edge, outer_edge)?;
+        let edge = crate::table::resolved_cell_edge(cell_edge, table_edge)?;
         let thickness = edge.sz.unwrap_or(4) as f64 / 8.0; // sz is in 1/8 pt
         let color = edge
             .color
@@ -5685,8 +5684,7 @@ fn render_cell_borders(
     // A horizontal border fills the band below the row boundary it sits on,
     // which the row heights reserve, rather than straddling the boundary.
     let cell_top = cell_borders.as_ref().and_then(|b| b.top.as_ref());
-    if draw_top_border
-        && let Some((thickness, color, dash_pattern)) = get_edge(cell_top, table_top, is_first_row)
+    if draw_top_border && let Some((thickness, color, dash_pattern)) = get_edge(cell_top, table_top)
     {
         let line_y = y + thickness / 2.0;
         elements.push(PositionedElement::Line {
@@ -5711,8 +5709,7 @@ fn render_cell_borders(
     });
     let cell_bottom = cell_borders.as_ref().and_then(|b| b.bottom.as_ref());
     if draw_bottom_border
-        && let Some((thickness, color, dash_pattern)) =
-            get_edge(cell_bottom, table_bottom, is_last_row)
+        && let Some((thickness, color, dash_pattern)) = get_edge(cell_bottom, table_bottom)
     {
         // The table's bottom band is the last row's own, so its line sits
         // inside the row. Any other bottom edge is in the next row's band.
@@ -5742,7 +5739,7 @@ fn render_cell_borders(
         }
     });
     let cell_left = cell_borders.as_ref().and_then(|b| b.left.as_ref());
-    if let Some((thickness, color, dash_pattern)) = get_edge(cell_left, table_left, cell_idx == 0) {
+    if let Some((thickness, color, dash_pattern)) = get_edge(cell_left, table_left) {
         elements.push(PositionedElement::Line {
             start: Point { x, y },
             end: Point { x, y: y + h },
@@ -5761,9 +5758,7 @@ fn render_cell_borders(
         }
     });
     let cell_right = cell_borders.as_ref().and_then(|b| b.right.as_ref());
-    if let Some((thickness, color, dash_pattern)) =
-        get_edge(cell_right, table_right, cell_idx == num_cells - 1)
-    {
+    if let Some((thickness, color, dash_pattern)) = get_edge(cell_right, table_right) {
         elements.push(PositionedElement::Line {
             start: Point { x: x + w, y },
             end: Point { x: x + w, y: y + h },
@@ -8291,14 +8286,13 @@ mod tests {
     }
 
     #[test]
-    fn outer_nil_border_matches_word_without_changing_interior_nil() {
+    fn cell_nil_removes_every_edge_and_cell_none_falls_back_to_the_table() {
         use rdocx_oxml::borders::CT_BorderEdge;
         use rdocx_oxml::table::CT_TblBorders;
 
         let mut visible = CT_BorderEdge::new(ST_Border::Single);
         visible.sz = Some(8);
         visible.color = Some("112233".to_owned());
-        let nil = CT_BorderEdge::new(ST_Border::None);
         let table = CT_TblBorders {
             top: Some(visible.clone()),
             bottom: Some(visible.clone()),
@@ -8308,51 +8302,55 @@ mod tests {
             inside_v: Some(visible),
             extra_xml: Vec::new(),
         };
-        let cell = Some(CT_TblBorders {
-            top: Some(nil.clone()),
-            bottom: Some(nil.clone()),
-            left: Some(nil.clone()),
-            right: Some(nil),
-            inside_h: None,
-            inside_v: None,
-            extra_xml: Vec::new(),
-        });
+        let cell_edges = |val: ST_Border| {
+            let edge = CT_BorderEdge::new(val);
+            Some(CT_TblBorders {
+                top: Some(edge.clone()),
+                bottom: Some(edge.clone()),
+                left: Some(edge.clone()),
+                right: Some(edge),
+                inside_h: None,
+                inside_v: None,
+                extra_xml: Vec::new(),
+            })
+        };
+        // A lone cell has only outer edges, the middle cell of a middle row
+        // only inside ones.
+        let drawn = |cell: &Option<CT_TblBorders>, outer: bool| {
+            let (cell_idx, num_cells) = if outer { (0, 1) } else { (1, 3) };
+            let mut elements = Vec::new();
+            render_cell_borders(
+                10.0,
+                20.0,
+                30.0,
+                40.0,
+                cell,
+                Some(&table),
+                cell_idx,
+                num_cells,
+                outer,
+                outer,
+                true,
+                true,
+                &mut elements,
+            );
+            elements.len()
+        };
 
-        let mut outer = Vec::new();
-        render_cell_borders(
-            10.0,
-            20.0,
-            30.0,
-            40.0,
-            &cell,
-            Some(&table),
-            0,
-            1,
-            true,
-            true,
-            true,
-            true,
-            &mut outer,
+        let nil = cell_edges(ST_Border::Nil);
+        assert_eq!(drawn(&nil, true), 0, "nil removes the table's outer edges");
+        assert_eq!(drawn(&nil, false), 0, "nil removes the inside edges");
+        let none = cell_edges(ST_Border::None);
+        assert_eq!(
+            drawn(&none, true),
+            4,
+            "none leaves the outer edges to the table"
         );
-        assert_eq!(outer.len(), 4, "four outer edges fall back to the table");
-
-        let mut interior = Vec::new();
-        render_cell_borders(
-            10.0,
-            20.0,
-            30.0,
-            40.0,
-            &cell,
-            Some(&table),
-            1,
-            3,
-            false,
-            false,
-            true,
-            true,
-            &mut interior,
+        assert_eq!(
+            drawn(&none, false),
+            4,
+            "none leaves the inside edges to the table"
         );
-        assert!(interior.is_empty(), "interior nil remains suppressive");
     }
 
     #[test]

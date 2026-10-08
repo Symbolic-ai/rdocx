@@ -970,11 +970,11 @@ region's `w:trPr` is modeled and round-tripped but not applied, which is row
 geometry owned by F-268a. Region selection reads the table look together with
 every `w:cnfStyle` on the row, the cell and the cell's paragraphs. Direct table
 and cell properties remain the final overlay. An explicit
-cell `nil` or `none` border yields to a visible table border only on the exact
-outer edge. The same value remains suppressive on an interior edge.
+cell `nil` border suppresses the corresponding edge, including an outer edge.
+A cell `none` border behaves as an unset cell edge and inherits the corresponding
+table or table-style border. Painting and row border bands share this resolution.
 The model retains `nil` and `none` as distinct source tokens because an
-unrelated table or document edit must not normalize producer XML. Both tokens
-have the same invisible-border layout behavior.
+unrelated table or document edit must not normalize producer XML.
 
 A table without an explicit style uses the authored default table style.
 Its modeled base width, alignment, indent, borders, shading, look, and cell

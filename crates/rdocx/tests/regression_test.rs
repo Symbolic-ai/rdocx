@@ -28840,10 +28840,12 @@ fn dense_form_matches_reviewed_one_page_geometry() {
     // Horizontal borders fill the band below their row boundary, and the
     // bands are part of the row heights, so the nested table starts below
     // the 1 point band of its row and the last row carries the bottom one.
-    assert_eq!(table_lines.len(), 26, "table geometry: {table_lines:?}");
+    assert_eq!(table_lines.len(), 25, "table geometry: {table_lines:?}");
     // The preceding line now advances by its Word Windows-font pitch.
     let word_line_shift = 2.20703125;
-    assert!(has_line(
+    // The first cell's `nil` top removes the table's outer edge above it, as
+    // Word 16.111 draws the form.
+    assert!(!has_line(
         72.0,
         70.5 + word_line_shift,
         306.0,
@@ -28917,7 +28919,7 @@ fn dense_form_matches_reviewed_one_page_geometry() {
         .chunks_exact(4)
         .filter(|pixel| *pixel == [255, 215, 215, 255])
         .count();
-    assert_eq!(checksum, 3_354_091_765_578_971_749);
+    assert_eq!(checksum, 17_727_332_437_927_583_437);
     assert_eq!(non_white_pixels, 32_467);
     assert_eq!(
         behind_pixels, 0,
@@ -55936,4 +55938,181 @@ fn generated_tables_materialize_empty_simple_owners_and_retain_refusals() {
     let before = document.to_bytes().unwrap();
     assert!(document.rebuild_generated_tables().is_err());
     assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn issue_272_cell_borders_match_all_seven_word_topologies() {
+    // Word for Mac 16.113.2 (26092012), seven source-built native controls.
+    // Compare edge topology and our own band geometry, not font metrics.
+    let borders = ["top", "left", "bottom", "right", "insideH", "insideV"]
+        .map(|edge| format!(r#"<w:{edge} w:val="single" w:sz="4" w:color="112233"/>"#))
+        .join("");
+    let full = [
+        ('H', 0, 0),
+        ('H', 0, 1),
+        ('H', 1, 0),
+        ('H', 1, 1),
+        ('H', 2, 0),
+        ('H', 2, 1),
+        ('V', 0, 0),
+        ('V', 0, 1),
+        ('V', 1, 0),
+        ('V', 1, 1),
+        ('V', 2, 0),
+        ('V', 2, 1),
+    ]
+    .into_iter()
+    .collect::<std::collections::BTreeSet<_>>();
+    let mut heights = Vec::new();
+    for (styled, token, corner, top_only) in [
+        (false, "nil", false, false),
+        (false, "none", false, false),
+        (false, "nil", true, false),
+        (true, "nil", false, false),
+        (true, "none", false, false),
+        (false, "nil", false, true),
+        (true, "nil", false, true),
+    ] {
+        let mut rows = String::new();
+        for row in 0..2 {
+            rows.push_str("<w:tr>");
+            for column in 0..2 {
+                let edges = if corner && row == 0 && column == 0 {
+                    String::new()
+                } else if top_only {
+                    if row == 0 {
+                        format!(r#"<w:top w:val="{token}"/>"#)
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    ["top", "left", "bottom", "right"]
+                        .map(|edge| format!(r#"<w:{edge} w:val="{token}"/>"#))
+                        .join("")
+                };
+                rows.push_str(&format!(r#"<w:tc><w:tcPr><w:tcW w:w="4320" w:type="dxa"/><w:tcBorders>{edges}</w:tcBorders><q:opaque xmlns:q="urn:issue272">producer</q:opaque></w:tcPr><w:p><w:r><w:t>cell{row}{column}</w:t></w:r></w:p></w:tc>"#));
+            }
+            rows.push_str("</w:tr>");
+        }
+        let table_properties = if styled {
+            r#"<w:tblStyle w:val="TableGrid"/><w:tblW w:w="8640" w:type="dxa"/>"#.to_owned()
+        } else {
+            format!(r#"<w:tblW w:w="8640" w:type="dxa"/><w:tblBorders>{borders}</w:tblBorders>"#)
+        };
+        let body = format!(
+            r#"<w:p><w:r><w:t>Above</w:t></w:r></w:p><w:tbl><w:tblPr>{table_properties}<w:tblLayout w:type="fixed"/></w:tblPr><w:tblGrid><w:gridCol w:w="4320"/><w:gridCol w:w="4320"/></w:tblGrid>{rows}</w:tbl><w:p><w:r><w:t>After</w:t></w:r></w:p>"#
+        );
+        let styles = format!(
+            r#"<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Caladea" w:hAnsi="Caladea"/><w:sz w:val="24"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/><w:tblPr><w:tblBorders>{borders}</w:tblBorders></w:tblPr></w:style></w:styles>"#
+        );
+        let mut seed = Document::new();
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+                .unwrap();
+        package.set_part("/word/document.xml", wrap_word_body(&body).into_bytes());
+        package.set_part("/word/styles.xml", styles.into_bytes());
+        let mut output = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut output).unwrap();
+        let mut document = Document::from_bytes(output.get_ref()).unwrap();
+        let before = document_xml(&mut document);
+        document.add_paragraph("unrelated edit");
+        let bytes = document.to_bytes().unwrap();
+        let mut reopened = Document::from_bytes(&bytes).unwrap();
+        let after = document_xml(&mut reopened);
+        for value in ["nil", "none"] {
+            let attribute = format!(r#"w:val="{value}""#);
+            assert_eq!(
+                before.matches(&attribute).count(),
+                after.matches(&attribute).count()
+            );
+        }
+        assert_eq!(
+            after
+                .matches(r#"<q:opaque xmlns:q="urn:issue272">producer</q:opaque>"#)
+                .count(),
+            4
+        );
+        let result = reopened.layout_deterministic().unwrap();
+        assert_eq!(result.layout.pages.len(), 1);
+        let table = &result.body_layout_fragments(1).unwrap()[0];
+        heights.push(table.height);
+        let mut baselines = BTreeMap::new();
+        let mut lines = Vec::new();
+        oxml_layout::walk(
+            &result.layout.pages[0].elements,
+            &mut |element, _| match element {
+                oxml_layout::PositionedElement::Text(run) => {
+                    baselines.insert(run.text.clone(), run.origin.y);
+                }
+                oxml_layout::PositionedElement::Line { start, end, .. } => {
+                    lines.push((*start, *end))
+                }
+                _ => {}
+            },
+        );
+        let first = baselines["cell00"];
+        let second = baselines["cell10"];
+        let middle_x = table.x + table.width / 2.0;
+        let actual = lines
+            .into_iter()
+            .map(|(start, end)| {
+                if start.y == end.y {
+                    let boundary = if start.y < first {
+                        0
+                    } else if start.y < second {
+                        1
+                    } else {
+                        2
+                    };
+                    (
+                        'H',
+                        boundary,
+                        usize::from((start.x + end.x) / 2.0 > middle_x),
+                    )
+                } else {
+                    let boundary = if start.x < middle_x - 0.001 {
+                        0
+                    } else if start.x > middle_x + 0.001 {
+                        2
+                    } else {
+                        1
+                    };
+                    (
+                        'V',
+                        boundary,
+                        usize::from((start.y + end.y) / 2.0 > (first + second) / 2.0),
+                    )
+                }
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        let expected = if token == "none" {
+            full.clone()
+        } else if corner {
+            [('H', 0, 0), ('H', 1, 0), ('V', 0, 0), ('V', 1, 0)]
+                .into_iter()
+                .collect()
+        } else if top_only {
+            full.iter()
+                .copied()
+                .filter(|edge| !(edge.0 == 'H' && edge.1 == 0))
+                .collect()
+        } else {
+            Default::default()
+        };
+        assert_eq!(
+            actual, expected,
+            "styled={styled} {token} corner={corner} top_only={top_only}"
+        );
+        assert!(
+            reopened
+                .to_pdf_deterministic()
+                .unwrap()
+                .starts_with(b"%PDF-")
+        );
+    }
+    assert_eq!(heights[0], heights[3]);
+    assert_eq!(heights[1], heights[4]);
+    assert_eq!(heights[5], heights[6]);
+    assert_eq!(heights[1] - heights[0], 1.5, "three half-point bands");
+    assert_eq!(heights[1] - heights[5], 0.5, "top band removed");
 }

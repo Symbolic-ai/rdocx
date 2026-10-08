@@ -1,6 +1,6 @@
 # F-X180, Correct cell nil and none border precedence
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S90
 **Size**: S
 **Depends on**: none
@@ -62,11 +62,11 @@ Never re-record a harness entry to conceal an unexplained difference.
 
 ## Implementation checklist
 
-- [ ] Authenticate native source-built issue variants.
-- [ ] Prove the contributed regression fails before implementation.
-- [ ] Adopt and inspect the contribution, extending full issue coverage.
-- [ ] Pass risk riders, scoped verification and zero-finding microscope.
-- [ ] Complete HLD, delivery records and contributor disposition evidence.
+- [x] Authenticate native source-built issue variants.
+- [x] Prove the contributed regression fails before implementation.
+- [x] Adopt and inspect the contribution, extending full issue coverage.
+- [x] Pass risk riders, scoped verification and zero-finding microscope.
+- [x] Complete HLD, delivery records and contributor disposition evidence.
 
 ## Open questions
 

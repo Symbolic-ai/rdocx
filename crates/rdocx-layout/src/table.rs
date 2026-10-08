@@ -957,17 +957,16 @@ fn layout_table_inner(
 
 /// The border one side of a cell draws, or `None` when it draws none.
 ///
-/// The cell's own edge wins over the table's, except that a `none` cell edge
-/// on the outside of the table falls back to the table's outer edge.
+/// The cell's own edge wins over the table's, on the outside of the table as
+/// on the inside, so a `nil` cell edge removes it. Word reads a `none` cell
+/// edge as unset, so that one falls back to the table's edge.
 pub(crate) fn resolved_cell_edge<'a>(
     cell_edge: Option<&'a CT_BorderEdge>,
     table_edge: Option<&'a CT_BorderEdge>,
-    outer_edge: bool,
 ) -> Option<&'a CT_BorderEdge> {
     let edge = match cell_edge {
-        Some(edge) if edge.val.is_none() && outer_edge => table_edge?,
-        Some(edge) => edge,
-        None => table_edge?,
+        Some(edge) if edge.val != ST_Border::None => edge,
+        _ => table_edge?,
     };
     // A picture border has no line to draw, so that side draws none.
     (!edge.val.is_none() && !matches!(edge.val, ST_Border::Art(_))).then_some(edge)
@@ -1015,7 +1014,6 @@ fn border_bands(rows: &[TableRow], table_borders: Option<&CT_TblBorders>) -> Vec
                 && let Some(edge) = resolved_cell_edge(
                     cell_borders.and_then(|borders| borders.top.as_ref()),
                     table_top,
-                    first_row,
                 )
             {
                 bands[row_index] = bands[row_index].max(border_band(edge));
@@ -1024,7 +1022,6 @@ fn border_bands(rows: &[TableRow], table_borders: Option<&CT_TblBorders>) -> Vec
                 && let Some(edge) = resolved_cell_edge(
                     cell_borders.and_then(|borders| borders.bottom.as_ref()),
                     table_bottom,
-                    last_row,
                 )
             {
                 bands[row_index + 1] = bands[row_index + 1].max(border_band(edge));
