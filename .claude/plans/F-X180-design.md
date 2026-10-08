@@ -21,8 +21,11 @@ Adopt PR 274 from `hadim` at `59d9de9426233da389369ee10f5c8bd32ca8f75c` against 
 Remove the outer-edge exception and its boolean parameter from resolved_cell_edge. Explicit nil suppresses the edge, explicit none inherits the corresponding table edge, and omitted cell edges inherit as before. Keep painting and row border bands on this concrete helper. Adopt the contributed focused test and dense-form expectation only after independent deterministic verification. Extend the existing regression entrypoint for all seven direct/style cases, line sets and border-band geometry. No XML normalization.
 No new production file, module, trait, generic, crate or dependency.
 Re-measure affected archives on the actual sprint inventory rather than copying
-the PR's dated measurements. Integration follows F-282 to avoid concurrent
-ownership of shared source and regression files, then F-283 follows this wave.
+the PR's dated measurements. Pause the F-282 worker at a saved checkpoint before these independent fixes.
+Implement and integrate F-X180, then F-X181, in separate waves while F-282
+source and Cargo writes are stopped. Resume the preserved F-282 worktree
+afterwards and reconcile overlapping files against both approved contracts.
+F-283 retains its completion barrier on F-282 and follows both fixes.
 
 ## Rejected alternatives
 

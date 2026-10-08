@@ -2011,12 +2011,13 @@ covers the full pinned Word bibliography source, style and locale catalogue.
 F-X179 integrates PR 271 only after every Issue 270 criterion passes. It has
 no dependency and preserves Issue 264 and F-X178 for separate work.
 
-
 The user added Issues 272 and 273 with PRs 274 and 275 during S90.
 F-X180 and F-X181 validate each full issue before accepting its contribution.
-Their source and regression files overlap F-282 and F-283, so use separate
-waves after F-282 and before F-283, with focused integration checks for table
-geometry and bibliography output. Issue 264 remains excluded.
+Their source and regression files overlap F-282 and F-283. Pause F-282 at a
+saved checkpoint, run these independent fixes in separate waves, then resume
+F-282 before F-283. Source and Cargo ownership never overlap. Reconcile both
+approved contracts at integration and check table geometry and bibliography
+output. Issue 264 remains excluded.
 
 #### Sprint S91, Templates, controls, and forms
 

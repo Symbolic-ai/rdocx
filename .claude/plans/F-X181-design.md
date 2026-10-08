@@ -21,8 +21,11 @@ Adopt PR 275 from `hadim` at `5ea2f5710d4bb13d0182bd74417fa5ca58522984` against 
 Adopt the concrete in_table_cell context flag on the existing paragraph implementation, true only for layout_paragraph_with_source_in_table. Drop PageBreak and ColumnBreak inline items in this context, including field-result form feed and vertical tab, while retaining line breaks and body pagination. Existing table traversal supplies nested-cell context. Extend the contributed existing regression entrypoint for leading and nested cases, no-break row height, exact joined text and ordinary line/body controls. Preserve the authored XML.
 No new production file, module, trait, generic, crate or dependency.
 Re-measure affected archives on the actual sprint inventory rather than copying
-the PR's dated measurements. Integration follows F-282 to avoid concurrent
-ownership of shared source and regression files, then F-283 follows this wave.
+the PR's dated measurements. Pause the F-282 worker at a saved checkpoint before these independent fixes.
+Implement and integrate F-X180, then F-X181, in separate waves while F-282
+source and Cargo writes are stopped. Resume the preserved F-282 worktree
+afterwards and reconcile overlapping files against both approved contracts.
+F-283 retains its completion barrier on F-282 and follows both fixes.
 
 ## Rejected alternatives
 
