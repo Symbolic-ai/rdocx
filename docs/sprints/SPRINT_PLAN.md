@@ -2000,6 +2000,10 @@ citations, and numbering-aware navigation.
 | F-X181 | Ignore page and column breaks inside table cells | S |
 | F-X182 | Honor direct table alignment | M |
 | F-X183 | Correct table margins and legacy positioning | M |
+| F-X184 | Safe comment ownership during content removal | L |
+| F-X185 | Expose comment anchor text and story location | M |
+| F-X186 | Move comment anchors without losing threads | M |
+| F-X187 | Scoped paragraph and cell text replacement | M |
 
 F-278 is the field substrate. F-279 uses the S89 note policy, and F-280 uses
 S89 range markers. F-281 follows the field, pagination, and caption work.
@@ -2038,6 +2042,10 @@ answers scheduling and staged-delivery questions and requests concrete workflows
 and preservation needs. Keep the discussion open for the F-184 decision. S90 delivers the documented
 assessment, while spreadsheet implementation retains its affirmative decision
 barrier.
+
+Issues [282](https://github.com/tensorbee/rdocx/issues/282), [283](https://github.com/tensorbee/rdocx/issues/283), [284](https://github.com/tensorbee/rdocx/issues/284) and [285](https://github.com/tensorbee/rdocx/issues/285), reported by `hadim`, add F-X184 through F-X187. The intake was read against canonical 0a775842a8fd12f088bf4f2b3d0a049ddc3e976b. All four were opened on 2026-10-08 at 13:35 UTC and have no matching contribution PR at intake. Their approved plans retain the complete issue criteria. Issue numbers 282 and 283 are distinct from existing feature IDs F-282 and F-283.
+
+Pause F-282 only at an explicit saved external checkpoint. Run F-X184, F-X185, F-X186 and F-X187 in exclusive waves 11, 12, 13 and 14, respectively. F-X184 uses completed F-X179 and F-271. Complete each formal dependency before starting its consumer. F-X187 has no formal dependency but follows F-X186 because document, comment, binding and existing test entrypoints overlap. These waves exclusively own shared source, Cargo execution and HLD edits. Resume full-scope F-282 afterward, then F-283 in its existing wave 10 only after F-282 completion. Draft batch planning does not waive implementation barriers or the final integrated full gate. Issue 264 and F-X178 remain excluded. GitHub closure waits for verified sprint close and complete issue acceptance.
 
 #### Sprint S91, Templates, controls, and forms
 

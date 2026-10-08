@@ -6538,6 +6538,30 @@ fontdb/memmap` fails on the claimed base and passes after the fix. Default,
 no-default and no-default plus memmap checks and font tests pass, with all
 49 hash entries unchanged. Record the contributor disposition for sprint close.
 
+### F-X184, Safe comment ownership during content removal (L)
+
+Resolve every criterion of [Issue 282](https://github.com/tensorbee/rdocx/issues/282), reported by `hadim`. Whole safely owned comment graphs removed with body, story, row or cell content lose their root, descendant replies and selectively owned commentsExtended, commentsIds and commentsExtensible entries. Partial cuts and comment-bearing detached fragments refuse atomically. Unprovable imported graph ownership refuses instead of discarding opaque XML. Add fallible native try_remove_content for Python and retain the legacy bool method with false on refusal and no panic. Raw all-story validation distinguishes an orphan from a reference-only comment or a linked reply. Preserve unrelated parts and source XML.
+**Depends on**: F-X179, F-271.
+**Test gate**: regression. `comment_removal_preserves_thread_closure` proves the reported failure before implementation and exact successful or refused behavior after save and reopen. Existing Rust, Python, typing and CLI entrypoints cover the complete issue criteria, with unrelated package members and opaque XML preserved. All 49 hash entries remain unchanged. Record reporter provenance and full acceptance for sprint close.
+
+### F-X185, Expose comment anchor text and story location (M)
+
+Resolve every criterion of [Issue 283](https://github.com/tensorbee/rdocx/issues/283), reported by `hadim`. Expose checked native and CommentRef anchor text and StoryRunRange, then frozen typed Python snapshots and CLI JSON locations. Accepted-view span text joins paragraphs with newline. Reference-only comments have no paired range and empty anchor text, while orphans have neither. Keep the seven-argument Python Comment constructor compatible through optional new defaults. Cover table cells, tracked insertions and block and inline goog_rdk wrappers.
+**Depends on**: F-X184.
+**Test gate**: regression. `comment_anchor_snapshots_match_accepted_story_spans` proves the reported failure before implementation and exact successful or refused behavior after save and reopen. Existing Rust, Python, typing and CLI entrypoints cover the complete issue criteria, with unrelated package members and opaque XML preserved. All 49 hash entries remain unchanged. Record reporter provenance and full acceptance for sprint close.
+
+### F-X186, Move comment anchors without losing threads (M)
+
+Resolve every criterion of [Issue 284](https://github.com/tensorbee/rdocx/issues/284), reported by `hadim`. Move a checked root comment's range and reference without replacing thread identity, metadata, replies or resolved state. Reuse staged story-range placement and support cross-story destinations where existing placement permits comments. Unknown ids, reply ids and unsupported destinations refuse atomically. Remove goog_rdk wrappers made empty solely by marker removal. Provide move-to-text with the existing add-comment body search scope and a CLI move command.
+**Depends on**: F-X185.
+**Test gate**: regression. `comment_moves_preserve_thread_identity` proves the reported failure before implementation and exact successful or refused behavior after save and reopen. Existing Rust, Python, typing and CLI entrypoints cover the complete issue criteria, with unrelated package members and opaque XML preserved. All 49 hash entries remain unchanged. Record reporter provenance and full acceptance for sprint close.
+
+### F-X187, Scoped paragraph and cell text replacement (M)
+
+Resolve every criterion of [Issue 285](https://github.com/tensorbee/rdocx/issues/285), reported by `hadim`. Add Python Paragraph.replace_text and Cell.replace_text with run-aware matching, optional expected count and document transaction atomicity. Expose Document.replace_text_at for a checked detached StoryItem to cover supported header, footer and note owners without giving snapshots an originating Document mirror. Preserve comment ranges, bookmarks and formatting outside a match. Keep unselected content and parts unchanged.
+**Depends on**: none.
+**Test gate**: regression. `scoped_text_replacement_preserves_unselected_content` proves the reported failure before implementation and exact successful or refused behavior after save and reopen. Existing Rust, Python, typing and CLI entrypoints cover the complete issue criteria, with unrelated package members and opaque XML preserved. All 49 hash entries remain unchanged. Record reporter provenance and full acceptance for sprint close.
+
 ### F-X182, Honor direct table alignment (M)
 
 Resolve every reported variant of [Issue 277](https://github.com/tensorbee/rdocx/issues/277), reported by `hadim`, through PR 279 at `93749ddce266103b62a61e78c3b8a6b692a94646`.
