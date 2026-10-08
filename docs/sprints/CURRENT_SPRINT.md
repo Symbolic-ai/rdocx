@@ -25,7 +25,7 @@ the full pinned Word bibliography source, style and locale catalogue.
 | F-278 | General simple and complex field builder | L | done | - |
 | F-279 | Pagination field materialization across stories | L | done | - |
 | F-280 | Captions, sequences, and complete cross-references | M | done | - |
-| F-281 | Indexes and tables of figures and authorities | L | in-progress | codex |
+| F-281 | Indexes and tables of figures and authorities | L | done | - |
 | F-282 | Citations and bibliography authoring | L | pending | - |
 | F-283 | Complete numbering-aware navigation fields | L | pending | - |
 | F-X178 | Clearable direct run formatting setters | S | pending | - |

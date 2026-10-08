@@ -571,6 +571,8 @@ defended.
 
 | F-280 | S90 | M | 2 | 1 | 2026-10-08 | Added atomic caption and cross-reference authoring, shared physical sequences and numbering, bounded note and annotation refresh, clean worker and integration reviews and unchanged49 worker hashes |
 
+| F-281 | S90 | L | 5 | 1 | 2026-10-08 | Added atomic indexes, figures and authority tables, namespace-safe owned caches and one post-insertion snapshot, clean worker and integration reviews and49 unchanged integrated hashes |
+
 ## Velocity
 
 Recalculated at each sprint close. The backlog assumes about 2 stories per week

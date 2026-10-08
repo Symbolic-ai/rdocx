@@ -17715,3 +17715,63 @@ work/f-280-codex through sprint close. Independent frozen pass2 patch is
 b5bcc4cdf8b0f3bdc234c5715e4876d82a4376fd7c3b49039500ee4c1e0a4e91.
 F-281 may consume this completed dependency prefix. Issue264 remains excluded.
 No push, main merge, tag or GitHub closure occurred.
+
+### F-281, Indexes and tables of figures and authorities
+
+**Sprint.** S90
+**Completed.** 2026-10-08
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** Additive checked XE and TA marker authoring and INDEX,
+caption-selected TOC and numbered TOA authoring. Atomic rebuilding supports
+hierarchy, duplicates, ranges, cross-references, chapter context, rich caption
+runs, authority categories and measured passim behavior. Every page reference
+consumes one deterministic post-insertion layout snapshot.
+
+**Non-obvious choices.** INDEX and authority sorting use the measured en-US
+ASCII boundary, retaining unsupported owners with diagnostics. Category None
+inserts populated numbered fields. Source inventory excludes generated caches
+and preserves producer namespaces. Safe aliases rebuild. Conflicting-prefix
+serialization requests fail atomically through the existing checked boundary.
+Simple cache expansion closes local namespaces before staged validation. Empty
+simple owners materialize, while locked and unsupported owners remain exact.
+
+**Deviations from the design plan.** Approved existing-file riders extend shared
+operand grammar, capability ownership and measured archive footprints.
+Integration removes duplicate unchanged plan prose and retains canonical
+exclusive-resource wording. No semantic source reconciliation or new production
+file, module, trait, generic or dependency.
+
+**Spec sections touched.** Exactly six approved HLD files, 02 DOCX-048,
+03 generated-table ownership, 04 atomic preservation, 08 page snapshots,
+10 additive facade and namespace refusal, and 12 native evidence.
+
+**Tests.** generated_tables_match_pinned_word_after_source_mutation passes on
+the integrated tree. Three new namespace and empty-owner regressions and the
+native gate each fail an actual compiled reversion with exit101, then pass
+exact restoration with exit0. Scoped worker tests pass500 facade units,360 XML
+units,861 regressions,628 XML integrations and three doctests. Warnings-denied
+lint and documentation, format, README, public API, prose,26 adapters and140
+policy cases pass, with two documented skips. Verified dry-run archives compile
+without upload. Authoritative footprints are rdocx1513409 compressed bytes,
+8382821 member bytes,36 members and rdocx-oxml441312 bytes,2752259 member bytes,
+32 members. Both remain below10MiB.
+
+Native initial and mutated index, figure and authority cases preserve exact
+source instructions. Chapter ranges measure2-1 to11-3 and3-1 to12-3. Sixteen
+category headings are authenticated. Three actual no-F9 reopen controls preserve
+qualified rich caches. All15 PDF pages have equal text, fonts, geometry and
+decoded96dpi pixels. This does not claim general Unicode sorting or Rust raster
+parity. Worker microscope pass2 and integration pass1 report zero findings.
+
+**Hash harness.** Unchanged, all49 worker and integrated entries match. Reviewed
+source and HLD files are byte-identical after integration. Full integrated
+sprint verification, union riders and sprint review remain due after F-282
+and F-283.
+
+**Notes for future sessions.** Feature d96b7922ba97 precedes handoff-only
+ed323116f9ab. Integration2e26a9b9 consumes the handoff. Retain work/f-281-codex
+through sprint close. Freeze2 diff a308cf94da2e and clean microscope bc8ef8f08288
+bind32 scoped receipts. Integration review7a8418d292fe confirms mechanical
+plan reconciliation. F-282 may consume this completed shared-file prefix.
+Issue264 remains excluded. No push, main merge, tag or GitHub closure occurred.
