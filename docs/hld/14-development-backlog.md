@@ -6603,6 +6603,26 @@ Resolve every criterion of [Issue 285](https://github.com/tensorbee/rdocx/issues
 **Depends on**: none.
 **Test gate**: regression. `scoped_text_replacement_preserves_unselected_content` proves the reported failure before implementation and exact successful or refused behavior after save and reopen. Existing Rust, Python, typing and CLI entrypoints cover the complete issue criteria, with unrelated package members and opaque XML preserved. All 49 hash entries remain unchanged. Record reporter provenance and full acceptance for sprint close.
 
+### F-X190, Preserve cached text in multi-run complex field story snapshots (M)
+
+Resolve [Issue291](https://github.com/tensorbee/rdocx/issues/291), reported by
+Hadrien Mary (`hadim`) and contributed through
+[PR287](https://github.com/tensorbee/rdocx/pull/287), semantic commit
+`65365c4b2de49956f73c09bb326190e336db9bc8`. Bulk story snapshots and Python
+StoryItem.text expose the stored result of a complex field spanning sibling
+runs, matching existing direct story reads. Preserve one namespace context,
+valid nested field and link coordinates, source XML, locations, ordering and
+read-only revisions. No new public snapshot API. Run exclusively after
+F-X188 and before F-282 resumes. Issue281 remains open for F-184 and Issue264
+remains excluded.
+**Depends on**: none.
+**Test gate**: regression. `complex_field_story_snapshots_preserve_cached_text`
+fails on the exact claimed Base through existing APIs, then passes actual
+native and rebuilt Python controls across supported owners, nested fields,
+links, aliases, namespace shadows and retained source bytes. All49 hash
+entries remain unchanged. Record contributor provenance and full acceptance
+before sprint close.
+
 ### F-X189, Prepare Word 0.16.0 and PowerPoint 0.14.0 families (L)
 
 Prepare the exact seven-package Word family and Python distribution at 0.16.0,
@@ -6618,7 +6638,7 @@ open roadmap disposition. Require current local package and binding evidence,
 then the final reviewed sprint's hosted build-only rehearsal before close.
 Publication follows sprint close through separate exact-SHA approvals under
 `/release`, shared family first where the Word dependency graph requires it.
-**Depends on**: F-278, F-279, F-280, F-281, F-282, F-283, F-X179, F-X180, F-X181, F-X182, F-X183, F-X184, F-X185, F-X186, F-X187, F-X188.
+**Depends on**: F-278, F-279, F-280, F-281, F-282, F-283, F-X179, F-X180, F-X181, F-X182, F-X183, F-X184, F-X185, F-X186, F-X187, F-X188, F-X190.
 **Test gate**: release regression. `s90_release_families_match_reviewed_versions`
 in the existing workflow test module checks both exact family allowlists,
 version carriers and rendered notes. Actual22-package patched publication dry

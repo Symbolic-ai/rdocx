@@ -3,7 +3,7 @@
 **Status**: approved
 **Sprint**: S90
 **Size**: L
-**Depends on**: F-278, F-279, F-280, F-281, F-282, F-283, F-X179, F-X180, F-X181, F-X182, F-X183, F-X184, F-X185, F-X186, F-X187, F-X188
+**Depends on**: F-278, F-279, F-280, F-281, F-282, F-283, F-X179, F-X180, F-X181, F-X182, F-X183, F-X184, F-X185, F-X186, F-X187, F-X188, F-X190
 
 ## Problem
 
@@ -32,7 +32,7 @@ This approval does not replace either family's final publication approval.
 Design uses the run-sprint batch route. No unanswered scope question remains,
 but unfinished prerequisites still block implementation. Complete every
 listed dependency through its approved lifecycle before claiming exclusive
-wave16. In particular full-catalogue F-282 and dependent F-283 stay in scope.
+wave17. In particular full-catalogue F-282 and dependent F-283 stay in scope.
 Reviewed X180, X181 and X183 require dependency-prefix delivery reconciliation
 before this consumer starts. Source, Cargo, manifests, README measurements and
 HLD edits remain exclusive. The local preparation is completed before final
@@ -168,7 +168,7 @@ Version preparation must not change rendering or replace the baseline.
 ## Implementation checklist
 
 - [x] Confirm old tags/releases and obtain approval for both new versions and workflow records.
-- [ ] Complete every formal prerequisite and claim exclusive wave16.
+- [ ] Complete every formal prerequisite and claim exclusive wave17.
 - [ ] Capture genuine new-version contract failure against the immutable Base.
 - [ ] Update exact carriers, pins, notes, policy, inventories and listed HLD files.
 - [ ] Pass scoped package/binding/typing checks and independent microscope, then prepare and integrate.

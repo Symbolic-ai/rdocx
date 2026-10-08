@@ -2005,6 +2005,7 @@ citations, and numbering-aware navigation.
 | F-X186 | Move comment anchors without losing threads | M |
 | F-X187 | Scoped paragraph and cell text replacement | M |
 | F-X188 | Preserve comment ownership when replacing or removing whole stories | L |
+| F-X190 | Preserve cached text in multi-run complex field story snapshots | M |
 | F-X189 | Prepare Word 0.16.0 and PowerPoint 0.14.0 families | L |
 
 F-278 is the field substrate. F-279 uses the S89 note policy, and F-280 uses
@@ -2082,8 +2083,8 @@ excluded.
 Issue292 is included in F-X188 with documented comment omission from
 building-block transfers and physical glossary/main owner isolation.
 The user corrected the exclusion to Issue281, which remains open for F-184.
-Issue291 is included and requires its own planned, verified multi-run field
-snapshot correction after F-X188 and before F-282 resumes. Issue264 remains
+Issue291 is included through F-X190, whose planned, verified multi-run field
+snapshot correction runs in exclusive wave16 after F-X188 and before F-282 resumes. Issue264 remains
 excluded. Assess updated stacked contributions selectively against complete
 issue acceptance before merging or closing any record.
 
@@ -2093,7 +2094,7 @@ glossary and shared-reference ownership work. Issue289 is part of F-X185.
 
 The user approved F-X189 for new Word0.16.0 and shared/PowerPoint0.14.0
 release preparation. Existing unified versions are published at S88 and their
-tags remain immutable. Run exclusive wave16 only after all included S90
+tags remain immutable. Run exclusive wave17 only after all included S90
 implementation dependencies complete, including full-catalogue F-282 and
 F-283. Prepare exact carriers, reviewed family notes and authenticated
 contribution inventories over each complete previous-tag range, including

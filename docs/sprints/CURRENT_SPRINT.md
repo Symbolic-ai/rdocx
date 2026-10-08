@@ -39,6 +39,7 @@ the full pinned Word bibliography source, style and locale catalogue.
 | F-X186 | Move comment anchors without losing threads | M | done | - |
 | F-X187 | Scoped paragraph and cell text replacement | M | done | - |
 | F-X188 | Preserve comment ownership when replacing or removing whole stories | L | in-progress | codex |
+| F-X190 | Preserve cached text in multi-run complex field story snapshots | M | pending | - |
 | F-X189 | Prepare Word 0.16.0 and PowerPoint 0.14.0 families | L | pending | - |
 
 ## Sequencing note
@@ -143,7 +144,7 @@ retaining completed F-X184 protections. Issue289 is part of F-X185 acceptance.
 
 The user approved F-X189 to prepare Word0.16.0 and shared/PowerPoint0.14.0
 after every included implementation story completes. Both prior unified
-versions are already published at S88. Exclusive wave16 prepares exact
+versions are already published at S88. Exclusive wave17 prepares exact
 carriers, reviewed family notes, contributor credit and fresh package/binding
 evidence. The final reviewed sprint SHA must pass the hosted build-only
 rehearsal before close. Publication follows close through separate final
@@ -157,7 +158,7 @@ PR290 and updated PR287 are assessed contributions, not automatic acceptance.
 The user corrected the exclusion: Issue [281](https://github.com/tensorbee/rdocx/issues/281)
 remains open for F-184, while Issue [291](https://github.com/tensorbee/rdocx/issues/291)
 is included. Plan and verify its multi-run complex-field snapshot correction
-separately after F-X188 and before resuming F-282. Updated PR287 and PR290
+through F-X190 in exclusive wave16 after F-X188 and before resuming F-282. Updated PR287 and PR290
 stacks require selective acceptance against each issue. Issue264 remains
 excluded. All source, Cargo and shared test execution remains exclusive.
 
