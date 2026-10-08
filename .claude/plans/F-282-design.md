@@ -451,6 +451,23 @@ style-specific collection substitutions. Remaining styles and source kinds
 need their own evidence before these bounded rules become implementation
 contracts. Full catalogue scope and the differential gate remain unchanged.
 
+The APA en-US full bibliography ElectronicSource entry has one independently
+classified pagination difference from its selected-entry control. The bound
+full owner 161, cache node 8, contains a lastRenderedPageBreak between
+"United " and "Kingdom", at the actual PDF boundary from page 18 to page 19.
+The selected entry has no boundary there. Classification SHA256
+72f97c3d1a77aafe60335420e6154a2571814927301ca07aa880bcf8c6dd0222 in
+/private/tmp/S90-F282-APA6-ElectronicSource-pageboundary-classification retains
+both raw run arrays, xml:space allocation and paragraph properties. Text and
+characterwise run properties are equal. Only this identified comparison may
+remove that producer page-cache marker and join the two adjacent text runs
+with identical run properties. Retain exact text, including spaces, and the
+original four-run record beside the three-run projection. Do not apply general
+run coalescing or ignore other page markers. First-entry paragraph sz=24 and
+szCs=24 versus their absence on the interior full entry are real context
+formatting and must be asserted separately. Preserve imported cache XML until
+an explicit update. Do not synthesize Word pagination markers in the formatter.
+
 ## Concrete collation dependency rider
 
 The full bibliography catalogue uses the concrete ICU4X collator candidate in
