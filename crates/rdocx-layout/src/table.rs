@@ -484,10 +484,6 @@ fn layout_table_inner(
         .properties
         .as_ref()
         .is_some_and(|properties| properties.width.is_some());
-    let direct_alignment = tbl
-        .properties
-        .as_ref()
-        .is_some_and(|properties| properties.jc.is_some());
     let mut resolved_table = tbl.clone();
     let mut resolved_properties = resolve_base_table_properties(tbl, styles);
     // The authored width type, captured before the direct width is dropped
@@ -500,9 +496,6 @@ fn layout_table_inner(
         .map(|width| width.width_type.clone());
     if direct_width {
         resolved_properties.width = None;
-    }
-    if direct_alignment {
-        resolved_properties.jc = None;
     }
     resolved_table.properties = Some(resolved_properties);
     let tbl = &resolved_table;

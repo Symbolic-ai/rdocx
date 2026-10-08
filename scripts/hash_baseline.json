@@ -14,9 +14,9 @@
     "feature_showcase:word/document.xml": "7a985fd34f69576f4876e75e9f541b000a0c320c85fd74941667f1f95f87b51c",
     "feature_showcase:word/numbering.xml": "59283ab7d3fbd70ab110b2c9aa4b9f7f41443ef7c24bc6db3c248ee908e44232",
     "feature_showcase:word/styles.xml": "36e2057c493e6695e41dc5b96a369c72a31bc1f271f6bbafdd58899352450033",
-    "invoice:page1.png": "f5334e4efb5a9f96f5348c2a7d408a559864afb6dfcdf1f9581e2fb8e6bc0ba4",
-    "invoice:pdf/bytes": "ba0a9e275a53ab2b8dee07832e1f08319fc4c923017dd4530bbcbb3df92a46a0",
-    "invoice:pdf/pages": "69839fcfa3cecee4cbe1d0c9283b7d632ed2d29475d0f795c072d48e6d58cbf5",
+    "invoice:page1.png": "1a765f625f54d084b21f958b84071eb37a1e22eab620bec54decb81947f591e6",
+    "invoice:pdf/bytes": "eda63c61b40a27609519c2421303fb05ca5753b2b28cd9270d521c53faa006e0",
+    "invoice:pdf/pages": "36e3ec3a9b845ac601bab6f48b02780e2eb021841dff39d589b29aaea4a22a29",
     "invoice:pdf/resources": "e48c1d7946b7e918931371e483bf48de7906358fd60213be521d49df2b83773c",
     "invoice:word/document.xml": "654a17c8e9166e33f4b22409a8d64445566595eed998a18840c17bae234dd185",
     "invoice:word/numbering.xml": null,
@@ -36,8 +36,8 @@
     "proposal:word/numbering.xml": "1ec13ec49ac3cc11e53bfdf30d2e3c837190ef17d1094bb4a9ed116d8ba00b1d",
     "proposal:word/styles.xml": "c7e6e22b5bd3820ba828b1a78927f115d1583cc8e53017dcdbe708d23ad0a90d",
     "quote:page1.png": "f9ee8fb9532ebc866410971e4d6ea5af35d3b6b2b178745b71feab88919ba5ab",
-    "quote:pdf/bytes": "016b8e3142bc5ed37b606b0ace06b4c4986eafcb898739562887540250a3b4a3",
-    "quote:pdf/pages": "69a3c5605dbcccc081419a22ff2969070d6082c9a332863deb5364cc2b73e3d8",
+    "quote:pdf/bytes": "6affff6a90f4145d03529d2e34b43a910bfee379947b5a418ffb878360a87664",
+    "quote:pdf/pages": "200f174f2578eef6a6da477c506f7bb80a80f06a2865d5392341d60e00f4e903",
     "quote:pdf/resources": "7e9626233181d07e8d0bfa3c302f6a457133de1e9b5a124ae0e0d53ed7dbe03d",
     "quote:word/document.xml": "382207c4225018c30e97419f6c515f3548d484a48ecb359339e91aeb765e9778",
     "quote:word/numbering.xml": "7b1d7268c595b24ecd1ba22f9f48ed10266219a32f32058dfd45c0fcb204bb92",
@@ -50,5 +50,5 @@
     "report:word/numbering.xml": "59283ab7d3fbd70ab110b2c9aa4b9f7f41443ef7c24bc6db3c248ee908e44232",
     "report:word/styles.xml": "49687b10d19688bf634d4967a488eca42eec85ee54c4730af334e5fb1107a7f4"
   },
-  "reason": "F-X163: plain U+0020 line-end spaces hang, changing seven PDF outputs and contract and invoice PNGs"
+  "reason": "F-X182: direct table alignment is applied. Invoice and quote totals tables move right by 36 pt, changing exactly invoice page-one PNG and invoice/quote PDF page-content and byte entries. Source XML, PDF resources and all other entries are unchanged."
 }

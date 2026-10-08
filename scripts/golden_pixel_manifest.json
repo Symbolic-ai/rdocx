@@ -4,7 +4,7 @@
     "command": "pdftoppm",
     "version": "pdftoppm version 26.01.0"
   },
-  "reason": "F-X163: contract and invoice plain-line hanging spaces change reviewed deterministic pixels",
+  "reason": "F-X182: invoice totals table moves right by 36 pt after applying direct table alignment. Only invoice decoded pixels change, within the reviewed totals-table region at 150 DPI.",
   "samples": {
     "contract": {
       "height": 1650,
@@ -18,7 +18,7 @@
     },
     "invoice": {
       "height": 1650,
-      "rgba_sha256": "3c615dc63e5ca969418b75d99addd4a5742a3c8d7dcc85560619956c337fe4fa",
+      "rgba_sha256": "4e6e4ab7fbbbb040629853b853cc0a9a4ac78d49fedcc97538cbe98ca1314337",
       "width": 1275
     },
     "letter": {

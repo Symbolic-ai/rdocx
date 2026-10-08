@@ -1,6 +1,6 @@
 # F-X182, Honor direct table alignment
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S90
 **Size**: M
 **Depends on**: none
@@ -54,12 +54,12 @@ This story owns baseline movement only in its exclusive wave. No unexplained out
 
 ## Implementation checklist
 
-- [ ] Authenticate full reported native controls and their source child order.
-- [ ] Prove the focused gate fails before implementation.
-- [ ] Implement every reported variant without disturbing controls.
-- [ ] Attribute and review exact deterministic hash deltas before recording.
-- [ ] Pass scoped verification, risk riders and zero-finding microscope.
-- [ ] Update HLD, handoff and delivery records at the appropriate checkpoint.
+- [x] Authenticate full reported native controls and their source child order.
+- [x] Prove the focused gate fails before implementation.
+- [x] Implement every reported variant without disturbing controls.
+- [x] Attribute and review exact deterministic hash deltas before recording.
+- [x] Pass scoped verification, risk riders and zero-finding microscope.
+- [x] Update HLD, handoff and delivery records at the appropriate checkpoint.
 
 ## Open questions
 

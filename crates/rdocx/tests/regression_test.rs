@@ -56399,3 +56399,270 @@ fn body_breaks_keep_pagination_and_line_transitions_outside_table_cells() {
         }
     }
 }
+
+/// The x of each text run on the first page of a table of two 72 pt columns
+/// that follows a paragraph, with the table's own alignment when given.
+fn aligned_table_text_x(alignment: Option<Alignment>) -> Vec<(String, f64)> {
+    let mut document = Document::new();
+    document.add_paragraph("Margin");
+    {
+        let mut table = document.add_table(1, 2);
+        table
+            .set_grid_widths(&[Length::pt(72.0), Length::pt(72.0)])
+            .unwrap();
+        table.set_width(Length::pt(144.0));
+        table.set_layout_fixed();
+        if let Some(alignment) = alignment {
+            table.set_alignment(alignment);
+        }
+        table.cell(0, 0).expect("left cell").set_text("Left");
+        table.cell(0, 1).expect("right cell").set_text("Right");
+    }
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let result = reopened.layout_deterministic().unwrap();
+    let mut runs = Vec::new();
+    oxml_layout::walk(&result.layout.pages[0].elements, &mut |element, _| {
+        if let oxml_layout::PositionedElement::Text(run) = element {
+            runs.push((run.text.clone(), run.origin.x));
+        }
+    });
+    runs
+}
+
+#[test]
+fn a_tables_own_alignment_places_it() {
+    // Word 16.111 places a table by its own `w:jc` as it does by its style's.
+    let x = |alignment: Option<Alignment>, text: &str| {
+        let runs = aligned_table_text_x(alignment);
+        runs.iter()
+            .find(|(run, _)| run == text)
+            .unwrap_or_else(|| panic!("{text} missing from {runs:?}"))
+            .1
+    };
+    let margin = x(None, "Margin");
+    let left = x(None, "Left");
+    let free = 468.0 - 144.0;
+    assert_eq!(x(Some(Alignment::Left), "Left"), left);
+    assert_eq!(
+        x(Some(Alignment::Center), "Left") - margin,
+        left - margin + free / 2.0
+    );
+    assert_eq!(
+        x(Some(Alignment::Right), "Left") - margin,
+        left - margin + free
+    );
+}
+
+#[test]
+fn direct_table_alignment_overrides_style_and_reopens() {
+    // Authenticated Word16.113.2/build16.113.26092012 indices: minimal37eef91c,
+    // official Grid178761ce. Both direct/style conflicts move to direct jc.
+    // Compare own-control offsets with bundled Caladea, not absolute Arial ink.
+    // Legacy compatibility offsets and RTL logical-side changes belong to F-X183.
+    const ORACLE: &str = "Word16.113.2 build16.113.26092012";
+    const NATIVE_INDEX: &str = "178761cef0306259d178d32078f1b2044b4bad0e4757ab999202f768f2e84131";
+    fn paragraph(text: &str) -> String {
+        format!(
+            r#"<w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Caladea" w:hAnsi="Caladea"/><w:sz w:val="24"/></w:rPr><w:t>{text}</w:t></w:r></w:p>"#
+        )
+    }
+    fn target(alignment: Option<&str>, rtl: bool, indent: bool, wide_margin: bool) -> String {
+        let jc = alignment
+            .map(|jc| format!(r#"<w:jc w:val="{jc}"/>"#))
+            .unwrap_or_default();
+        format!(
+            r#"<w:tbl><w:tblPr><w:tblStyle w:val="AlignmentStyle"/>{}<w:tblW w:w="2880" w:type="dxa"/>{jc}<w:tblInd w:w="{}" w:type="dxa"/><w:tblBorders><w:top w:val="single" w:sz="4" w:color="0000FF"/><w:left w:val="single" w:sz="4" w:color="0000FF"/><w:bottom w:val="single" w:sz="4" w:color="0000FF"/><w:right w:val="single" w:sz="4" w:color="0000FF"/><w:insideV w:val="single" w:sz="4" w:color="0000FF"/></w:tblBorders><w:shd w:val="clear" w:fill="EAF0FE"/><w:tblLayout w:type="fixed"/><w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="{}" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/><w:right w:w="108" w:type="dxa"/></w:tblCellMar></w:tblPr><w:tblGrid><w:gridCol w:w="1440"/><w:gridCol w:w="1440"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcW w:w="1440" w:type="dxa"/><w:shd w:val="clear" w:fill="EAF0FE"/></w:tcPr>{}</w:tc><w:tc><w:tcPr><w:tcW w:w="1440" w:type="dxa"/><w:shd w:val="clear" w:fill="EAF0FE"/></w:tcPr>{}</w:tc></w:tr></w:tbl>"#,
+            if rtl { "<w:bidiVisual/>" } else { "" },
+            if indent { 720 } else { 0 },
+            if wide_margin { 288 } else { 108 },
+            paragraph("Left"),
+            paragraph("Right")
+        )
+    }
+    let render = |direct: Option<&str>,
+                  style: Option<&str>,
+                  nested: bool,
+                  rtl: bool,
+                  indent: bool,
+                  wide_margin: bool,
+                  mode: &str| {
+        let table = target(direct, rtl, indent, wide_margin);
+        let block = if nested {
+            format!(
+                r#"<w:tbl><w:tblPr><w:tblW w:w="7200" w:type="dxa"/><w:tblLayout w:type="fixed"/><w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="108" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/><w:right w:w="108" w:type="dxa"/></w:tblCellMar></w:tblPr><w:tblGrid><w:gridCol w:w="7200"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcW w:w="7200" w:type="dxa"/></w:tcPr>{table}{}</w:tc></w:tr></w:tbl>"#,
+                paragraph("")
+            )
+        } else {
+            table.clone()
+        };
+        let body = format!(
+            r#"{}{}{}<x:retained xmlns:x="urn:alignment-retained" x:value="unchanged"/><w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>"#,
+            paragraph("Margin"),
+            block,
+            paragraph("After")
+        );
+        let style_jc = style
+            .map(|jc| format!(r#"<w:jc w:val="{jc}"/>"#))
+            .unwrap_or_default();
+        let styles = format!(
+            r#"<w:style w:type="table" w:styleId="AlignmentStyle"><w:name w:val="Alignment Style"/><w:tblPr>{style_jc}</w:tblPr></w:style>"#
+        );
+        let mut document = document_with_producer_styles(&body, &styles);
+        let compat = match mode {
+            "absent-compat" => String::new(),
+            "absent-mode" => "<w:compat/>".to_owned(),
+            _ => format!(
+                r#"<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="{mode}"/></w:compat>"#
+            ),
+        };
+        let settings = format!(
+            r#"<w:settings xmlns:w="{W_NS}" xmlns:x="urn:alignment-settings">{compat}<x:keep x:value="exact"/></w:settings>"#
+        );
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+                .unwrap();
+        package.set_part("/word/settings.xml", settings.as_bytes().to_vec());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+        let source = document.to_bytes().unwrap();
+        let snapshot = |document: &Document| {
+            let layout = document.layout_deterministic().unwrap();
+            assert_eq!(layout.layout.pages.len(), 1, "{ORACLE}, {NATIVE_INDEX}");
+            let mut text = Vec::new();
+            let mut borders = Vec::new();
+            let mut fills = Vec::new();
+            oxml_layout::walk(
+                &layout.layout.pages[0].elements,
+                &mut |element, _| match element {
+                    oxml_layout::PositionedElement::Text(run) => {
+                        text.push((run.text.clone(), run.origin.x, run.origin.y))
+                    }
+                    oxml_layout::PositionedElement::Line {
+                        start, end, width, ..
+                    } => borders.push((start.x, start.y, end.x, end.y, *width)),
+                    oxml_layout::PositionedElement::FilledRect { rect, .. } => {
+                        fills.push((rect.x, rect.y, rect.width, rect.height))
+                    }
+                    _ => {}
+                },
+            );
+            assert!(!borders.is_empty());
+            assert!(!fills.is_empty());
+            (
+                text,
+                borders,
+                fills,
+                layout.body_layout_fragments(1).unwrap()[0].height,
+            )
+        };
+        let before = snapshot(&document);
+        assert_eq!(document.to_bytes().unwrap(), source);
+        document.add_paragraph("Unrelated");
+        let saved = document.to_bytes().unwrap();
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+        let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        assert!(
+            xml.contains(&table),
+            "authored alignment/margins/indent/nested table changed"
+        );
+        assert!(xml.contains("x:value=\"unchanged\""));
+        assert_eq!(
+            package.get_part("/word/settings.xml").unwrap(),
+            settings.as_bytes()
+        );
+        let reopened = Document::from_bytes(&saved).unwrap();
+        let after = snapshot(&reopened);
+        assert_eq!(
+            before.0,
+            after
+                .0
+                .iter()
+                .filter(|(t, _, _)| t != "Unrelated")
+                .cloned()
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(before.1, after.1);
+        assert_eq!(before.2, after.2);
+        assert_eq!(before.3, after.3);
+        before
+    };
+    let near = |actual: f64, expected: f64| {
+        assert!((actual - expected).abs() < 1e-9, "{actual} != {expected}")
+    };
+    for nested in [false, true] {
+        let free = if nested {
+            360.0 - 10.8 - 144.0
+        } else {
+            468.0 - 144.0
+        };
+        for rtl in [false, true] {
+            for mode in ["15", "14", "12", "absent-mode", "absent-compat"] {
+                let plain = render(None, None, nested, rtl, false, false, mode);
+                for style in [None, Some("left"), Some("center"), Some("right")] {
+                    for direct in [
+                        None,
+                        Some("left"),
+                        Some("center"),
+                        Some("right"),
+                        Some("start"),
+                        Some("end"),
+                    ] {
+                        let result = render(direct, style, nested, rtl, false, false, mode);
+                        let expected = match direct.or(style) {
+                            Some("center") => free / 2.0,
+                            Some("right" | "end") => free,
+                            _ => 0.0,
+                        };
+                        let position = |text: &[(String, f64, f64)], name: &str| {
+                            text.iter().find(|(t, _, _)| t == name).unwrap().clone()
+                        };
+                        for name in ["Left", "Right"] {
+                            let actual = position(&result.0, name);
+                            let base = position(&plain.0, name);
+                            near(actual.1 - base.1, expected);
+                            assert_eq!(actual.2, base.2);
+                        }
+                        assert_eq!(position(&result.0, "Margin"), position(&plain.0, "Margin"));
+                        assert_eq!(position(&result.0, "After"), position(&plain.0, "After"));
+                        assert_eq!(result.3, plain.3);
+                        assert_eq!(result.1.len(), plain.1.len());
+                        for (actual, base) in result.1.iter().zip(&plain.1) {
+                            near(actual.0 - base.0, expected);
+                            near(actual.2 - base.2, expected);
+                            assert_eq!((actual.1, actual.3, actual.4), (base.1, base.3, base.4));
+                        }
+                        for (actual, base) in result.2.iter().zip(&plain.2) {
+                            near(actual.0 - base.0, expected);
+                            assert_eq!((actual.1, actual.2, actual.3), (base.1, base.2, base.3));
+                        }
+                        let first = position(&result.0, "Left");
+                        let second = position(&result.0, "Right");
+                        near(first.1 - second.1, if rtl { 72.0 } else { -72.0 });
+                    }
+                }
+            }
+        }
+    }
+    // Existing indent precedence: left/start use authored indent, center/right
+    // use free width. A margin change moves cell text but not the border origin.
+    let plain = render(None, None, false, false, false, false, "15");
+    for jc in ["left", "start", "center", "right", "end"] {
+        let result = render(Some(jc), Some("right"), false, false, true, true, "15");
+        let shift = match jc {
+            "center" => 162.0,
+            "right" | "end" => 324.0,
+            _ => 36.0,
+        };
+        for name in ["Left", "Right"] {
+            let x =
+                |text: &[(String, f64, f64)]| text.iter().find(|(t, _, _)| t == name).unwrap().1;
+            near(x(&result.0) - x(&plain.0), shift + 9.0);
+        }
+        for (actual, base) in result.1.iter().zip(&plain.1) {
+            near(actual.0 - base.0, shift);
+            near(actual.2 - base.2, shift);
+        }
+        assert_eq!(result.3, plain.3);
+    }
+}

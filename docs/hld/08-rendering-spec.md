@@ -978,8 +978,11 @@ unrelated table or document edit must not normalize producer XML.
 
 A table without an explicit style uses the authored default table style.
 Its modeled base width, alignment, indent, borders, shading, look, and cell
-margins resolve base-first before direct table and cell overlays. Existing
-direct width and alignment behavior remains unchanged.
+margins resolve base-first before direct table and cell overlays. Direct
+`w:jc` left, center, right, start and end values override style alignment.
+Center uses half the free width, and right or end uses the full free width.
+Other values retain the authored left indent. Direct width behavior remains
+unchanged.
 The direct table facade can author auto, fixed, and percentage width modes,
 left indentation, fixed or autofit layout, shading, aggregate or individual
 borders, default cell margins, conditional look flags, and the complete active
