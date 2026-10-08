@@ -521,6 +521,50 @@ Do not broaden this into general coalescing, marker ignoring, formatter marker
 synthesis or a claim of Rust pagination parity. Imported caches remain intact
 until explicit update. Full catalogue and rendering gates remain due.
 
+The exhaustive original APA223 full-bibliography scan binds a finite registry
+of seventeen adjacent equal-property page splits. It includes the two cases
+above and the additional measured entries below. Registry index SHA256
+137cbb3844944b518968aca0f4c7d9671030d9a0aa2c426eec5114745ae4e156 and
+raw registry SHA256
+27c33a3d3dcee2b13e8fa36555cc7e8033c4ae5e9a62828f994e4f596b44dca7 in
+/private/tmp/S90-F282-APA6-full223-pagebreak-marker-registry retain actual
+source tags, owner and body paths, exact raw run properties, attributes,
+xml:space and PDF anchors. All seventeen have an independently verified actual
+page transition, identical adjacent run properties and attributes, and the
+specific child shapes [rPr,t] and [rPr,lastRenderedPageBreak,t].
+
+| Numeric locale | Full owner | Source tag | Body block | Actual PDF pages |
+|---|---|---|---|---|
+| 1033 | 161 | F282K15 | 341 | 18 to 19 |
+| 1058 | 611 | F282K03 | 1310 | 70 to 71 |
+| 1063 | 701 | F282K15 | 1511 | 81 to 82 |
+| 1071 | 845 | F282K15 | 1823 | 98 to 99 |
+| 1076 | 935 | F282K03 | 2012 | 108 to 109 |
+| 1079 | 989 | F282K17 | 2136 | 115 to 116 |
+| 1099 | 1349 | F282K15 | 2915 | 161 to 162 |
+| 1100 | 1367 | F282K12 | 2960 | 164 to 165 |
+| 1101 | 1385 | F282K17 | 2994 | 166 to 167 |
+| 1113 | 1601 | F282K03 | 3455 | 194 to 195 |
+| 1115 | 1637 | F282K15 | 3539 | 199 to 200 |
+| 1118 | 1691 | F282K03 | 3650 | 205 to 206 |
+| 1143 | 2087 | F282K15 | 4514 | 252 to 253 |
+| 2115 | 2501 | F282K15 | 5411 | 301 to 302 |
+| 2128 | 2555 | F282K15 | 5528 | 308 to 309 |
+| 2163 | 2681 | F282K15 | 5801 | 324 to 325 |
+| 20490 | 3959 | F282K03 | 8564 | 473 to 474 |
+
+Only these registry-bound comparisons may remove the identified page-cache
+marker and join those two adjacent runs after checking their exact raw shape.
+Keep immutable raw arrays beside each comparison projection, preserve exact
+spaces and assert actual paragraph context separately. This is a finite
+extension of the two qualified comparisons above. The other 316 markers,
+including 17 empty owned paragraphs, acquire no new qualification. The 75
+original long-window PDF nonmatches remain explicit, with separate exact short
+source-context anchors supplying proof only for four identified split cases.
+Do not apply a global marker or coalescing rule, infer locale aliases, alter
+imported caches, synthesize formatter markers or claim Rust pagination parity.
+No new runtime file, type, dependency or fixture binary is needed.
+
 ## Concrete collation dependency rider
 
 The full bibliography catalogue uses the concrete ICU4X collator candidate in
