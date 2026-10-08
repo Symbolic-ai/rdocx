@@ -164,6 +164,7 @@ pub struct BibliographySourceInfo {
     pub guid: Option<String>,
     pub source_type: Option<String>,
     pub supported: Option<BibliographySource>,
+    pub diagnostics: Vec<String>,
 }
 pub struct BibliographyUpdateReport {
     pub updated_citations: usize,
@@ -226,6 +227,8 @@ Select the bibliography Sources root by expanded namespace name through the actu
 A bibliography part has application/xml content type and an internal customXml source relationship. Resolve its existing item-properties relationship when present and preserve its ds:itemID, schema references and extensions. Creation allocates collision-free item and properties names, relationship IDs, and store identity. Add all necessary content-type and relationship edges transactionally. Reject multiple candidate bibliography collections, malformed targets, unexpected edge types, external datastore edges or conflicting identities before publication. Do not fetch external targets or assume customXml/item1.xml.
 
 Authored tags and GUIDs are validated and unique in the collection. Caller GUIDs are explicit so source-built oracle identifiers can be compared exactly. Replace identifies by tag, retains existing GUID and rejects an identity change. Preserve unsupported source records and all unowned XML. Parsing is namespace-qualified and prefix-tolerant. Writing uses fixed prefixes for new XML with schema-valid child particles.
+
+Imported locale spelling is preserved independently of the numeric facade projection. A valid lexical language tag such as es-ES can map to both documented LCIDs 1034 and 3082. Do not choose the first table row or invent a numeric identity. When no independently grounded unique mapping exists, BibliographySourceInfo.supported is None and its diagnostics names the non-lossless locale projection. Internal formatting still supports the lexical locale and must never use unsupported-cache fallback for this projection limitation. Preserve the source XML exactly and reject an ambiguous typed source replacement atomically. Tests distinguish explicit 1034, explicit 3082 and imported es-ES, prove byte-preserving inspection and fail-closed mutation, and retain full formatter coverage. The added diagnostics field is additive public API and earns existing README, public API and packaging checks.
 
 An owned existing source mutation replaces only selected modeled property spans. Retain original unknown root attributes, namespace declarations, style settings, locale data, nonstandard source types, producer contributor extensions, unknown child subtrees and unrelated custom XML bytes. Metadata inside a replaced standard simple-text property is not silently discarded, such input is rejected as an ambiguous owned property. A no-op operation preserves package bytes.
 
