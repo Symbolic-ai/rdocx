@@ -310,6 +310,16 @@ locale spelling, omitted and zero XML under the approved facade contract.
 Do not infer application-default context from proofing language or equal
 display text. Test reference-order metadata against the captured document
 encounter order and preserve all unrelated source members during owned writes.
+Explicit cache materialization computes reference numbers from measured citation
+encounter order and preserves imported raw RefOrder XML, including repeated
+members. Word's derived RefOrder rewrites are recorded as producer differences,
+like its LCID normalization. They do not authorize incidental source mutation.
+Source authoring changes only caller-selected modeled property spans under the
+transactional mutation contract. Test effective cache numbering against native
+results separately from byte-preserving source metadata. The bounded IEEE
+explicit RefOrder9/3 pair at authenticated index
+2730d4327e2ad39e9414a2f3b2c1e070c49a7c8b096b2b5c5ed4c8c19fd57187
+confirms first-encounter cache assignment while exposing that producer rewrite.
 
 Embed the authenticated block, association, ordering and locale records in
 the existing regression entrypoint. The IEEE baseline saved DOCX fingerprint
