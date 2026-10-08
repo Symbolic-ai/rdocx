@@ -228,6 +228,20 @@ A bibliography part has application/xml content type and an internal customXml s
 
 Authored tags and GUIDs are validated and unique in the collection. Caller GUIDs are explicit so source-built oracle identifiers can be compared exactly. Replace identifies by tag, retains existing GUID and rejects an identity change. Preserve unsupported source records and all unowned XML. Parsing is namespace-qualified and prefix-tolerant. Writing uses fixed prefixes for new XML with schema-valid child particles.
 
+The user explicitly selected equivalent XML semantics over Word's measured
+prefix-sensitive APA behavior. Identical expanded names and ordered source
+values must produce identical library results despite a namespace prefix change.
+Preserve imported XML spelling independently of formatting. The pinned native
+prefix pair records thirty-three reciprocal citation deltas although expanded
+sources are equal, authenticated index
+9b7c8fa685ee780332a6371e40e675d978159376521c2d2a38b01990d4bd7df6
+under /private/tmp/S90-F282-APA6-bibliography-prefix-controls. Retain both native
+observations and document this bounded producer discrepancy. Test equivalent
+prefixes and canonical authoring for equal library output, with exact imported
+XML preservation. Qualify only those native prefix-sensitive comparisons, never
+replace expectations or relax unrelated catalogue, rich-cache or locale checks.
+
+
 Imported locale spelling is preserved independently of the numeric facade projection. The documented locale table alone can associate es-ES with both1034 and3082, so never choose the first row or invent a numeric identity. Independently discriminated pinned-engine source filtering establishes the measured operational mapping es-ES to3082 and es-ES_tradnl to1034. Project those measured spellings accordingly while preserving their raw XML and byte-identical no-op replacement. When no independently grounded unique mapping exists, BibliographySourceInfo.supported is None and its diagnostics names the non-lossless locale projection. Internal formatting still supports a valid lexical locale and must never use unsupported-cache fallback for this projection limitation. Reject an ambiguous typed source replacement atomically. Tests distinguish explicit1034, explicit3082, imported es-ES and es-ES_tradnl, prove exact source inspection, filter membership and no-op replacement, and retain full formatter coverage. The added diagnostics field is additive public API and earns existing README, public API and packaging checks.
 
 Imported formatting-locale operands also support independently measured lexical
