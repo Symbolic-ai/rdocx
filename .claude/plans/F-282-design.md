@@ -69,6 +69,13 @@ raw spelling, unknown switch adjacency and malformed atomicity. Existing field
 opcode policies remain unchanged. Include rdocx-oxml in the changed-crate scoped
 gate and carry parser and additive API riders through the named HLD03/12 impact.
 
+The shared grammar recognizes CITATION operands l, m, p, v, f and s and
+flags n, y and t. BIBLIOGRAPHY l, m and f are operands, retaining the captured
+imported optional f spelling. The opcode-specific change preserves other field
+policies and exact raw instructions. Tests discriminate quoted and bare values,
+flag adjacency, repeated selectors, optional and malformed operands and captured
+last-locale association. No unknown switch acquires guessed semantics.
+
 Source kind coverage is the seventeen schema values from [Microsoft's DataSourceValues reference](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.bibliography.datasourcevalues?view=openxml-3.0.1): ArticleInAPeriodical, Book, BookSection, JournalArticle, ConferenceProceedings, Report, SoundRecording, Performance, Art, DocumentFromInternetSite, InternetSite, Film, Interview, Patent, ElectronicSource, Case and Misc. Native authoring and formatting cover every kind, including source-specific property and contributor-role choices.
 
 Locale scope is every LCID accepted by the pinned Word bibliography engine, including document-default selection, source LCID, citation locale switches and bibliography locale switches with their observed precedence. Word.sdef's WdLanguageID enumeration has 204 entries and 202 distinct candidate low-word language values, including two sentinel values. Its SHA256 is 7cb51b924cab566320cc3019e92c1516302ae11220a81ae6279f1930c26320e7. Capture preflight maps candidates to actual numeric LCIDs and probes acceptance, rather than assuming AppleEvent enum codes equal LCIDs. The installed style-name metadata lists 24 localized label LCIDs, which must not be mistaken for the complete result-locale set. Regional variants and Word's own locale alias or fallback behavior remain supported with the same resulting text. Record any Word-rejected candidate as a rejected oracle input, not a supported-locale cache fallback. Discover any additional accepted engine LCIDs through the pinned Word language collection and document them in the same manifest. No supported locale may be left unimplemented or silently mapped to en-US.
