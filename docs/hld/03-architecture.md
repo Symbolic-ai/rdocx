@@ -1402,6 +1402,22 @@ them. The families fold into a lockstep train once rpptx stabilises.
 
 ## Facade conventions
 
+Destructive Word facade edits stage the document and reconcile qualified raw
+comment ownership before publication. One inventory covers body, related
+stories, selected and opaque source owners, and linked comment companions.
+`try_remove_content` distinguishes an absent index from an unsafe cut, while
+its legacy boolean twin returns false for either. Complete owned threads may
+be removed. Note deletion, section story pruning and revision resolution use
+the same candidate boundary. Unchanged or increased source marker counts leave unrelated
+producer annotation metadata untouched rather than adding global save-time
+validation. Decreases of demonstrably undefined markers retain their legacy
+lifecycle because no owned definition can be orphaned, with absence proved from
+actual qualified raw definitions, malformed or ambiguous owned linkage refused,
+and CLI validation remaining strict. Partial ranges and commented fragment detaches refuse without
+changing the live package. Cell text edits retain checked paragraph anchors,
+and a document-unaware cell removes only a proven plain empty paragraph when
+another required paragraph remains.
+
 Both facades use the same borrow-handle idiom rdocx already has: a mutable
 `Foo<'a>` wrapping `&'a mut CT_Foo` and a read-only `FooRef<'a>`, with
 consuming builders for formatting so calls chain, `&mut self` methods for adding

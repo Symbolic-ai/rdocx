@@ -14,6 +14,18 @@ exactly one as its test gate.
 | `golden` | Byte or pixel comparison against a recorded baseline | the hash harness |
 | `differential` | Compared against an external oracle | LibreOffice for renders, python-docx and python-pptx for the bindings |
 
+The comment ownership regression uses source-built packages and a compiled
+exact-Base failure for whole-thread removal and partial-cut refusal. Existing
+integration gates separately prove row removal, fragment pop and cell text
+behavior before and after implementation. The matrix covers related stories,
+selected text boxes, raw wrappers, signed ids, modern companion links, opaque
+payload, nested thread anchors and atomic byte preservation. CLI checks
+separate valid point comments and linked replies from true orphan roots.
+Python runtime checks verify once-only handle invalidation and refused no-ops,
+with strict typing and stub agreement checked independently. These API and
+package contracts require no fresh native Word capture and leave all 49
+rendering harness entries unchanged.
+
 The table-row pagination regression uses source-built tagged lines and a
 footer-only-page sentinel because Issue 138's private 53-page package is not
 available. The deterministic layout must place each tag on exactly one page,

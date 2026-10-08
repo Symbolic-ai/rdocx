@@ -823,6 +823,22 @@ resolvable. Section-aware text watermark replacement touches only the selected
 API-owned shape. It neither synthesizes unrelated header variants nor enables
 the document-wide even-and-odd setting.
 
+Comment deletion uses namespace-qualified raw source markers across every
+relationship-resolved Word story, including preserved wrappers and revisions.
+The same inventory validates orphan roots without interpreting accepted-view
+ranges. Point references are valid and linked replies need no separate anchor.
+Deletion of a demonstrably undefined marker follows the existing editing
+lifecycle because there is no definition to orphan. Absence is proved from
+qualified raw definition entries at the actual relationship target. Missing
+or ambiguous owned sources refuse, and CLI validation still reports dangling
+markers.
+Complete thread removal splices only owned definition and companion rows,
+using last-paragraph ids and commentsIds durable linkage for
+commentsExtensible. Actual internal relationship targets remain authoritative.
+Ambiguous linkage, a surviving endpoint or reference, or unrelated anchors
+inside a removed comment definition refuse atomically. Unknown root and entry
+payload remains unchanged outside the selected owned rows.
+
 Threaded comments add a document relationship using the Microsoft
 `commentsExtended` relationship type. The facade retains its resolved target
 and writes the standard
@@ -831,7 +847,9 @@ content type at that exact part. New comment state creates both relationships
 and both overrides together. An ordinary save retains an accepted standard
 override and unrelated comments-extended sidecar XML. Existing custom targets
 remain authoritative, and removal of the final API-owned thread removes only
-the parts, relationships, and overrides created by the typed model.
+the parts, relationships, and overrides created by the typed model only when
+no opaque root attributes or children remain. Imported empty parts and
+unrelated companion payload are retained.
 
 Modern PowerPoint collaboration follows two independent relationship scopes.
 The presentation part owns at most one Microsoft authors relationship, and

@@ -405,6 +405,15 @@ replacement, and field updates release the GIL and advance the revision once
 only when they report a nonzero count. A native error publishes no
 candidate and does not advance the binding revision.
 
+`Document.remove_content` returns false for an absent index and raises
+`RdocxError` for an unsafe comment cut. Complete thread deletion and cell text
+replacement publish one prepared and reopened candidate, then invalidate
+borrowed handles once. Refused operations leave handles and package bytes
+unchanged. `pop_content` refuses a commented fragment rather than detaching
+anchors from their definitions. Native `Cell::try_set_text` exposes checked
+errors, while its legacy setter leaves the cell unchanged on refusal.
+
+
 `Document.add_picture` accepts in-memory bytes, a safe filename, optional
 paired EMU dimensions, and an optional checked `StoryItem` placement. Omitted
 dimensions use native 72 DPI sizing. Omitted placement appends to the body.

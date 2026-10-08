@@ -1518,103 +1518,46 @@ impl Document {
         Ok(true)
     }
 
-    /// Remove a comment and every reply descended from it.
+    /// Remove a qualified comment thread and its source anchors atomically.
+    /// Unsupported or ambiguous companion ownership leaves the document unchanged.
     pub fn remove_comment(&mut self, id: i32) -> Result<bool> {
+        if !self.comments().iter().any(|comment| comment.id() == id) {
+            return Ok(false);
+        }
         let mut candidate = self.clone_for_staging();
-        let removed = candidate.remove_comment_staged(id)?;
-        if removed {
-            candidate.flush_dirty_related_story_models()?;
-            self.commit_staged_mutation(candidate);
-        }
-        Ok(removed)
-    }
-
-    fn remove_comment_staged(&mut self, id: i32) -> Result<bool> {
-        let Some(comments) = self.comments.as_ref() else {
-            return Ok(false);
-        };
-        if comments.comments.iter().all(|comment| comment.id != id) {
-            return Ok(false);
-        }
-
-        let id_by_para = comments
-            .comments
-            .iter()
-            .flat_map(|comment| para_ids(comment).map(|para| (para.to_owned(), comment.id)))
-            .collect::<HashMap<_, _>>();
-        let mut removed_ids = HashSet::from([id]);
-        let mut removed_para_ids = comments
-            .comments
-            .iter()
-            .filter(|comment| comment.id == id)
-            .flat_map(para_ids)
-            .map(str::to_owned)
-            .collect::<HashSet<_>>();
-        if let Some(extended) = self.comments_extended.as_ref() {
-            loop {
-                let mut changed = false;
-                for entry in &extended.comments {
-                    if entry
-                        .para_id_parent
-                        .as_ref()
-                        .is_some_and(|parent| removed_para_ids.contains(parent))
-                        && removed_para_ids.insert(entry.para_id.clone())
-                    {
-                        if let Some(comment_id) = id_by_para.get(&entry.para_id) {
-                            removed_ids.insert(*comment_id);
-                            removed_para_ids.extend(
-                                comments
-                                    .comments
-                                    .iter()
-                                    .filter(|comment| comment.id == *comment_id)
-                                    .flat_map(para_ids)
-                                    .map(str::to_owned),
-                            );
-                        }
-                        changed = true;
-                    }
-                }
-                if !changed {
-                    break;
-                }
+        candidate.flush_to_package()?;
+        let ownership = candidate.comment_ownership()?;
+        let removed = ownership.descendants(id);
+        candidate.remove_comment_ids_staged(&removed)?;
+        // An inverse add/remove can recover the complete retained producer source.
+        // Compare every modeled value and raw child, ignoring only declarations
+        // introduced by the intermediate canonical serialization.
+        if let Some(retained) = self.package.get_part(&self.doc_part_name)
+            && let Ok(original) = rdocx_oxml::document::CT_Document::from_xml(retained)
+        {
+            let declarations_preserved = original
+                .extra_namespaces
+                .iter()
+                .all(|binding| candidate.document.extra_namespaces.contains(binding));
+            let only_added_canonical_wp = candidate.document.extra_namespaces.iter().all(|binding|
+                original.extra_namespaces.contains(binding)
+                    || (binding.0 == "xmlns:wp"
+                        && binding.1 == "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+                        && !original.extra_namespaces.iter().any(|original| original.0 == binding.0)));
+            let mut restored = candidate.document.clone();
+            restored.extra_namespaces = original.extra_namespaces.clone();
+            // Full canonical XML equality includes all modeled values and opaque
+            // bytes while ignoring unused inherited-prefix projection caches.
+            if declarations_preserved
+                && only_added_canonical_wp
+                && restored.to_xml()? == original.to_xml()?
+            {
+                let part = candidate.doc_part_name.clone();
+                crate::document::set_story_source_xml(&mut candidate, &part, retained.to_vec())?;
             }
         }
-
-        let comments = self.comments.as_mut().expect("model exists");
-        let removed_comment_entries = comments
-            .comments
-            .iter()
-            .map(|comment| removed_ids.contains(&comment.id))
-            .collect::<Vec<_>>();
-        comments.comments = comments
-            .comments
-            .drain(..)
-            .zip(&removed_comment_entries)
-            .filter_map(|(comment, remove)| (!remove).then_some(comment))
-            .collect();
-        remap_raw_positions(&mut comments.extra_xml, &removed_comment_entries);
-        if let Some(extended) = self.comments_extended.as_mut() {
-            let removed_extension_entries = extended
-                .comments
-                .iter()
-                .map(|entry| removed_para_ids.contains(&entry.para_id))
-                .collect::<Vec<_>>();
-            extended.comments = extended
-                .comments
-                .drain(..)
-                .zip(&removed_extension_entries)
-                .filter_map(|(entry, remove)| (!remove).then_some(entry))
-                .collect();
-            remap_raw_positions(&mut extended.extra_xml, &removed_extension_entries);
-        }
-        for content in &mut self.document.body.content {
-            remove_anchors_from_body_content(content, &removed_ids);
-        }
-        self.identifiers
-            .retire_authored_comment_ids(removed_ids.iter().copied());
-        self.remove_owned_empty_comment_parts();
-        self.comments_dirty = self.comments.is_some();
-        self.invalidate_layout();
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
         Ok(true)
     }
 
@@ -1699,11 +1642,14 @@ impl Document {
     }
 
     fn remove_owned_empty_comment_parts(&mut self) {
-        if self
-            .comments
-            .as_ref()
-            .is_some_and(|comments| comments.comments.is_empty())
-            && self.comments_owned
+        if self.comments.as_ref().is_some_and(|comments| {
+            comments.comments.is_empty()
+                && comments.extra_xml.is_empty()
+                && comments
+                    .root_attributes
+                    .iter()
+                    .all(|(key, _)| key == "xmlns" || key.starts_with("xmlns:"))
+        }) && self.comments_owned
         {
             if let Some(part) = self.comments_part_name.take() {
                 remove_owned_part(self, &part, oxml_opc::relationship::rel_types::COMMENTS);
@@ -1711,11 +1657,14 @@ impl Document {
             self.comments = None;
             self.comments_owned = false;
         }
-        if self
-            .comments_extended
-            .as_ref()
-            .is_some_and(|extended| extended.comments.is_empty())
-            && self.comments_extended_owned
+        if self.comments_extended.as_ref().is_some_and(|extended| {
+            extended.comments.is_empty()
+                && extended.extra_xml.is_empty()
+                && extended
+                    .root_attributes
+                    .iter()
+                    .all(|(key, _)| key == "xmlns" || key.starts_with("xmlns:"))
+        }) && self.comments_extended_owned
         {
             if let Some(part) = self.comments_extended_part_name.take() {
                 remove_owned_part(self, &part, COMMENTS_EXTENDED_REL_TYPE);
@@ -2267,15 +2216,7 @@ fn remove_owned_part(document: &mut Document, part: &str, relationship_type: &st
         .retire_authored_story_relationships(&owner, removed_relationship_ids);
 }
 
-fn remove_anchors_from_body_content(content: &mut BodyContent, ids: &HashSet<i32>) {
-    match content {
-        BodyContent::Paragraph(paragraph) => remove_anchors_from_paragraph(paragraph, ids),
-        BodyContent::Table(table) => remove_anchors_from_table(table, ids),
-        BodyContent::ContentControl(control) => remove_anchors_from_control(control, ids),
-        BodyContent::RawXml(_) => {}
-    }
-}
-
+#[cfg(test)]
 fn remove_anchors_from_table(table: &mut CT_Tbl, ids: &HashSet<i32>) {
     for (_, _, control) in &mut table.content_controls {
         remove_anchors_from_control(control, ids);
@@ -2285,6 +2226,7 @@ fn remove_anchors_from_table(table: &mut CT_Tbl, ids: &HashSet<i32>) {
     }
 }
 
+#[cfg(test)]
 fn remove_anchors_from_row(row: &mut CT_Row, ids: &HashSet<i32>) {
     for (_, _, control) in &mut row.content_controls {
         remove_anchors_from_control(control, ids);
@@ -2294,6 +2236,7 @@ fn remove_anchors_from_row(row: &mut CT_Row, ids: &HashSet<i32>) {
     }
 }
 
+#[cfg(test)]
 fn remove_anchors_from_cell(cell: &mut CT_Tc, ids: &HashSet<i32>) {
     for content in &mut cell.content {
         match content {
@@ -2304,6 +2247,7 @@ fn remove_anchors_from_cell(cell: &mut CT_Tc, ids: &HashSet<i32>) {
     }
 }
 
+#[cfg(test)]
 fn remove_anchors_from_control(control: &mut CT_Sdt, ids: &HashSet<i32>) {
     // Markers written inside `w:sdtContent` are preserved children there.
     control.remove_comment_anchors(&ids.iter().copied().collect::<Vec<_>>());
@@ -2319,6 +2263,7 @@ fn remove_anchors_from_control(control: &mut CT_Sdt, ids: &HashSet<i32>) {
     }
 }
 
+#[cfg(test)]
 fn remove_anchors_from_paragraph(paragraph: &mut CT_P, ids: &HashSet<i32>) {
     for (_, _, _, control) in &mut paragraph.content_controls {
         remove_anchors_from_control(control, ids);
@@ -2327,15 +2272,664 @@ fn remove_anchors_from_paragraph(paragraph: &mut CT_P, ids: &HashSet<i32>) {
     paragraph.remove_comment_anchors(&ids);
 }
 
-fn remap_raw_positions(extra_xml: &mut [(usize, Vec<u8>)], removed: &[bool]) {
-    for (position, _) in extra_xml {
-        *position = position.saturating_sub(
-            removed
+// Source marker presence deliberately ignores accepted-view range pairing.
+// A raw reference inside an opaque wrapper still owns its definition.
+#[derive(Debug)]
+struct CommentSourceMarker {
+    id: i32,
+    family: usize,
+    span: Range<usize>,
+    empty_run: Option<Range<usize>>,
+}
+
+struct CommentPartEntry {
+    attributes: BTreeMap<String, String>,
+    span: Range<usize>,
+}
+
+struct CommentOwnership {
+    markers: BTreeMap<String, Vec<CommentSourceMarker>>,
+    parents: BTreeMap<i32, Option<i32>>,
+    entries: BTreeMap<String, Vec<(i32, Range<usize>)>>,
+}
+
+impl CommentOwnership {
+    fn marker_counts(
+        markers: &BTreeMap<String, Vec<CommentSourceMarker>>,
+    ) -> BTreeMap<i32, [usize; 3]> {
+        let mut counts = BTreeMap::new();
+        for marker in markers.values().flatten() {
+            counts.entry(marker.id).or_insert([0; 3])[marker.family] += 1;
+        }
+        counts
+    }
+
+    fn descendants(&self, id: i32) -> HashSet<i32> {
+        let mut ids = HashSet::from([id]);
+        loop {
+            let before = ids.len();
+            for (&child, parent) in &self.parents {
+                if parent.is_some_and(|parent| ids.contains(&parent)) {
+                    ids.insert(child);
+                }
+            }
+            if ids.len() == before {
+                return ids;
+            }
+        }
+    }
+}
+
+fn comment_source_markers(xml: &[u8]) -> Result<Vec<CommentSourceMarker>> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut markers = Vec::new();
+    let mut preceding_run: Option<(usize, usize, Vec<u8>)> = None;
+    loop {
+        let start = reader.buffer_position() as usize;
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(error.to_string()))?
+        {
+            Event::Start(element) | Event::Empty(element) => {
+                let preceding = preceding_run.take();
+                let end = reader.buffer_position() as usize;
+                let (namespace, local) = reader.resolver().resolve_element(element.name());
+                if matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == rdocx_oxml::namespace::W_NS.as_bytes())
+                {
+                    if local.as_ref() == b"r"
+                        && xml.get(end.saturating_sub(2)..end) != Some(b"/>")
+                        && element.attributes().all(|attribute| {
+                            attribute.is_ok_and(|attribute| {
+                                attribute.key.as_ref() == b"xmlns"
+                                    || attribute.key.as_ref().starts_with(b"xmlns:")
+                            })
+                        })
+                    {
+                        preceding_run = Some((start, end, element.name().as_ref().to_vec()));
+                    }
+                    let family = match local.as_ref() {
+                        b"commentRangeStart" => Some(0),
+                        b"commentRangeEnd" => Some(1),
+                        b"commentReference" => Some(2),
+                        _ => None,
+                    };
+                    if let Some(family) = family {
+                        let mut ids = 0;
+                        for attribute in element.attributes() {
+                            let attribute =
+                                attribute.map_err(|error| Error::Other(error.to_string()))?;
+                            let (namespace, local) =
+                                reader.resolver().resolve_attribute(attribute.key);
+                            if local.as_ref() == b"id"
+                                && matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == rdocx_oxml::namespace::W_NS.as_bytes())
+                            {
+                                ids += 1;
+                            }
+                        }
+                        if ids != 1 {
+                            return Err(Error::Other(
+                                "comment marker has missing or ambiguous qualified id".into(),
+                            ));
+                        }
+                        let id = word_marker_attribute(&reader, &element, b"id")?
+                            .and_then(|id| id.parse::<i32>().ok())
+                            .ok_or_else(|| {
+                                Error::Other("comment marker has an invalid qualified id".into())
+                            })?;
+                        if xml.get(end.saturating_sub(2)..end) != Some(b"/>") {
+                            reader
+                                .read_to_end_into(element.name(), &mut Vec::new())
+                                .map_err(|error| Error::Other(error.to_string()))?;
+                        }
+                        let marker_end = reader.buffer_position() as usize;
+                        let empty_run = preceding.and_then(|(run_start, run_end, name)| {
+                            let mut close = b"</".to_vec();
+                            close.extend(name);
+                            close.push(b'>');
+                            (family == 2
+                                && run_end == start
+                                && xml.get(marker_end..marker_end + close.len())
+                                    == Some(close.as_slice()))
+                            .then_some(run_start..marker_end + close.len())
+                        });
+                        markers.push(CommentSourceMarker {
+                            id,
+                            family,
+                            span: start..marker_end,
+                            empty_run,
+                        });
+                    }
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    Ok(markers)
+}
+
+/// Scan only qualified direct entries, retaining exact source spans for removal.
+fn comment_part_entries(
+    xml: &[u8],
+    namespace: &str,
+    root: &[u8],
+    item: &[u8],
+) -> Result<Vec<CommentPartEntry>> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    let mut saw_root = false;
+    let mut entries = Vec::new();
+    loop {
+        let start = reader.buffer_position() as usize;
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(error.to_string()))?
+        {
+            Event::Start(element) | Event::Empty(element) => {
+                let end = reader.buffer_position() as usize;
+                let empty = xml.get(end.saturating_sub(2)..end) == Some(b"/>");
+                let (resolved, local) = reader.resolver().resolve_element(element.name());
+                let qualified = matches!(resolved, ResolveResult::Bound(Namespace(uri)) if uri == namespace.as_bytes());
+                if depth == 0 {
+                    if saw_root || !qualified || local.as_ref() != root {
+                        return Err(Error::Other(
+                            "comment part has no unique qualified root".into(),
+                        ));
+                    }
+                    saw_root = true;
+                } else if depth == 1 && qualified && local.as_ref() == item {
+                    let mut attributes = BTreeMap::new();
+                    for attribute in element.attributes() {
+                        let attribute =
+                            attribute.map_err(|error| Error::Other(error.to_string()))?;
+                        let (resolved, local) = reader.resolver().resolve_attribute(attribute.key);
+                        if matches!(resolved, ResolveResult::Bound(Namespace(uri)) if uri == namespace.as_bytes())
+                        {
+                            let key = String::from_utf8_lossy(local.as_ref()).into_owned();
+                            let value = attribute
+                                .decoded_and_normalized_value(
+                                    XmlVersion::Implicit1_0,
+                                    reader.decoder(),
+                                )
+                                .map_err(|error| Error::Other(error.to_string()))?
+                                .into_owned();
+                            if attributes.insert(key, value).is_some() {
+                                return Err(Error::Other(
+                                    "comment part has duplicate qualified attributes".into(),
+                                ));
+                            }
+                        }
+                    }
+                    if !empty {
+                        reader
+                            .read_to_end_into(element.name(), &mut Vec::new())
+                            .map_err(|error| Error::Other(error.to_string()))?;
+                    }
+                    entries.push(CommentPartEntry {
+                        attributes,
+                        span: start..reader.buffer_position() as usize,
+                    });
+                    buffer.clear();
+                    continue;
+                }
+                if !empty {
+                    depth += 1;
+                }
+            }
+            Event::End(_) => {
+                depth = depth
+                    .checked_sub(1)
+                    .ok_or_else(|| Error::Other("comment XML is unbalanced".into()))?;
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    if !saw_root || depth != 0 {
+        return Err(Error::Other("comment XML has no complete root".into()));
+    }
+    Ok(entries)
+}
+
+impl Document {
+    fn comment_relationship_part(&self, relationship_type: &str) -> Result<Option<String>> {
+        let mut target = None;
+        for relationship in self
+            .package
+            .get_part_rels(&self.doc_part_name)
+            .iter()
+            .flat_map(|rels| &rels.items)
+            .filter(|relationship| relationship.rel_type == relationship_type)
+        {
+            if !crate::document::relationship_is_internal(relationship) || target.is_some() {
+                return Err(Error::Other(
+                    "comment part ownership is external or ambiguous".into(),
+                ));
+            }
+            let part = OpcPackage::resolve_rel_target(&self.doc_part_name, &relationship.target);
+            if self.package.get_part(&part).is_none() {
+                return Err(Error::Other(format!(
+                    "comment relationship targets missing part {part}"
+                )));
+            }
+            target = Some(part);
+        }
+        Ok(target)
+    }
+
+    fn comment_source_inventory(&self) -> Result<BTreeMap<String, Vec<CommentSourceMarker>>> {
+        if self.package.get_part(&self.doc_part_name).is_none() {
+            return Err(Error::Other("main comment source part is missing".into()));
+        }
+        let mut markers = BTreeMap::new();
+        for part in self.word_story_part_names() {
+            // Dangling story relationships contain no source to inventory.
+            // Package validation diagnoses them independently of comment ownership.
+            if let Some(xml) = self.package.get_part(&part) {
+                markers.insert(part, comment_source_markers(xml)?);
+            }
+        }
+        Ok(markers)
+    }
+
+    fn comment_definition_entries(&self) -> Result<Option<(String, Vec<CommentPartEntry>)>> {
+        let Some(part) =
+            self.comment_relationship_part(oxml_opc::relationship::rel_types::COMMENTS)?
+        else {
+            if self.comments_part_name.is_some() {
+                return Err(Error::Other(
+                    "owned comment definition relationship is missing".into(),
+                ));
+            }
+            return Ok(None);
+        };
+        let entries = comment_part_entries(
+            self.package.get_part(&part).expect("checked part"),
+            rdocx_oxml::namespace::W_NS,
+            b"comments",
+            b"comment",
+        )?;
+        let mut ids = HashSet::new();
+        for entry in &entries {
+            let id = entry
+                .attributes
+                .get("id")
+                .and_then(|id| id.parse::<i32>().ok())
+                .ok_or_else(|| Error::Other("comment definition has invalid id".into()))?;
+            if !ids.insert(id) {
+                return Err(Error::Other(format!(
+                    "comment {id} has duplicate definitions"
+                )));
+            }
+        }
+        Ok(Some((part, entries)))
+    }
+
+    fn comment_ownership(&self) -> Result<CommentOwnership> {
+        let mut ownership = CommentOwnership {
+            markers: self.comment_source_inventory()?,
+            parents: BTreeMap::new(),
+            entries: BTreeMap::new(),
+        };
+        let Some((part, entries)) = self.comment_definition_entries()? else {
+            if !CommentOwnership::marker_counts(&ownership.markers).is_empty() {
+                return Err(Error::Other(
+                    "comment markers have no owned definitions part".into(),
+                ));
+            }
+            return Ok(ownership);
+        };
+        let xml = self.package.get_part(&part).expect("checked part");
+        let comments = CT_Comments::from_xml(xml)?;
+        let mut by_para = BTreeMap::new();
+        let mut by_parent_para = BTreeMap::new();
+        let mut definitions = Vec::new();
+        for entry in entries {
+            let id = entry
+                .attributes
+                .get("id")
+                .and_then(|id| id.parse::<i32>().ok())
+                .ok_or_else(|| Error::Other("comment definition has invalid id".into()))?;
+            if ownership.parents.insert(id, None).is_some() {
+                return Err(Error::Other(format!(
+                    "comment {id} has duplicate definitions"
+                )));
+            }
+            definitions.push((id, entry.span));
+        }
+        if comments.comments.len() != definitions.len() {
+            return Err(Error::Other(
+                "comment definitions cannot be qualified without losing opaque ownership".into(),
+            ));
+        }
+        for comment in &comments.comments {
+            for para in para_ids(comment) {
+                if by_parent_para
+                    .insert(para.to_ascii_uppercase(), comment.id)
+                    .is_some()
+                {
+                    return Err(Error::Other(
+                        "comment paragraph identity is ambiguous".into(),
+                    ));
+                }
+            }
+            if !ownership.parents.contains_key(&comment.id) {
+                return Err(Error::Other(
+                    "comment model differs from qualified source definitions".into(),
+                ));
+            }
+            if let Some(para) = last_para_id(comment)
+                && by_para
+                    .insert(para.to_ascii_uppercase(), comment.id)
+                    .is_some()
+            {
+                return Err(Error::Other(
+                    "comment last-paragraph identity is ambiguous".into(),
+                ));
+            }
+        }
+        ownership.entries.insert(part, definitions);
+        const IDS_REL: &str =
+            "http://schemas.microsoft.com/office/2016/09/relationships/commentsIds";
+        const EXTENSIBLE_REL: &str =
+            "http://schemas.microsoft.com/office/2018/08/relationships/commentsExtensible";
+        const IDS_NS: &str = "http://schemas.microsoft.com/office/word/2016/wordml/cid";
+        const CEX_NS: &str = "http://schemas.microsoft.com/office/word/2018/wordml/cex";
+        let mut by_durable = BTreeMap::new();
+        for (relationship, namespace, root, item, key) in [
+            (
+                COMMENTS_EXTENDED_REL_TYPE,
+                rdocx_oxml::comments_extended::W15_NS,
+                b"commentsEx".as_slice(),
+                b"commentEx".as_slice(),
+                "paraId",
+            ),
+            (
+                IDS_REL,
+                IDS_NS,
+                b"commentsIds".as_slice(),
+                b"commentId".as_slice(),
+                "paraId",
+            ),
+            (
+                EXTENSIBLE_REL,
+                CEX_NS,
+                b"commentsExtensible".as_slice(),
+                b"commentExtensible".as_slice(),
+                "durableId",
+            ),
+        ] {
+            let Some(part) = self.comment_relationship_part(relationship)? else {
+                continue;
+            };
+            let xml = self.package.get_part(&part).expect("checked part");
+            let mut mapped = Vec::new();
+            let mut seen = HashSet::new();
+            for entry in comment_part_entries(xml, namespace, root, item)? {
+                let value = entry
+                    .attributes
+                    .get(key)
+                    .ok_or_else(|| Error::Other(format!("comment companion has no {key}")))?
+                    .to_ascii_uppercase();
+                if !seen.insert(value.clone()) {
+                    return Err(Error::Other(format!(
+                        "comment companion {key} {value} is ambiguous"
+                    )));
+                }
+                let id = if key == "paraId" {
+                    by_para.get(&value)
+                } else {
+                    by_durable.get(&value)
+                }
+                .copied()
+                .ok_or_else(|| {
+                    Error::Other(format!(
+                        "comment companion {key} {value} has unprovable linkage"
+                    ))
+                })?;
+                if relationship == COMMENTS_EXTENDED_REL_TYPE
+                    && let Some(parent) = entry.attributes.get("paraIdParent")
+                {
+                    let parent = by_parent_para
+                        .get(&parent.to_ascii_uppercase())
+                        .copied()
+                        .ok_or_else(|| {
+                            Error::Other(format!("comment {id} has unknown parent {parent}"))
+                        })?;
+                    ownership.parents.insert(id, Some(parent));
+                }
+                if relationship == IDS_REL {
+                    let durable = entry
+                        .attributes
+                        .get("durableId")
+                        .ok_or_else(|| {
+                            Error::Other(format!("comment {id} has no durable identity"))
+                        })?
+                        .to_ascii_uppercase();
+                    if durable.len() != 8
+                        || u32::from_str_radix(&durable, 16).is_err()
+                        || by_durable.insert(durable, id).is_some()
+                    {
+                        return Err(Error::Other(format!(
+                            "comment {id} has invalid or duplicate durable identity"
+                        )));
+                    }
+                }
+                mapped.push((id, entry.span));
+            }
+            ownership.entries.insert(part, mapped);
+        }
+        for &id in ownership.parents.keys() {
+            let mut seen = HashSet::new();
+            let mut ancestor = Some(id);
+            while let Some(current) = ancestor {
+                if !seen.insert(current) {
+                    return Err(Error::Other(format!(
+                        "comment {id} has cyclic thread ownership"
+                    )));
+                }
+                ancestor = ownership.parents[&current];
+            }
+        }
+        for id in CommentOwnership::marker_counts(&ownership.markers).keys() {
+            if !ownership.parents.contains_key(id) {
+                return Err(Error::Other(format!(
+                    "comment {id} has markers but no definition"
+                )));
+            }
+        }
+        Ok(ownership)
+    }
+
+    /// Check raw comment presence and thread ownership across relationship-resolved stories.
+    #[doc(hidden)]
+    pub fn validate_comment_ownership(&self) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let ownership = candidate.comment_ownership()?;
+        let counts = CommentOwnership::marker_counts(&ownership.markers);
+        for (&id, parent) in &ownership.parents {
+            let count = counts.get(&id).copied().unwrap_or_default();
+            if count.iter().any(|count| *count > 1) || count[0] != count[1] {
+                return Err(Error::Other(format!(
+                    "comment {id} has duplicate or unmatched source markers"
+                )));
+            }
+            if parent.is_none() && count == [0; 3] {
+                return Err(Error::Other(format!(
+                    "comment {id} is an orphan root with no source range or reference"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Compare one unpublished destructive edit with its frozen source inventory.
+    pub(crate) fn reconcile_comment_removal(&mut self, before: &Document) -> Result<()> {
+        let mut source = before.clone_for_staging();
+        source.flush_to_package()?;
+        self.flush_to_package()?;
+        let before_counts = CommentOwnership::marker_counts(&source.comment_source_inventory()?);
+        let after_counts = CommentOwnership::marker_counts(&self.comment_source_inventory()?);
+        // Only source ownership decreases need deletion proof. Unchanged
+        // or cloned anchors must not validate or repair unrelated producer
+        // definitions. Explicit deletion and CLI validation remain strict.
+        if before_counts.iter().all(|(id, count)| {
+            let after = after_counts.get(id).copied().unwrap_or_default();
+            count
                 .iter()
-                .take((*position).min(removed.len()))
-                .filter(|remove| **remove)
-                .count(),
-        );
+                .zip(after)
+                .all(|(before, after)| after >= *before)
+        }) {
+            return Ok(());
+        }
+        // A demonstrably undefined source marker cannot orphan an absent
+        // definition. Retain its established editing/comparison lifecycle.
+        // Raw qualified entries prove absence even if typed projection omits one.
+        let definitions = source.comment_definition_entries()?;
+        let defined_decrease = definitions.as_ref().is_some_and(|(_, entries)| {
+            entries.iter().any(|entry| {
+                let id = entry.attributes["id"]
+                    .parse::<i32>()
+                    .expect("validated definition id");
+                let before = before_counts.get(&id).copied().unwrap_or_default();
+                let after = after_counts.get(&id).copied().unwrap_or_default();
+                before
+                    .iter()
+                    .zip(after)
+                    .any(|(before, after)| after < *before)
+            })
+        });
+        if !defined_decrease {
+            return Ok(());
+        }
+        let original = source.comment_ownership()?;
+        let remaining = self.comment_ownership()?;
+        let before_counts = CommentOwnership::marker_counts(&original.markers);
+        let after_counts = CommentOwnership::marker_counts(&remaining.markers);
+        let mut removed = HashSet::new();
+        for (&id, count) in &before_counts {
+            let after = after_counts.get(&id).copied().unwrap_or_default();
+            if count
+                .iter()
+                .zip(after)
+                .all(|(before, after)| after >= *before)
+            {
+                continue;
+            }
+            if after != [0; 3] || count.iter().any(|count| *count > 1) || count[0] != count[1] {
+                return Err(Error::Other(format!(
+                    "cannot remove part of comment {id}; its source graph survives or is ambiguous"
+                )));
+            }
+            removed.extend(original.descendants(id));
+        }
+        for id in &removed {
+            if after_counts.get(id).is_some_and(|counts| *counts != [0; 3]) {
+                return Err(Error::Other(format!(
+                    "cannot remove comment {id}; a descendant source anchor survives"
+                )));
+            }
+        }
+        if !removed.is_empty() {
+            self.remove_comment_ids_staged(&removed)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn refuse_commented_fragment(xml: &[u8]) -> Result<()> {
+        if let Some(marker) = comment_source_markers(xml)?.first() {
+            return Err(Error::Other(format!(
+                "cannot detach content bearing comment {}; fragments do not own comment threads",
+                marker.id
+            )));
+        }
+        Ok(())
+    }
+
+    fn remove_comment_ids_staged(&mut self, ids: &HashSet<i32>) -> Result<()> {
+        let ownership = self.comment_ownership()?;
+        for (part, entries) in &ownership.entries {
+            for (_, span) in entries.iter().filter(|(id, _)| ids.contains(id)) {
+                if let Some(marker) =
+                    ownership
+                        .markers
+                        .get(part)
+                        .into_iter()
+                        .flatten()
+                        .find(|marker| {
+                            !ids.contains(&marker.id)
+                                && span.start <= marker.span.start
+                                && marker.span.end <= span.end
+                        })
+                {
+                    return Err(Error::Other(format!(
+                        "cannot remove a comment definition carrying unrelated comment {}",
+                        marker.id
+                    )));
+                }
+            }
+        }
+        let mut spans = BTreeMap::<String, Vec<Range<usize>>>::new();
+        for (part, markers) in ownership.markers {
+            for marker in markers
+                .into_iter()
+                .filter(|marker| ids.contains(&marker.id))
+            {
+                spans
+                    .entry(part.clone())
+                    .or_default()
+                    .push(marker.empty_run.unwrap_or(marker.span));
+            }
+        }
+        for (part, entries) in ownership.entries {
+            for (id, span) in entries.into_iter().filter(|(id, _)| ids.contains(id)) {
+                let _ = id;
+                spans.entry(part.clone()).or_default().push(span);
+            }
+        }
+        for (part, mut ranges) in spans {
+            ranges.sort_by_key(|range| range.start);
+            ranges.dedup();
+            // A removed definition can contain a source marker of another removed comment.
+            let mut outer = Vec::<Range<usize>>::new();
+            for range in ranges {
+                if let Some(previous) = outer.last() {
+                    if range.end <= previous.end {
+                        continue;
+                    }
+                    if range.start < previous.end {
+                        return Err(Error::Other(
+                            "comment removal spans overlap ambiguously".into(),
+                        ));
+                    }
+                }
+                outer.push(range);
+            }
+            let mut xml = self
+                .package
+                .get_part(&part)
+                .ok_or_else(|| Error::Other("comment removal part disappeared".into()))?
+                .to_vec();
+            for range in outer.into_iter().rev() {
+                xml.drain(range);
+            }
+            if self.comments_extended_part_name.as_deref() == Some(part.as_str()) {
+                self.comments_extended = Some(CT_CommentsEx::from_xml(&xml)?);
+            }
+            crate::document::set_story_source_xml(self, &part, xml)?;
+        }
+        self.identifiers
+            .retire_authored_comment_ids(ids.iter().copied());
+        self.remove_owned_empty_comment_parts();
+        self.comments_dirty = false;
+        self.invalidate_layout();
+        Ok(())
     }
 }
 
@@ -2632,6 +3226,52 @@ mod tests {
 
             assert_ne!(hyperlink, extended_relationship);
             assert_ne!(imported_part, extended_part);
+        }
+    }
+
+    #[test]
+    fn comment_removal_retains_owned_empty_parts_with_opaque_root_payload() {
+        let mut document = Document::new();
+        document.add_paragraph("anchor");
+        let id = document
+            .add_comment(
+                RunRange {
+                    start: RunPosition {
+                        body_index: 0,
+                        run_index: 0,
+                    },
+                    end: RunPosition {
+                        body_index: 0,
+                        run_index: 1,
+                    },
+                },
+                "Ada",
+                None,
+                "root",
+            )
+            .unwrap();
+        let raw =
+            br#"<x:opaque xmlns:x="urn:producer" x:flag='exact'><x:child /></x:opaque>"#.to_vec();
+        document
+            .comments
+            .as_mut()
+            .unwrap()
+            .extra_xml
+            .push((1, raw.clone()));
+        document
+            .comments_extended
+            .as_mut()
+            .unwrap()
+            .extra_xml
+            .push((1, raw.clone()));
+        document.comments_dirty = true;
+        assert!(document.remove_comment(id).unwrap());
+        assert!(document.comments().is_empty());
+        let saved = document.to_bytes().unwrap();
+        let package = OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+        for part in [DEFAULT_COMMENTS_PART, DEFAULT_COMMENTS_EXTENDED_PART] {
+            let xml = package.get_part(part).unwrap();
+            assert!(xml.windows(raw.len()).any(|window| window == raw), "{part}");
         }
     }
 

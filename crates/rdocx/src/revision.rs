@@ -368,6 +368,7 @@ impl Document {
         if resolved == 0 {
             return Ok(0);
         }
+        candidate.reconcile_comment_removal(self)?;
         candidate = crate::comparison::reopen_staged(candidate)?;
         self.commit_staged_mutation(candidate);
         Ok(resolved)

@@ -2224,7 +2224,6 @@ impl ParsedRtf {
                             row.cells.into_iter().zip(prepared_row).enumerate()
                         {
                             let mut cell = table.cell(row_index, column_index).unwrap();
-                            cell.remove_first_empty_paragraph();
                             if paragraphs.is_empty() {
                                 cell.add_paragraph("");
                             }
@@ -2241,6 +2240,7 @@ impl ParsedRtf {
                                     &colors,
                                 )?;
                             }
+                            cell.remove_first_empty_paragraph();
                         }
                     }
                 }

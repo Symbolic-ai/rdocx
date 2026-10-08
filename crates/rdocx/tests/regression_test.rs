@@ -16595,8 +16595,10 @@ fn duplicate_raw_markers_cannot_replace_removed_paragraph_or_table_owners() {
             r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="urn:root"><q:body>{body}</q:body></q:document>"#,
         );
         let mut document = document_with_content_controls(&xml);
-        assert!(document.remove_content(1));
-        let error = document.to_bytes().unwrap_err();
+        let before = document.to_bytes().unwrap();
+        let error = document.try_remove_content(1).unwrap_err();
+        assert!(!document.remove_content(1));
+        assert_eq!(document.to_bytes().unwrap(), before);
         assert!(
             error
                 .to_string()
@@ -16616,8 +16618,23 @@ fn foreign_namespace_decoy_cannot_replace_a_removed_namespace_owner() {
     </q:body></q:document>"#
         );
         let mut document = document_with_content_controls(&xml);
-        assert!(document.remove_content(1));
-        let error = document.to_bytes().unwrap_err();
+        let snapshot = |document: &Document| {
+            document
+                .story_items(&f254_story(document, rdocx::StoryKind::Body))
+                .unwrap()
+                .into_iter()
+                .map(|item| item.xml().unwrap().into_owned())
+                .collect::<Vec<_>>()
+        };
+        let existing_save = document.to_bytes().map_err(|error| error.to_string());
+        let before = snapshot(&document);
+        let error = document.try_remove_content(1).unwrap_err();
+        assert!(!document.remove_content(1));
+        assert_eq!(snapshot(&document), before);
+        assert_eq!(
+            document.to_bytes().map_err(|error| error.to_string()),
+            existing_save
+        );
         assert!(
             error
                 .to_string()
@@ -17240,6 +17257,14 @@ fn fixed_prefix_collisions_fail_closed_after_owner_insert_remove_and_reorder() {
 
     for mutation in ["insert", "remove", "reorder"] {
         let mut document = document_with_content_controls(xml);
+        let before = document.to_bytes().unwrap();
+        if mutation != "insert" {
+            let error = document.try_remove_content(0).unwrap_err();
+            assert!(error.to_string().contains("shadowed `wp` namespace"));
+            assert!(!document.remove_content(0));
+            assert_eq!(document.to_bytes().unwrap(), before);
+            continue;
+        }
         match mutation {
             "insert" => {
                 document.insert_paragraph(0, "inserted");
@@ -57245,4 +57270,714 @@ fn legacy_table_compensation_uses_style_inherited_indent_and_direct_overrides() 
             }
         }
     }
+}
+
+/// Issue 282, reported by hadim: destructive edits must not orphan threads.
+#[test]
+fn comment_removal_preserves_thread_closure() {
+    let mut document = Document::new();
+    document.add_paragraph("remove");
+    document.add_paragraph("keep");
+    let root = document
+        .add_comment(
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "root",
+        )
+        .unwrap();
+    let reply = document.reply_to(root, "Ben", "reply").unwrap();
+    document.reply_to(reply, "Cyd", "grandchild").unwrap();
+    let kept = document
+        .add_comment(
+            RunRange {
+                start: RunPosition {
+                    body_index: 1,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 1,
+                    run_index: 1,
+                },
+            },
+            "Dee",
+            None,
+            "unrelated",
+        )
+        .unwrap();
+    assert!(document.remove_content(0));
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(
+        reopened
+            .comments()
+            .iter()
+            .map(|comment| comment.id())
+            .collect::<Vec<_>>(),
+        vec![kept]
+    );
+    assert_eq!(reopened.paragraphs()[0].text(), "keep");
+}
+
+#[test]
+fn comment_removal_refuses_partial_ranges_and_detach_atomically() {
+    let mut document = Document::new();
+    document.add_paragraph("first");
+    document.add_paragraph("last");
+    document
+        .add_comment(
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 1,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "crosses removal",
+        )
+        .unwrap();
+    let before = document.to_bytes().unwrap();
+    assert!(
+        !document.remove_content(0),
+        "a partial comment cut must refuse"
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let story = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == rdocx::StoryKind::Body)
+        .unwrap();
+    let location = document.story_items(&story).unwrap()[0].location().clone();
+    assert!(
+        document.remove_content_at(&location).is_err(),
+        "detached fragments do not own comments"
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn comment_removal_checks_cell_row_table_and_related_story_ownership() {
+    for kind in [
+        rdocx::StoryKind::TableCell,
+        rdocx::StoryKind::Header,
+        rdocx::StoryKind::Footer,
+        rdocx::StoryKind::Footnote,
+        rdocx::StoryKind::TextBox,
+    ] {
+        let mut document = Document::new();
+        document.add_paragraph("body remains");
+        document
+            .add_table(2, 1)
+            .cell(0, 0)
+            .unwrap()
+            .set_text("cell anchor");
+        document.set_header("header anchor");
+        document.set_footer("footer anchor");
+        let note_id = document.add_footnote("note anchor");
+        let zero = Length::pt(0.0);
+        document
+            .add_text_box_to_story(
+                &f254_story(&document, rdocx::StoryKind::Body),
+                "box anchor",
+                rdocx::TextBoxOptions {
+                    width: Length::pt(144.0),
+                    height: Length::pt(54.0),
+                    anchor: rdocx::PictureAnchor {
+                        horizontal_relative_from: rdocx::DrawingHorizontalRelativeFrom::Column,
+                        horizontal_offset: zero,
+                        horizontal_alignment: None,
+                        vertical_relative_from: rdocx::DrawingVerticalRelativeFrom::Paragraph,
+                        vertical_offset: zero,
+                        vertical_alignment: None,
+                        wrap: rdocx::DrawingWrap::TopAndBottom,
+                        distance_top: zero,
+                        distance_bottom: zero,
+                        distance_left: zero,
+                        distance_right: zero,
+                        relative_height: 1,
+                        behind_text: false,
+                    },
+                    rotation_degrees: 0.0,
+                    text_direction: rdocx::TextBoxDirection::Horizontal,
+                    fill_color: None,
+                },
+            )
+            .unwrap();
+        let story = document
+            .stories()
+            .unwrap()
+            .into_iter()
+            .find(|story| story.kind() == kind)
+            .unwrap();
+        let location = document
+            .story_items(&story)
+            .unwrap()
+            .into_iter()
+            .find(|item| item.kind() == rdocx::StoryItemKind::Paragraph)
+            .unwrap()
+            .location()
+            .clone();
+        let id = document
+            .add_story_comment(
+                rdocx::StoryRunRange {
+                    start: rdocx::StoryRunPosition {
+                        location: location.clone(),
+                        run_index: 0,
+                    },
+                    end: rdocx::StoryRunPosition {
+                        location,
+                        run_index: 1,
+                    },
+                },
+                "Ada",
+                None,
+                "root",
+            )
+            .unwrap();
+        document.reply_to(id, "Ben", "reply").unwrap();
+        document.validate_comment_ownership().unwrap();
+        let bytes = document.to_bytes().unwrap();
+        let mut detached = Document::from_bytes(&bytes).unwrap();
+        let story = detached
+            .stories()
+            .unwrap()
+            .into_iter()
+            .find(|story| story.kind() == kind)
+            .unwrap();
+        let location = detached
+            .story_items(&story)
+            .unwrap()
+            .into_iter()
+            .find(|item| item.kind() == rdocx::StoryItemKind::Paragraph)
+            .unwrap()
+            .location()
+            .clone();
+        assert!(detached.remove_content_at(&location).is_err(), "{kind:?}");
+        assert_eq!(detached.to_bytes().unwrap(), bytes, "{kind:?}");
+        if kind == rdocx::StoryKind::Footnote {
+            let mut removed = Document::from_bytes(&bytes).unwrap();
+            removed.remove_footnote(note_id).unwrap();
+            assert!(removed.comments().is_empty());
+            removed.validate_comment_ownership().unwrap();
+        }
+        assert!(document.remove_comment(id).unwrap(), "{kind:?}");
+        let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert!(reopened.comments().is_empty(), "{kind:?}");
+        reopened.validate_comment_ownership().unwrap();
+        let saved = reopened.to_bytes().unwrap();
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+        assert!(
+            package
+                .parts
+                .values()
+                .all(|xml| !String::from_utf8_lossy(xml)
+                    .contains(&format!("commentReference w:id=\"{id}\""))),
+            "{kind:?}"
+        );
+        if kind == rdocx::StoryKind::TableCell {
+            for whole_table in [false, true] {
+                let mut removed = Document::from_bytes(&bytes).unwrap();
+                if whole_table {
+                    assert!(
+                        removed
+                            .try_remove_content(removed.content_index_of_table(0).unwrap())
+                            .unwrap()
+                    );
+                } else {
+                    assert!(removed.remove_table_row(0, 0).unwrap());
+                }
+                assert!(removed.comments().is_empty());
+                Document::from_bytes(&removed.to_bytes().unwrap())
+                    .unwrap()
+                    .validate_comment_ownership()
+                    .unwrap();
+            }
+            let mut edited = Document::from_bytes(&bytes).unwrap();
+            edited.try_set_cell_text(0, 0, 0, "updated").unwrap();
+            assert_eq!(edited.comments().len(), 2);
+            edited.validate_comment_ownership().unwrap();
+            assert_eq!(
+                edited.table(0).unwrap().cell(0, 0).unwrap().text(),
+                "updated"
+            );
+        }
+    }
+}
+
+#[test]
+fn comment_removal_preserves_selective_relocated_companions_and_opaque_parts() {
+    let mut document = Document::new();
+    document.add_paragraph("remove");
+    document.add_paragraph("keep");
+    let mut ids = Vec::new();
+    for body_index in 0..2 {
+        ids.push(
+            document
+                .add_comment(
+                    RunRange {
+                        start: RunPosition {
+                            body_index,
+                            run_index: 0,
+                        },
+                        end: RunPosition {
+                            body_index,
+                            run_index: 1,
+                        },
+                    },
+                    "Ada",
+                    None,
+                    "root",
+                )
+                .unwrap(),
+        );
+    }
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let comments = rdocx_oxml::comments::CT_Comments::from_xml(
+        package.get_part("/word/comments.xml").unwrap(),
+    )
+    .unwrap();
+    let paragraphs = comments
+        .comments
+        .iter()
+        .map(|comment| {
+            comment
+                .paragraph_ids
+                .last()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .clone()
+        })
+        .collect::<Vec<_>>();
+    let ids_xml = format!(
+        r#"<ci:commentsIds xmlns:ci="http://schemas.microsoft.com/office/word/2016/wordml/cid" xmlns:x="urn:opaque" x:root="keep"><ci:commentId ci:paraId="{}" ci:durableId="00000010"/><ci:commentId ci:paraId="{}" ci:durableId="00000020" x:keep="yes"/><x:opaque token="same"/></ci:commentsIds>"#,
+        paragraphs[0], paragraphs[1]
+    );
+    let extensible = r#"<ce:commentsExtensible xmlns:ce="http://schemas.microsoft.com/office/word/2018/wordml/cex" xmlns:x="urn:opaque" x:root="keep"><ce:commentExtensible ce:durableId="00000010"/><ce:commentExtensible ce:durableId="00000020" x:keep="yes"><ce:extLst><x:payload token="same"/></ce:extLst></ce:commentExtensible><ce:extLst><x:rootPayload token="same"/></ce:extLst></ce:commentsExtensible>"#;
+    for (index, target, relationship, content_type, xml) in [
+        (
+            0,
+            "/annotations/ids.xml",
+            "http://schemas.microsoft.com/office/2016/09/relationships/commentsIds",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsIds+xml",
+            ids_xml.as_bytes(),
+        ),
+        (
+            1,
+            "/annotations/extensible.xml",
+            "http://schemas.microsoft.com/office/2018/08/relationships/commentsExtensible",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtensible+xml",
+            extensible.as_bytes(),
+        ),
+    ] {
+        package.set_part(target, xml.to_vec());
+        package.content_types.add_override(target, content_type);
+        package
+            .get_or_create_part_rels("/word/document.xml")
+            .items
+            .push(oxml_opc::Relationship {
+                id: format!("rIdOwnership{index}"),
+                rel_type: relationship.into(),
+                target: target.into(),
+                target_mode: None,
+            });
+    }
+    let mut input = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut input).unwrap();
+    let mut document = Document::from_bytes(input.get_ref()).unwrap();
+    document.validate_comment_ownership().unwrap();
+    assert!(document.try_remove_content(0).unwrap());
+    let saved = document.to_bytes().unwrap();
+    let saved = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+    for (part, source) in [
+        ("/annotations/ids.xml", ids_xml.as_str()),
+        ("/annotations/extensible.xml", extensible),
+    ] {
+        let actual = std::str::from_utf8(saved.get_part(part).unwrap()).unwrap();
+        assert!(!actual.contains("00000010"));
+        assert!(actual.contains("00000020"));
+        assert!(actual.contains("x:root=\"keep\""));
+        assert!(actual.contains("token=\"same\""));
+        let start = source
+            .find(if part.ends_with("ids.xml") {
+                "<ci:commentId "
+            } else {
+                "<ce:commentExtensible "
+            })
+            .unwrap();
+        let end = start + source[start..].find("/>").unwrap() + 2;
+        assert_eq!(actual, [&source[..start], &source[end..]].concat());
+    }
+    assert_eq!(
+        document
+            .comments()
+            .iter()
+            .map(|comment| comment.id())
+            .collect::<Vec<_>>(),
+        vec![ids[1]]
+    );
+    document.validate_comment_ownership().unwrap();
+    // Unrelated parts and all relationships are retained exactly.
+    for (part, original) in &package.parts {
+        if ![
+            "/word/document.xml",
+            "/word/comments.xml",
+            "/word/commentsExtended.xml",
+            "/annotations/ids.xml",
+            "/annotations/extensible.xml",
+        ]
+        .contains(&part.as_str())
+        {
+            assert_eq!(saved.get_part(part).unwrap(), original, "{part}");
+        }
+    }
+}
+
+#[test]
+fn comment_removal_accepts_signed_imported_ids_and_refuses_ambiguous_sources() {
+    let mut document = Document::new();
+    document.add_paragraph("anchor");
+    document
+        .add_comment(
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "root",
+        )
+        .unwrap();
+    let bytes = document.to_bytes().unwrap();
+    for id in ["-7", "2147483648", "not-an-id"] {
+        let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+        for part in ["/word/document.xml", "/word/comments.xml"] {
+            let xml = std::str::from_utf8(package.get_part(part).unwrap())
+                .unwrap()
+                .replace("w:id=\"0\"", &format!("w:id=\"{id}\""));
+            package.set_part(part, xml.into_bytes());
+        }
+        let mut raw = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut raw).unwrap();
+        if let Ok(mut imported) = Document::from_bytes(raw.get_ref()) {
+            if id == "-7" {
+                imported.validate_comment_ownership().unwrap();
+                assert!(imported.try_remove_content(0).unwrap());
+                assert!(imported.comments().is_empty());
+            } else {
+                let before = imported.to_bytes().unwrap();
+                assert!(imported.try_remove_content(0).is_err());
+                assert_eq!(imported.to_bytes().unwrap(), before);
+            }
+        } else {
+            assert_ne!(id, "-7");
+        }
+    }
+}
+
+#[test]
+fn comment_removal_refuses_surviving_references_and_nested_thread_anchors() {
+    let mut document = Document::new();
+    document.add_paragraph("source");
+    document.add_paragraph("surviving reference");
+    let root = document
+        .add_comment(
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "comment text anchor",
+        )
+        .unwrap();
+    let source = document.to_bytes().unwrap();
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&source)).unwrap();
+    let mut xml =
+        String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let reference = format!("<w:r><w:commentReference w:id=\"{root}\"/></w:r>");
+    assert!(xml.contains(&reference));
+    xml = xml.replace(&reference, "");
+    let last = xml.rfind("</w:p>").unwrap();
+    xml.insert_str(last, &reference);
+    package.set_part("/word/document.xml", xml.into_bytes());
+    let mut raw = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut raw).unwrap();
+    let mut partial = Document::from_bytes(raw.get_ref()).unwrap();
+    let before = partial.to_bytes().unwrap();
+    assert!(
+        partial
+            .try_remove_content(0)
+            .unwrap_err()
+            .to_string()
+            .contains(&root.to_string())
+    );
+    assert_eq!(partial.to_bytes().unwrap(), before);
+
+    let story = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == rdocx::StoryKind::Comment)
+        .unwrap();
+    let location = document.story_items(&story).unwrap()[0].location().clone();
+    let nested = document
+        .add_story_comment(
+            rdocx::StoryRunRange {
+                start: rdocx::StoryRunPosition {
+                    location: location.clone(),
+                    run_index: 0,
+                },
+                end: rdocx::StoryRunPosition {
+                    location,
+                    run_index: 1,
+                },
+            },
+            "Ben",
+            None,
+            "separate root",
+        )
+        .unwrap();
+    let before = document.to_bytes().unwrap();
+    assert!(
+        document
+            .remove_comment(root)
+            .unwrap_err()
+            .to_string()
+            .contains(&nested.to_string())
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+    assert!(document.try_remove_content(0).is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn comment_removal_retains_unqualified_empty_cell_payload_and_the_final_paragraph() {
+    let xml = format!(
+        r#"<w:document xmlns:w="{W_NS}" xmlns:q="{W_NS}" xmlns:x="urn:opaque"><w:body><w:tbl><w:tr><w:tc><w:p><x:holder><q:commentRangeStart q:id="-9"/></x:holder></w:p><w:p><w:r><w:t>keep</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>"#
+    );
+    let mut document = document_with_content_controls(&xml);
+    let before = document.to_bytes().unwrap();
+    document
+        .table_mut(0)
+        .unwrap()
+        .cell(0, 0)
+        .unwrap()
+        .remove_first_empty_paragraph();
+    assert_eq!(
+        document
+            .table(0)
+            .unwrap()
+            .cell(0, 0)
+            .unwrap()
+            .paragraph_count(),
+        2
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let mut plain = Document::new();
+    let mut table = plain.add_table(1, 1);
+    let mut cell = table.cell(0, 0).unwrap();
+    cell.remove_first_empty_paragraph();
+    assert_eq!(cell.paragraph_count(), 1);
+    cell.add_paragraph("replacement");
+    cell.remove_first_empty_paragraph();
+    assert_eq!(cell.paragraph_count(), 1);
+    assert_eq!(cell.text(), "replacement");
+}
+
+#[test]
+fn comment_removal_related_endnote_and_raw_wrapper_markers_are_qualified() {
+    let mut document = Document::new();
+    document.add_paragraph("body");
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let part = "/notes/relocated-endnotes.xml";
+    package.set_part(part, format!(r#"<q:endnotes xmlns:q="{W_NS}" xmlns:x="urn:foreign"><q:endnote q:id="2"><q:p><q:r><q:t>endnote anchor</q:t></q:r></q:p></q:endnote><x:commentReference x:id="999"/></q:endnotes>"#).into_bytes());
+    package.content_types.add_override(
+        part,
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml",
+    );
+    package.get_or_create_part_rels("/word/document.xml").add(
+        oxml_opc::relationship::rel_types::ENDNOTES,
+        "../notes/relocated-endnotes.xml",
+    );
+    let mut input = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut input).unwrap();
+    let mut document = Document::from_bytes(input.get_ref()).unwrap();
+    let story = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == rdocx::StoryKind::Endnote)
+        .unwrap();
+    let location = document.story_items(&story).unwrap()[0].location().clone();
+    let root = document
+        .add_story_comment(
+            rdocx::StoryRunRange {
+                start: rdocx::StoryRunPosition {
+                    location: location.clone(),
+                    run_index: 0,
+                },
+                end: rdocx::StoryRunPosition {
+                    location,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "endnote root",
+        )
+        .unwrap();
+    document.validate_comment_ownership().unwrap();
+    assert!(document.remove_comment(root).unwrap());
+    document.validate_comment_ownership().unwrap();
+    let saved =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let xml = std::str::from_utf8(saved.get_part(part).unwrap()).unwrap();
+    assert!(xml.contains("<x:commentReference x:id=\"999\"/>"));
+    assert!(!xml.contains(&format!("q:id=\"{root}\"")));
+}
+
+#[test]
+fn comment_removal_revision_resolution_reconciles_whole_and_refuses_partial_cuts() {
+    for (revision, discard_accept) in [("del", true), ("ins", false)] {
+        for partial in [false, true] {
+            let marker_end = if partial {
+                ""
+            } else {
+                r#"<w:commentRangeEnd w:id="0"/><w:r><w:commentReference w:id="0"/></w:r>"#
+            };
+            let after = if partial {
+                r#"<w:commentRangeEnd w:id="0"/><w:r><w:commentReference w:id="0"/></w:r>"#
+            } else {
+                ""
+            };
+            let body = format!(
+                r#"<w:p><w:{revision} w:id="21" w:author="Ada"><w:commentRangeStart w:id="0"/><w:r><w:t>source</w:t></w:r>{marker_end}</w:{revision}>{after}<w:r><w:t>kept</w:t></w:r></w:p>"#
+            );
+            let (mut document, _) = document_with_comment_paragraphs(&body);
+            let before = document.to_bytes().unwrap();
+            let result = if discard_accept {
+                document.accept_all()
+            } else {
+                document.reject_all()
+            };
+            if partial {
+                assert!(result.unwrap_err().to_string().contains("comment"));
+                assert_eq!(document.to_bytes().unwrap(), before);
+            } else {
+                assert_eq!(result.unwrap(), 1);
+                assert!(document.comments().is_empty());
+                document.validate_comment_ownership().unwrap();
+                let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+                assert_eq!(reopened.paragraph(0).unwrap().text(), "kept");
+            }
+        }
+    }
+}
+
+#[test]
+fn comment_removal_inverse_does_not_restore_over_unrelated_edits() {
+    let (mut document, id) = document_with_comment_paragraphs(
+        r#"<w:p data-producer="kept"><w:commentRangeStart w:id="0"/><w:r><w:t>anchor</w:t></w:r><w:commentRangeEnd w:id="0"/><w:r><w:commentReference w:id="0"/></w:r><x:opaque xmlns:x="urn:producer">payload</x:opaque></w:p>"#,
+    );
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let part = package.main_document_part().unwrap();
+    let xml = String::from_utf8(package.get_part(&part).unwrap().to_vec())
+        .unwrap()
+        .replacen(
+            "<w:document ",
+            r#"<w:document xmlns:xr="urn:root" xr:keep="root metadata" "#,
+            1,
+        );
+    package.set_part(&part, xml.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    document = Document::from_bytes(bytes.get_ref()).unwrap();
+    document.add_paragraph("unrelated addition");
+    assert!(document.remove_comment(id).unwrap());
+    let saved = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(xml.contains("unrelated addition"));
+    assert!(xml.contains(r#"xr:keep="root metadata""#));
+    assert!(xml.contains(r#"xmlns:xr="urn:root""#));
+    assert!(xml.contains(r#"data-producer="kept""#));
+    assert!(xml.contains(r#"<x:opaque xmlns:x="urn:producer">payload</x:opaque>"#));
+    let reopened = Document::from_bytes(&saved).unwrap();
+    reopened.validate_comment_ownership().unwrap();
+}
+
+#[test]
+fn comment_removal_keeps_untouched_unowned_marker_graphs() {
+    let body = r#"<w:p><w:commentRangeStart w:id="77"/><w:r><w:t>opaque annotation</w:t></w:r><w:commentRangeEnd w:id="77"/><w:r><w:commentReference w:id="77"/></w:r></w:p><w:p><w:r><w:t>remove me</w:t></w:r></w:p>"#;
+    let mut document = document_with_content_controls(&wrap_word_body(body));
+    assert!(document.validate_comment_ownership().is_err());
+    let before = document_xml(&mut document);
+    assert!(document.try_remove_content(1).unwrap());
+    let after = document_xml(&mut document);
+    let first =
+        |xml: &str| xml[xml.find("<w:p>").unwrap()..xml.find("</w:p>").unwrap() + 6].to_owned();
+    assert_eq!(first(&after), first(&before));
+    assert!(document.validate_comment_ownership().is_err());
+    assert!(document.try_remove_content(0).unwrap());
+    document.validate_comment_ownership().unwrap();
+}
+
+#[test]
+fn comment_removal_dangling_reference_comparison_keeps_existing_lifecycle() {
+    let source = |id| {
+        document_with_content_controls(&wrap_word_body(&format!(
+            r#"<w:p><w:r><w:t>same</w:t><w:commentReference w:id="{id}"/></w:r></w:p>"#
+        )))
+    };
+    let mut original = source(7);
+    let edited = source(8);
+    original
+        .compare(&edited, "Ada", "2026-10-08T15:00:00Z")
+        .unwrap();
+    let bytes = original.to_bytes().unwrap();
+    let mut accepted = Document::from_bytes(&bytes).unwrap();
+    accepted.accept_all().unwrap();
+    let xml = document_xml(&mut accepted);
+    assert!(xml.contains(r#"commentReference w:id="8""#));
+    assert!(!xml.contains(r#"commentReference w:id="7""#));
+    assert!(accepted.validate_comment_ownership().is_err());
+    let mut rejected = Document::from_bytes(&bytes).unwrap();
+    rejected.reject_all().unwrap();
+    let xml = document_xml(&mut rejected);
+    assert!(xml.contains(r#"commentReference w:id="7""#));
+    assert!(!xml.contains(r#"commentReference w:id="8""#));
 }

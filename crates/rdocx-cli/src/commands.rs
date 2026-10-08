@@ -2236,6 +2236,10 @@ pub fn validate(file: &Path) -> Result<bool> {
         }
     }
 
+    if let Err(error) = doc.validate_comment_ownership() {
+        errors.push(format!("invalid comment ownership: {error}"));
+    }
+
     // --- Advisory findings ---
 
     if doc.content_count() == 0 {

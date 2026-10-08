@@ -51,6 +51,8 @@ from rdocx import (
 
 def exercise_rdocx_types(path: Path) -> None:
     document = Document(path)
+    # Comment-aware removal keeps the existing bool surface.
+    assert_type(document.remove_content(1000), bool)
     opened: Document = Document.open(path)
     loaded: Document = Document.from_bytes(b"")
     paragraph: Paragraph = document.add_paragraph("typed")

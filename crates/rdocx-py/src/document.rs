@@ -3607,12 +3607,14 @@ impl PyDocument {
         Py::new(py, PyTable::new(slf, path))
     }
 
-    fn remove_content(&mut self, index: usize) -> bool {
-        let removed = self.inner.remove_content(index);
+    fn remove_content(&mut self, py: Python<'_>, index: usize) -> PyResult<bool> {
+        let removed = py
+            .detach(|| self.inner.try_remove_content(index))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
         if removed {
             self.revisions.bump();
         }
-        removed
+        Ok(removed)
     }
 
     fn find_content_index(

@@ -6321,11 +6321,11 @@ fn rtf_writer_resets_table_cell_paragraph_state() {
     {
         let mut table = document.add_table(1, 2);
         let mut first_cell = table.cell(0, 0).unwrap();
-        first_cell.remove_first_empty_paragraph();
         let mut first = first_cell.add_paragraph("center");
         first.set_alignment(Alignment::Center);
         let mut second = first_cell.add_paragraph("list");
         second.set_numbering(list_id, 0);
+        first_cell.remove_first_empty_paragraph();
         table.cell(0, 1).unwrap().set_text("default");
     }
 
@@ -24163,4 +24163,157 @@ fn invalid_story_range_moves_are_atomic() {
     };
     assert!(document.move_story_range(&selected, reversed).is_err());
     assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn issue_282_row_removal_does_not_orphan_comment_definitions() {
+    let mut document = Document::new();
+    document
+        .add_table(2, 1)
+        .cell(0, 0)
+        .unwrap()
+        .set_text("anchor");
+    let story = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == rdocx::StoryKind::TableCell)
+        .unwrap();
+    let location = document.story_items(&story).unwrap()[0].location().clone();
+    document
+        .add_story_comment(
+            rdocx::StoryRunRange {
+                start: rdocx::StoryRunPosition {
+                    location: location.clone(),
+                    run_index: 0,
+                },
+                end: rdocx::StoryRunPosition {
+                    location,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "root",
+        )
+        .unwrap();
+    assert!(document.remove_table_row(0, 0).unwrap());
+    assert!(
+        Document::from_bytes(&document.to_bytes().unwrap())
+            .unwrap()
+            .comments()
+            .is_empty()
+    );
+}
+
+#[test]
+fn issue_282_pop_refuses_a_complete_commented_fragment() {
+    let mut document = Document::new();
+    document.add_paragraph("anchor");
+    document
+        .add_comment(
+            rdocx::RunRange {
+                start: rdocx::RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: rdocx::RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "root",
+        )
+        .unwrap();
+    let story = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == rdocx::StoryKind::Body)
+        .unwrap();
+    let location = document.story_items(&story).unwrap()[0].location().clone();
+    let before = document.to_bytes().unwrap();
+    assert!(document.remove_content_at(&location).is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn issue_282_cell_text_keeps_the_comment_reference() {
+    let mut document = Document::new();
+    document
+        .add_table(1, 1)
+        .cell(0, 0)
+        .unwrap()
+        .set_text("anchor");
+    let story = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == rdocx::StoryKind::TableCell)
+        .unwrap();
+    let location = document.story_items(&story).unwrap()[0].location().clone();
+    document
+        .add_story_comment(
+            rdocx::StoryRunRange {
+                start: rdocx::StoryRunPosition {
+                    location: location.clone(),
+                    run_index: 0,
+                },
+                end: rdocx::StoryRunPosition {
+                    location,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "root",
+        )
+        .unwrap();
+    document
+        .table_mut(0)
+        .unwrap()
+        .cell(0, 0)
+        .unwrap()
+        .set_text("updated");
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert_eq!(xml.matches("<w:commentReference ").count(), 1, "{xml}");
+}
+
+#[test]
+fn issue_282_rtf_cell_import_keeps_empty_and_formatted_paragraphs() {
+    for (content, expected) in [
+        ("", vec![""]),
+        ("ordinary", vec!["ordinary"]),
+        (r"{\b first}\par {\i second}", vec!["first", "second"]),
+    ] {
+        let input = format!(r"{{\rtf1\ansi\trowd\cellx2000\intbl {content}\cell\row}}");
+        let mut document = Document::from_rtf_bytes(input.as_bytes()).unwrap().document;
+        let table = document.table(0).unwrap();
+        let cell = table.cell(0, 0).unwrap();
+        assert_eq!(
+            cell.paragraphs().map(|p| p.text()).collect::<Vec<_>>(),
+            expected
+        );
+        let before = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&before).unwrap();
+        assert_eq!(
+            reopened
+                .table(0)
+                .unwrap()
+                .cell(0, 0)
+                .unwrap()
+                .paragraph_count(),
+            expected.len()
+        );
+        if expected.len() == 2 {
+            let rtf = rtf_text(document.to_rtf_bytes().unwrap().bytes);
+            assert!(rtf.contains("\\b "), "{rtf}");
+            assert!(rtf.contains("\\i "), "{rtf}");
+        }
+    }
 }

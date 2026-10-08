@@ -7279,7 +7279,11 @@ fn restart_merges_continued_below(table: &mut CT_Tbl, row_index: usize) -> Resul
     Ok(())
 }
 
-fn set_story_source_xml(document: &mut Document, part_name: &str, xml: Vec<u8>) -> Result<()> {
+pub(crate) fn set_story_source_xml(
+    document: &mut Document,
+    part_name: &str,
+    xml: Vec<u8>,
+) -> Result<()> {
     if part_name == document.doc_part_name {
         // The main-part story source is canonical XML. It drops a root
         // default namespace and every body declaration, and binds the root
@@ -17441,6 +17445,10 @@ impl Document {
         let part_name = source.part_name.clone();
         let source_xml = source.xml.into_owned();
         let item = validated_direct_content_item(&source_xml, &owner, location)?;
+        let namespace_scope = story_namespace_scope_at(&source_xml, item.full.start)?;
+        let closed =
+            close_content_fragment_namespaces(&source_xml[item.full.clone()], &namespace_scope)?;
+        Self::refuse_commented_fragment(&closed)?;
         if owner.kind == StoryKind::TableCell
             && item.kind == StoryItemKind::Paragraph
             && direct_story_content_items(&source_xml, &owner)?
@@ -17459,7 +17467,7 @@ impl Document {
             source_part_name: Some(part_name.clone()),
             source_story_kind: Some(location.story.kind),
             source_owner_index: Some(location.story.owner_index),
-            namespace_scope: story_namespace_scope_at(&source_xml, item.full.start)?,
+            namespace_scope,
         };
         reject_section_owning_content_fragment(&fragment)?;
         validate_fragment_relationships(&candidate, &location.story, &fragment)?;
@@ -18433,6 +18441,7 @@ impl Document {
         let document_part = candidate.doc_part_name.clone();
         set_story_source_xml(&mut candidate, &document_part, without_references)?;
         set_story_source_xml(&mut candidate, &part_name, notes_xml)?;
+        candidate.reconcile_comment_removal(self)?;
         let reopened = candidate.prepare_and_reopen_staged()?;
         self.commit_staged_mutation(reopened);
         Ok(())
@@ -18766,9 +18775,32 @@ impl Document {
         }
         table.rows.remove(row_index);
         validate_table_topology(table)?;
+        candidate.reconcile_comment_removal(self)?;
         let reopened = candidate.prepare_and_reopen_staged()?;
         self.commit_staged_mutation(reopened);
         Ok(true)
+    }
+
+    /// Set one body's table cell text through a checked package transaction.
+    #[doc(hidden)]
+    pub fn try_set_cell_text(
+        &mut self,
+        table: usize,
+        row: usize,
+        cell: usize,
+        text: &str,
+    ) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        candidate
+            .table_mut(table)
+            .ok_or_else(|| Error::Other(format!("table index {table} is out of range")))?
+            .cell(row, cell)
+            .ok_or_else(|| Error::Other(format!("cell {row}:{cell} is out of range")))?
+            .try_set_text(text)?;
+        candidate.reconcile_comment_removal(self)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
     }
 
     /// Freshen the document-wide identities carried by a copied table row.
@@ -19034,10 +19066,24 @@ impl Document {
 
     /// Remove the content at the given body index.
     ///
-    /// Returns `true` if an element was removed, `false` if the index was out of bounds.
+    /// Returns false when the index is absent or safe removal is refused.
+    /// Use [`Self::try_remove_content`] to distinguish a refusal from an absent index.
     pub fn remove_content(&mut self, index: usize) -> bool {
-        self.invalidate_layout();
-        self.document.body.remove(index).is_some()
+        self.try_remove_content(index).unwrap_or(false)
+    }
+
+    /// Remove a direct body child and its wholly owned comment threads.
+    /// Partial comment cuts and unprovable companion ownership fail atomically.
+    pub fn try_remove_content(&mut self, index: usize) -> Result<bool> {
+        if index >= self.document.body.content.len() {
+            return Ok(false);
+        }
+        let mut candidate = self.clone_for_staging();
+        candidate.document.body.remove(index);
+        candidate.reconcile_comment_removal(self)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(true)
     }
 
     // ---- Image support ----
@@ -21347,7 +21393,7 @@ impl Document {
         Ok(references)
     }
 
-    fn word_story_part_names(&self) -> Vec<String> {
+    pub(crate) fn word_story_part_names(&self) -> Vec<String> {
         let mut story_parts = vec![self.doc_part_name.clone()];
         if let Some(relationships) = self.package.get_part_rels(&self.doc_part_name) {
             story_parts.extend(
@@ -22303,6 +22349,7 @@ impl Document {
             Some(relationship_id),
         )?;
         candidate.prune_unreachable_authored_section_stories(&removed)?;
+        candidate.reconcile_comment_removal(self)?;
         let reopened = candidate.prepare_and_reopen_staged()?;
         let result = reopened
             .section_story(section_index, kind, hdr_type)?
@@ -22325,6 +22372,7 @@ impl Document {
         let removed =
             candidate.set_direct_section_story_reference(section_index, kind, hdr_type, None)?;
         candidate.prune_unreachable_authored_section_stories(&removed)?;
+        candidate.reconcile_comment_removal(self)?;
         let reopened = candidate.prepare_and_reopen_staged()?;
         self.commit_staged_mutation(reopened);
         Ok(())
@@ -22363,6 +22411,7 @@ impl Document {
             Some(relationship_id),
         )?;
         candidate.prune_unreachable_authored_section_stories(&removed)?;
+        candidate.reconcile_comment_removal(self)?;
         let reopened = candidate.prepare_and_reopen_staged()?;
         let result = reopened
             .section_story(section_index, kind, hdr_type)?
@@ -22382,6 +22431,7 @@ impl Document {
         let mut candidate = self.clone_for_staging();
         candidate.flush_to_package()?;
         candidate.install_empty_section_story(section_index, kind, hdr_type)?;
+        candidate.reconcile_comment_removal(self)?;
         let reopened = candidate.prepare_and_reopen_staged()?;
         let result = reopened
             .section_story(section_index, kind, hdr_type)?
@@ -22639,6 +22689,7 @@ impl Document {
         let mut candidate = self.clone_for_staging();
         let removed_references = candidate.remove_section_in_place(index)?;
         candidate.prune_unreachable_authored_section_stories(&removed_references)?;
+        candidate.reconcile_comment_removal(self)?;
         let reopened = candidate.prepare_and_reopen_staged()?;
         self.commit_staged_mutation(reopened);
         Ok(())
@@ -36666,10 +36717,10 @@ mod tests {
 
         let mut table = doc.add_table(1, 1);
         let mut cell = table.cell(0, 0).expect("cell");
-        cell.remove_first_empty_paragraph();
         cell.add_paragraph("")
             .add_hyperlink("table link", &relationship_id)
             .bold(true);
+        cell.remove_first_empty_paragraph();
 
         let bytes = doc.to_bytes().unwrap();
         let reopened = Document::from_bytes(&bytes).unwrap();

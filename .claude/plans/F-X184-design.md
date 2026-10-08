@@ -1,6 +1,6 @@
 # F-X184, Safe comment ownership during content removal
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S90
 **Size**: L
 **Depends on**: F-X179, F-271
@@ -31,9 +31,9 @@ On a staged candidate, inventory qualified source markers and references across 
 
 Extend `remove_comment` with the same checked companion cleanup. Resolve companions through actual relationship types and normalized targets, retain unrelated raw entries and attributes, and use last-paragraph ids plus durable-id linkage without assuming filenames. Existing field companion scans at `field.rs:10662` are source references, not an invitation to route generic comment lifecycle through REF evaluation. Do not rewrite unsupported opaque imported graphs. Remove an owned empty part only when its relationship and content-type ownership is established.
 
-Cover `remove_content`, `remove_table_row`, checked story removal, whole table removal and cell destructive paths. The document-unaware `Cell::remove_first_empty_paragraph` at `table.rs:1704` must retain or refuse marker-bearing empty paragraphs. Preserve existing checked Paragraph setter/run semantics and fix document-owned Cell text operations where clearing runs can discard a reference. No blanket cleanup on save and no silent automatic repair of preexisting orphan documents.
+Cover `remove_content`, `remove_table_row`, checked story removal, whole table removal and cell destructive paths. The same staged reconciliation covers note owner deletion, section story pruning and revision resolution that discards commented source. Reuse the existing revision.rs candidate boundary without adding a second lifecycle. Namespace-invalid legacy removals refuse at the checked publication boundary and retain the original bytes. The document-unaware `Cell::remove_first_empty_paragraph` at `table.rs:1704` must retain or refuse marker-bearing empty paragraphs. Preserve existing checked Paragraph setter/run semantics and fix document-owned Cell text operations where clearing runs can discard a reference. Root selected additive `Cell::try_set_text(&mut self, text: &str) -> Result<()>` using the checked Paragraph setter, with unchanged legacy cell state on refusal. Hidden `Document::try_set_cell_text(&mut self, table: usize, row: usize, cell: usize, text: &str) -> Result<()>` supplies the real Python consumer with candidate staging and prepare/reopen before publication. Retain the final required direct cell paragraph. Reorder the existing rtf.rs import caller and two existing test builders to remove the default empty paragraph only after adding its replacements, preserving empty and formatted multi-paragraph imports. No blanket cleanup on save and no silent automatic repair of preexisting orphan documents. Destructive reconciliation first compares qualified raw marker counts, retaining untouched producer graph metadata when no ownership decreased. Additive story cloning keeps its established behavior. When decreased ids are all demonstrably undefined in actual relationship-resolved qualified raw definition entries, preserve their legacy editing and comparison lifecycle because no owned definition can be orphaned, without repair. Missing, external or ambiguous owned definition relationships and malformed definition sources remain unprovable and refuse. Full strict definition/companion proof applies to decreased defined ids, and explicit comment deletion and CLI validation remain strict.
 
-Add raw all-story orphan checks to CLI validate at `commands.rs:2112`. An anchored root or reference-only root is valid. Replies linked through the surviving root thread do not require independent anchors. A known root with no range and no reference in any story is an error. Do not reuse globally strict `story_ranges()` as a raw presence scanner, because unrelated crossing pairs and accepted-view exclusions must not hide source references. Duplicate or unprovable linkage is diagnosed rather than guessed. Candidate failures preserve all live facade state and every package member. Python revisions advance once only after successful committed removal.
+Expose hidden `Document::validate_comment_ownership(&self) -> Result<()>` for the concrete CLI consumer, using the same qualified ownership inventory as destructive edits. This is the root-selected existing-file implementation clarification. Add raw all-story orphan checks to CLI validate at `commands.rs:2112`. An anchored root or reference-only root is valid. Replies linked through the surviving root thread do not require independent anchors. A known root with no range and no reference in any story is an error. Do not reuse globally strict `story_ranges()` as a raw presence scanner, because unrelated crossing pairs and accepted-view exclusions must not hide source references. Duplicate or unprovable linkage is diagnosed rather than guessed. Candidate failures preserve all live facade state and every package member. Python revisions advance once only after successful committed removal.
 
 ## Rejected alternatives
 
@@ -74,12 +74,14 @@ Expected unchanged: all 49 deterministic harness entries, existing PDF resources
 ## Implementation checklist
 
 - [x] Approve the batch design. Confirm dependency completion and sole writer ownership before implementation.
-- [ ] Capture fail-before evidence for the named positive gate and every reported operation.
-- [ ] Implement only the concrete existing-file API and source ownership contract.
-- [ ] Pass runtime, typing, CLI, exact preservation and atomic refusal controls.
-- [ ] Pass scoped risk riders, archive/README checks and zero-finding microscope.
-- [ ] Update exactly the HLD impact files and prepare the structured handoff.
-- [ ] Reconcile complete issue acceptance at verified sprint close.
+- [x] Capture compiled fail-before evidence for the named thread/partial gates and row, pop, cell and CLI operations.
+- [x] Implement only the concrete existing-file API and source ownership contract.
+- [x] Pass runtime, typing, CLI, exact preservation and atomic refusal controls.
+- [x] Pass scoped risk riders, archive/README checks and zero-finding microscope.
+- [x] Update exactly the HLD impact files. Prepare the structured handoff in the feature-local completion phase.
+- [x] Record implemented complete issue acceptance for root reconciliation at verified sprint close.
+
+GitHub issue closure and final integrated acceptance remain root obligations after the full sprint gate and sprint review. Worker prepare does not close the issue.
 
 ## Open questions
 

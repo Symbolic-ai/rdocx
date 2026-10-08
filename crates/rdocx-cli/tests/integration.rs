@@ -3956,3 +3956,57 @@ fn revision_list_names_the_story_of_compared_footer_revisions() {
     let value: serde_json::Value = serde_json::from_slice(&resolved.stdout).unwrap();
     assert_eq!(value["resolved"], records.len());
 }
+
+#[test]
+fn validate_distinguishes_orphans_point_comments_and_linked_replies() {
+    let workspace = TempWorkspace::new("comment-ownership");
+    let mut document = Document::new();
+    document.add_paragraph("anchor");
+    let root = document
+        .add_comment(
+            rdocx::RunRange {
+                start: rdocx::RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: rdocx::RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "root",
+        )
+        .unwrap();
+    document.reply_to(root, "Ben", "reply").unwrap();
+    let source = document.to_bytes().unwrap();
+    for (label, orphan) in [("point", false), ("orphan", true)] {
+        let mut package = OpcPackage::from_reader(std::io::Cursor::new(&source)).unwrap();
+        let part = package.main_document_part().unwrap();
+        let mut xml = String::from_utf8(package.get_part(&part).unwrap().to_vec()).unwrap();
+        for name in ["commentRangeStart", "commentRangeEnd", "commentReference"] {
+            if name == "commentReference" && !orphan {
+                continue;
+            }
+            let needle = format!("<w:{name} ");
+            while let Some(start) = xml.find(&needle) {
+                let end = start + xml[start..].find("/>").unwrap() + 2;
+                xml.replace_range(start..end, "");
+            }
+        }
+        package.set_part(&part, xml.into_bytes());
+        let path = workspace.path.join(format!("{label}.docx"));
+        package
+            .write_to(&mut std::fs::File::create(&path).unwrap())
+            .unwrap();
+        let output = cli(&["validate", path.to_str().unwrap()]);
+        assert_eq!(
+            output.status.success(),
+            !orphan,
+            "{label}: {} {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}

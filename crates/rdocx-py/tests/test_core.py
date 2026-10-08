@@ -3558,3 +3558,81 @@ def test_issue_168_complete_edit_save_reopen_layout_and_render(tmp_path):
     ]
     assert oracle.tables[0].cell(1, 0).text == ""
     assert oracle.sections[1].footer.paragraphs[0].text.startswith("Confidential")
+
+
+# Issue 282, hadim: ownership checks happen before publication or invalidation.
+def test_comment_removal_paths_preserve_atomicity_and_revisions():
+    import rdocx
+
+    def commented(kind, wrapped=False):
+        document = rdocx.Document()
+        document.add_paragraph("body anchor")
+        document.add_paragraph("retained")
+        if kind == "cell":
+            document.add_table(2, 1).cell(0, 0).text = "cell anchor"
+        item = next(item for item in document.story_items
+                    if item.kind == "paragraph"
+                    and item.story.kind == ("table_cell" if kind == "cell" else "body")
+                    and item.text == ("cell anchor" if kind == "cell" else "body anchor"))
+        root = document.add_comment(rdocx.StoryRunRange(
+            start=rdocx.StoryRunPosition(item=item, run_index=0),
+            end=rdocx.StoryRunPosition(item=item, run_index=1),
+        ), author="Ada", text="root")
+        reply = document.reply_to(root, author="Ben", text="reply")
+        document.reply_to(reply, author="Cyd", text="grandchild")
+        if wrapped:
+            xml = _document_xml(document).decode()
+            body = xml[xml.index("<w:body>") + len("<w:body>"):xml.index("</w:body>")]
+            start = body.index("<w:p")
+            end = body.index("</w:p>", start) + len("</w:p>")
+            body = (body[:start] + '<w:sdt><w:sdtPr><w:tag w:val="goog_rdk_ownership"/></w:sdtPr>'
+                    '<w:sdtContent>' + body[start:end] + '</w:sdtContent></w:sdt>' + body[end:])
+            document = _replace_document_body(document, body)
+        return document
+
+    for wrapped in (False, True):
+        document = commented("body", wrapped)
+        held = document.paragraphs[-1]
+        before = document.to_bytes()
+        with pytest.raises(rdocx.RdocxError, match="comment"):
+            document.pop_content(0)
+        assert document.to_bytes() == before
+        assert held.text == "retained"
+        assert document.remove_content(0) is True
+        assert document.comments == ()
+        with pytest.raises(rdocx.StaleElementError):
+            held.text
+        reopened = rdocx.Document.from_bytes(document.to_bytes())
+        assert reopened.comments == ()
+        assert [p.text for p in reopened.paragraphs] == ["retained"]
+
+    document = commented("cell")
+    held = document.paragraphs[0]
+    document.tables[0].remove_row(0)
+    assert document.comments == ()
+    with pytest.raises(rdocx.StaleElementError):
+        held.text
+    assert rdocx.Document.from_bytes(document.to_bytes()).comments == ()
+
+    document = commented("cell")
+    held = document.tables[0].cell(0, 0)
+    held.text = "replacement"
+    assert len(document.comments) == 3
+    with pytest.raises(rdocx.StaleElementError):
+        held.text
+    assert document.tables[0].cell(0, 0).text == "replacement"
+    assert len(rdocx.Document.from_bytes(document.to_bytes()).comments) == 3
+
+    document = rdocx.Document()
+    document.add_paragraph("first")
+    document.add_paragraph("last")
+    document.add_comment(rdocx.RunRange(
+        start=rdocx.RunPosition(body_index=0, run_index=0),
+        end=rdocx.RunPosition(body_index=1, run_index=1),
+    ), author="Ada", text="partial")
+    held = document.paragraphs[0]
+    before = document.to_bytes()
+    with pytest.raises(rdocx.RdocxError, match="comment"):
+        document.remove_content(0)
+    assert document.to_bytes() == before
+    assert held.text == "first"
