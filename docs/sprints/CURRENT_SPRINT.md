@@ -39,6 +39,7 @@ the full pinned Word bibliography source, style and locale catalogue.
 | F-X186 | Move comment anchors without losing threads | M | in-progress | codex |
 | F-X187 | Scoped paragraph and cell text replacement | M | pending | - |
 | F-X188 | Preserve comment ownership when replacing or removing whole stories | L | pending | - |
+| F-X189 | Prepare Word 0.16.0 and PowerPoint 0.14.0 families | L | pending | - |
 
 ## Sequencing note
 
@@ -140,6 +141,15 @@ F-X188 owns exclusive wave15 after F-X187 and before full-catalogue F-282
 resumes. It completes every Issue288 criterion with the approved new design,
 retaining completed F-X184 protections. Issue289 is part of F-X185 acceptance.
 
+The user approved F-X189 to prepare Word0.16.0 and shared/PowerPoint0.14.0
+after every included implementation story completes. Both prior unified
+versions are already published at S88. Exclusive wave16 prepares exact
+carriers, reviewed family notes, contributor credit and fresh package/binding
+evidence. The final reviewed sprint SHA must pass the hosted build-only
+rehearsal before close. Publication follows close through separate final
+exact-main-SHA approvals, shared family first where Word pins require it.
+Issue264 remains excluded and Issue281 remains open for its roadmap decision.
+
 ## Definition of done for this sprint
 
 - Simple, complex and nested fields reopen with identical instruction semantics and ordered cached content.
@@ -157,3 +167,7 @@ retaining completed F-X184 protections. Issue289 is part of F-X185 acceptance.
 - Issue 281 has a documented roadmap assessment and a disposition linked to F-184.
 
 - Issues 282 through 285 satisfy comment ownership, typed anchor discovery, identity-preserving moves and scoped replacement criteria with atomic refusal and complete source preservation controls.
+
+- Issues288 and289 satisfy whole-story comment closure and complete checked nested paragraph snapshots.
+
+- Both approved new release families have exact versions, reviewed notes and contributor inventories, verified packages and installed Python evidence, plus a current reviewed-SHA hosted build-only rehearsal before close. Publication remains separately approved after close.

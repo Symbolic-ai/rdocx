@@ -2005,6 +2005,7 @@ citations, and numbering-aware navigation.
 | F-X186 | Move comment anchors without losing threads | M |
 | F-X187 | Scoped paragraph and cell text replacement | M |
 | F-X188 | Preserve comment ownership when replacing or removing whole stories | L |
+| F-X189 | Prepare Word 0.16.0 and PowerPoint 0.14.0 families | L |
 
 F-278 is the field substrate. F-279 uses the S89 note policy, and F-280 uses
 S89 range markers. F-281 follows the field, pagination, and caption work.
@@ -2081,6 +2082,20 @@ excluded.
 F-X188 owns exclusive wave15 after F-X187 and before full-catalogue F-282
 resumes. Its approved Issue288 contract completes the remaining replacement,
 glossary and shared-reference ownership work. Issue289 is part of F-X185.
+
+The user approved F-X189 for new Word0.16.0 and shared/PowerPoint0.14.0
+release preparation. Existing unified versions are published at S88 and their
+tags remain immutable. Run exclusive wave16 only after all included S90
+implementation dependencies complete, including full-catalogue F-282 and
+F-283. Prepare exact carriers, reviewed family notes and authenticated
+contribution inventories over each complete previous-tag range, including
+S89. Current local package/binding evidence precedes final integrated full
+verification and review. The final reviewed and pushed sprint SHA must pass
+the hosted build-only rehearsal before close. Publication follows close
+through separate final exact-main-SHA approvals for each family, with shared
+packages published before their new Word consumers. This is a user-approved
+release preparation boundary, not completion of M24 or a1.0 decision.
+Issue264 remains excluded and Issue281 remains open for F-184.
 
 #### Sprint S91, Templates, controls, and forms
 

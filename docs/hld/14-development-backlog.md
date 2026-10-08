@@ -6594,6 +6594,29 @@ Resolve every criterion of [Issue 285](https://github.com/tensorbee/rdocx/issues
 **Depends on**: none.
 **Test gate**: regression. `scoped_text_replacement_preserves_unselected_content` proves the reported failure before implementation and exact successful or refused behavior after save and reopen. Existing Rust, Python, typing and CLI entrypoints cover the complete issue criteria, with unrelated package members and opaque XML preserved. All 49 hash entries remain unchanged. Record reporter provenance and full acceptance for sprint close.
 
+### F-X189, Prepare Word 0.16.0 and PowerPoint 0.14.0 families (L)
+
+Prepare the exact seven-package Word family and Python distribution at 0.16.0,
+and the exact fifteen-package shared OOXML and PowerPoint family and Python
+distribution at 0.14.0. The user approved both new versions and workflow
+records after confirming that the previous unified releases are published.
+Update current version carriers, internal pins, lockfile, policy assertions,
+README examples and measured archives without altering historical tags or
+release records. Derive separate reviewed family notes and authenticated
+contributor inventories from the complete range since each previous tag,
+including S89 and S90 accepted work. Exclude Issue264 and retain Issue281's
+open roadmap disposition. Require current local package and binding evidence,
+then the final reviewed sprint's hosted build-only rehearsal before close.
+Publication follows sprint close through separate exact-SHA approvals under
+`/release`, shared family first where the Word dependency graph requires it.
+**Depends on**: F-278, F-279, F-280, F-281, F-282, F-283, F-X179, F-X180, F-X181, F-X182, F-X183, F-X184, F-X185, F-X186, F-X187, F-X188.
+**Test gate**: release regression. `s90_release_families_match_reviewed_versions`
+in the existing workflow test module checks both exact family allowlists,
+version carriers and rendered notes. Actual22-package patched publication dry
+runs, archive bounds and clean installed Python3.9/3.12 runtime and typing
+evidence pass without publication. The integrated hash baseline is unchanged
+by release preparation. Hosted evidence binds the final reviewed sprint SHA.
+
 ### F-X182, Honor direct table alignment (M)
 
 Resolve every reported variant of [Issue 277](https://github.com/tensorbee/rdocx/issues/277), reported by `hadim`, through PR 279 at `93749ddce266103b62a61e78c3b8a6b692a94646`.
