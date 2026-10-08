@@ -305,6 +305,8 @@ Do not manufacture Word expectations from the implementation output.
 - External oracle comparison. Read differential-testing.md. Assert exact Word version/build and locale, record fresh provenance and triage each disagreement.
 - No new crate, module or production file is proposed. Required workflow records have consolidated permission.
 
+Feature completion updates the existing incomplete-capability owner assertion in scripts/test_sprint_workflow.py to exclude completed F-281. The package rider remeasures the affected rdocx and rdocx-oxml archives, updates their existing footprint rows in README.md and crates/rdocx-oxml/README.md, and updates only the corresponding archive tuples and dates in scripts/readme_doctests.py. Existing performance observations, thresholds and all other package measurements remain unchanged.
+
 ## Hash harness
 
 Expected unchanged for existing corpus entries. Newly supported INDEX, TOA or
@@ -337,6 +339,11 @@ locale recorded explicitly. Technical ownership probes in the test plan must
 pass before completion and may not be replaced by guessed expectations.
 
 ## Exclusive resources
+
+- `scripts/test_sprint_workflow.py`, completed capability owner assertion
+- `scripts/readme_doctests.py`, matching measured archive tuples and dates
+- `README.md`, affected archive footprint rows
+- `crates/rdocx-oxml/README.md`, affected archive footprint row
 
 - `crates/rdocx/src/field.rs`
 - `crates/rdocx-oxml/src/text.rs`, shared generated-table operand and flag grammar
