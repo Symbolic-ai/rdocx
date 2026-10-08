@@ -736,5 +736,5 @@ regenerated, never hand-edited.
 | F-X180 | Correct cell nil and none border precedence | S90 | S | in-progress |
 | F-X181 | Ignore page and column breaks inside table cells | S90 | S | in-progress |
 | F-X182 | Honor direct table alignment | S90 | M | pending |
-| F-X183 | Position legacy tables using cell margins | S90 | M | pending |
+| F-X183 | Correct table margins and legacy positioning | S90 | M | pending |
 <!-- AUTOGEN:backlog-MX END -->

@@ -6532,7 +6532,7 @@ no-default and no-default plus memmap checks and font tests pass, with all
 
 ### F-X182, Honor direct table alignment (M)
 
-Resolve every reported variant of [Issue 277](https://github.com/tensorbee/rdocx/issues/277), reported by `hadim`.
+Resolve every reported variant of [Issue 277](https://github.com/tensorbee/rdocx/issues/277), reported by `hadim`, through PR 279 at `93749ddce266103b62a61e78c3b8a6b692a94646`.
 Direct table jc overrides table-style alignment, including left, center,
 right, start and end. Retain authored indentation rules and preserve source
 XML. Nested and bidi controls distinguish existing placement semantics.
@@ -6543,9 +6543,10 @@ failure before implementation. Deterministic PNG/PDF hash deltas are declared,
 separately attributed and independently reviewed, with unchanged source XML.
 Record reporter provenance and full acceptance for sprint close.
 
-### F-X183, Position legacy tables using cell margins (M)
+### F-X183, Correct table margins and legacy positioning (M)
 
-Resolve every reported variant of [Issue 276](https://github.com/tensorbee/rdocx/issues/276), reported by `hadim`.
+Resolve every reported variant of [Issue 276](https://github.com/tensorbee/rdocx/issues/276) and [Issue 278](https://github.com/tensorbee/rdocx/issues/278), reported by `hadim`, through PR 280 at `795b29d78d5c2ca49c1b414c9818de201fe36b4e`, stacked on PR 279.
+Absent side margins resolve to zero, while authored and inherited defaults remain authoritative.
 Pre-15 and absent compatibility modes position eligible top-level tables
 using resolved first-cell left or last-cell right margins. Preserve modern,
 centered and nested placement, and distinguish bidi and floating contexts.

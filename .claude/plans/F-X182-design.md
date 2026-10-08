@@ -8,7 +8,7 @@
 ## Problem
 
 `crates/rdocx-layout/src/table.rs:504` clears the direct jc after the base-first cascade, so directly centered and right-aligned tables are rendered at the left margin.
-Full reported acceptance is [Issue 277](https://github.com/tensorbee/rdocx/issues/277), reported by `hadim`. No contributed PR exists at intake.
+Full reported acceptance is [Issue 277](https://github.com/tensorbee/rdocx/issues/277), reported by `hadim`. PR 279 subsequently supplies the correction, reviewed at `93749ddce266103b62a61e78c3b8a6b692a94646` from `hadim`.
 
 ## Spec reference
 
@@ -18,7 +18,7 @@ Full reported acceptance is [Issue 277](https://github.com/tensorbee/rdocx/issue
 
 ## Approach
 
-Remove the direct-alignment clearing while retaining the existing table-style cascade and placement calculation. Direct left, center, right, start and end values override style values. Keep authored indent precedence consistent with existing alignment semantics. Cover direct-versus-style conflicts, absent alignment, nested cells, right-to-left controls and save/reopen preservation. Do not couple this correction to legacy compatibility positioning, which is F-X183.
+Adopt PR 279 only after independently proving its gate and complete Issue 277 acceptance. Remove the direct-alignment clearing while retaining the existing table-style cascade and placement calculation. Direct left, center, right, start and end values override style values. Keep authored indent precedence consistent with existing alignment semantics. Cover direct-versus-style conflicts, absent alignment, nested cells, right-to-left controls and save/reopen preservation. Do not couple this correction to legacy compatibility positioning, which is F-X183.
 
 Implement in its own isolated wave after F-X181 while F-282 stays paused. Integrate and complete F-X182 at a scoped dependency checkpoint before claiming F-X183. Then resume the preserved F-282 worker and reconcile shared source/tests against all approved plans. F-283 retains its F-282 completion barrier.
 
@@ -49,7 +49,7 @@ A direct main merge bypasses sprint closure. Broadly shifting all tables breaks 
 
 ## Hash harness
 
-Expected changes are limited to PNG and PDF entries of existing samples carrying direct center or right table alignment. Source XML hashes remain unchanged. Identify the exact affected samples and entries from the frozen generator before baseline recording, bind the before/after manifests, and independently review the explained deltas. Other samples and unrelated geometry remain unchanged.
+Expected changes are the invoice page-one PNG and invoice/quote PDF page-content and byte entries. Their directly right-aligned totals tables move by 36 pt. Source inspection identifies the contract centered table too, but its full resolved width leaves no placement delta. Independently establish this exact set before recording, rather than copying the PR baseline. Source XML and PDF resource hashes remain unchanged. The pinned invoice golden changes only for the moved totals table. Identify the exact affected samples and entries from the frozen generator before baseline recording, bind the before/after manifests, and independently review the explained deltas. Other samples and unrelated geometry remain unchanged.
 This story owns baseline movement only in its exclusive wave. No unexplained output delta may be recorded. Use a separate labelled behavioral commit with the exact expected delta stated.
 
 ## Implementation checklist

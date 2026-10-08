@@ -1999,7 +1999,7 @@ citations, and numbering-aware navigation.
 | F-X180 | Correct cell nil and none border precedence | S |
 | F-X181 | Ignore page and column breaks inside table cells | S |
 | F-X182 | Honor direct table alignment | M |
-| F-X183 | Position legacy tables using cell margins | M |
+| F-X183 | Correct table margins and legacy positioning | M |
 
 F-278 is the field substrate. F-279 uses the S89 note policy, and F-280 uses
 S89 range markers. F-281 follows the field, pagination, and caption work.
@@ -2027,6 +2027,7 @@ before legacy positioning, with F-X182 completed at a scoped dependency
 checkpoint before F-X183 starts. Keep F-282 paused through these exclusive
 source and hash-baseline waves, then resume it before F-283. Each rendering
 delta is separately declared and reviewed. Issue 264 remains excluded.
+PR 279 supplies F-X182. PR 280 is stacked on it and supplies F-X183, including new Issue 278 for unset side margins. Validate both complete issue sets before contributor disposition.
 
 #### Sprint S91, Templates, controls, and forms
 

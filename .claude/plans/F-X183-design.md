@@ -1,4 +1,4 @@
-# F-X183, Position legacy tables using cell margins
+# F-X183, Correct table margins and legacy positioning
 
 **Status**: approved
 **Sprint**: S90
@@ -8,7 +8,7 @@
 ## Problem
 
 Top-level tables always begin at their edge indent. Word compatibility modes below 15, including an absent setting, instead align left table cell text to the indent and extend right-aligned tables by the final cell margin.
-Full reported acceptance is [Issue 276](https://github.com/tensorbee/rdocx/issues/276), reported by `hadim`. No contributed PR exists at intake.
+Full reported acceptance covers [Issue 276](https://github.com/tensorbee/rdocx/issues/276) and [Issue 278](https://github.com/tensorbee/rdocx/issues/278), reported by `hadim`. PR 280 at `795b29d78d5c2ca49c1b414c9818de201fe36b4e` supplies both corrections and is stacked on PR 279.
 
 ## Spec reference
 
@@ -18,7 +18,7 @@ Full reported acceptance is [Issue 276](https://github.com/tensorbee/rdocx/issue
 
 ## Approach
 
-Carry the actual compatibility threshold from Document settings into layout with a concrete table-positioning fact. Reuse existing settings parsing and base-first resolved cell margins. Apply the first accepted cell left margin to eligible top-level left/start positioning, and the last accepted cell right margin to right/end positioning. Centered, modern mode 15 and nested table placement retain their measured behavior. Respect accepted row/cell traversal, margin overrides, authored indentation, bidiVisual and floating-table context rather than applying an unconditional shift. Do not reuse an unrelated tab or footnote flag as a table policy. A concrete LayoutInput field, if required, is additive and must be populated consistently by every caller. No new parsing or source XML normalization.
+Adopt only PR 280 incremental changes after F-X182, not its duplicated PR 279 commits or unverified baselines. A left or right margin absent from the table, its style chain and default table style resolves to zero. Explicit and inherited margins remain authoritative. Distinguish bare styles, ordinary defaults, stylesWithEffects-only defaults and the dense-form case with authenticated native records. Carry the actual compatibility threshold from Document settings into layout with a concrete table-positioning fact. Reuse existing settings parsing and base-first resolved cell margins. Apply the first accepted cell left margin to eligible top-level left/start positioning, and the last accepted cell right margin to right/end positioning. Centered, modern mode 15 and nested table placement retain their measured behavior. Respect accepted row/cell traversal, margin overrides, authored indentation, bidiVisual and floating-table context rather than applying an unconditional shift. Do not reuse an unrelated tab or footnote flag as a table policy. A concrete LayoutInput field, if required, is additive and must be populated consistently by every caller. Preserve unknown XML and source settings. Do not normalize source XML. Source-built controls must distinguish absent resolved indent from explicit zero or style-inherited zero, because the first minimal native capture does not show an unconditional left shift. Reconcile the actual Word rule before implementation.
 
 Implement in its own isolated wave after F-X181 while F-282 stays paused. Integrate and complete F-X182 at a scoped dependency checkpoint before claiming F-X183. Then resume the preserved F-282 worker and reconcile shared source/tests against all approved plans. F-283 retains its F-282 completion barrier.
 
@@ -30,7 +30,7 @@ A direct main merge bypasses sprint closure. Broadly shifting all tables breaks 
 
 **Test gate**: regression. `legacy_table_positions_use_resolved_cell_margins` covers every reported variant using source-built fixtures in the existing regression entrypoint. Prove the gate fails before implementation.
 
-- Differential: source-built Word controls cover mode 14, mode 15, mode 12, missing compatibilityMode and missing compat, direct alignments and style conflicts, table/cell margins, indentation, nested tables and right-to-left cases.
+- Differential: source-built Word controls cover mode 14, mode 15, mode 12, missing compatibilityMode and missing compat, direct alignments and style conflicts, table/cell margins, absent/default/bare styles, stylesWithEffects context, indentation, nested tables and right-to-left cases.
 - Round-trip: preserve settings, alignment, margins and opaque producer XML through an unrelated edit and reopen.
 - Regression: assert exact table offsets, text positions, row geometry, border positions and following body content using deterministic fonts.
 - Verification: affected checks/tests, Clippy and format, archive/README gates, locally patched publication dry runs, and reviewed hash manifests. Final full sprint verification remains due.
@@ -50,7 +50,7 @@ A direct main merge bypasses sprint closure. Broadly shifting all tables breaks 
 
 ## Hash harness
 
-Expected changes are limited to PNG and PDF entries of existing samples with eligible top-level tables and missing or pre-15 compatibility mode. Source XML hashes remain unchanged. The baseline starts after F-X182, so direct-alignment deltas remain separately attributed. Bind exact before/after manifests, verify each affected table offset and independently review every changed entry before recording. Modern, centered and nested controls remain stable.
+Expected changes are limited to PNG and PDF entries of existing samples with eligible top-level tables and missing or pre-15 compatibility mode. Zero fallback also moves previously unstyled cell text 5.4 pt left in generated samples. Dense-form and F-266c nested geometry goldens change to zero side padding and wider nested cells. The precise PNG/PDF entry set and both existing goldens must be authenticated independently before recording. Source XML and PDF resource hashes remain unchanged. The baseline starts after F-X182, so direct-alignment deltas remain separately attributed. Bind exact before/after manifests, verify each affected table offset and independently review every changed entry before recording. Modern, centered and nested controls remain stable.
 This story owns baseline movement only in its exclusive wave. No unexplained output delta may be recorded. Use a separate labelled behavioral commit with the exact expected delta stated.
 
 ## Implementation checklist

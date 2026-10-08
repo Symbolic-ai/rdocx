@@ -33,7 +33,7 @@ the full pinned Word bibliography source, style and locale catalogue.
 | F-X180 | Correct cell nil and none border precedence | S | in-progress | codex |
 | F-X181 | Ignore page and column breaks inside table cells | S | in-progress | codex |
 | F-X182 | Honor direct table alignment | M | pending | - |
-| F-X183 | Position legacy tables using cell margins | M | pending | - |
+| F-X183 | Correct table margins and legacy positioning | M | pending | - |
 
 ## Sequencing note
 
@@ -64,6 +64,7 @@ before legacy positioning, with F-X182 completed at a scoped dependency
 checkpoint before F-X183 starts. Keep F-282 paused through these exclusive
 source and hash-baseline waves, then resume it before F-283. Each rendering
 delta is separately declared and reviewed. Issue 264 remains excluded.
+PR 279 supplies F-X182. PR 280 is stacked on it and supplies F-X183, including new Issue 278 for unset side margins. Validate both complete issue sets before contributor disposition.
 
 ## Definition of done for this sprint
 
