@@ -6,7 +6,7 @@
 field results across stories, then compose captions, cross-references, indexes,
 citations, and numbering-aware navigation. Build on S89's note and range
 contracts while preserving producer XML and saved field caches.
-Issue 264 and F-X178 are excluded and carried for separate work. F-282 covers
+Issues264 and291 are excluded. F-X178 is carried for separate work. F-282 covers
 the full pinned Word bibliography source, style and locale catalogue.
 
 ## Spec references
@@ -37,7 +37,7 @@ the full pinned Word bibliography source, style and locale catalogue.
 | F-X184 | Safe comment ownership during content removal | L | done | - |
 | F-X185 | Expose comment anchor text and story location | M | done | - |
 | F-X186 | Move comment anchors without losing threads | M | done | - |
-| F-X187 | Scoped paragraph and cell text replacement | M | in-progress | codex |
+| F-X187 | Scoped paragraph and cell text replacement | M | done | - |
 | F-X188 | Preserve comment ownership when replacing or removing whole stories | L | pending | - |
 | F-X189 | Prepare Word 0.16.0 and PowerPoint 0.14.0 families | L | pending | - |
 

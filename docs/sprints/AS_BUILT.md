@@ -18086,3 +18086,97 @@ then whole-story cleanup in wave15. Full-catalogue F-282 remains paused with
 its authenticated backup. Issue264 remains excluded. No push, main merge,
 tag, publication or GitHub closure occurred. Complete issue and PR disposition
 waits for verified sprint close and publication retains separate approval.
+
+### F-X187, Scoped paragraph and cell text replacement
+
+**Sprint.** S90
+**Completed.** 2026-10-08
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Owned native scoped literal replacement and Python
+Paragraph.replace_text, Cell.replace_text and Document.replace_text_at retain
+local counts, run formatting, comments, bookmarks and unselected content.
+Checked detached items support the existing paragraph, table and control
+axis across supported body and related owners. This addresses
+[Issue285](https://github.com/tensorbee/rdocx/issues/285), reported by
+Hadrien Mary (`hadim`). Compatible matcher and binding ideas from
+[PR286](https://github.com/tensorbee/rdocx/pull/286), immutable head
+08361f6af99110cbae71bf9f0498a12feadc01db, were assessed and adapted to the
+complete owned transaction contract rather than accepted unchanged.
+
+**Non-obvious choices.** A private sentinel correspondence probe proves
+selected physical source identity through existing typed normalization.
+Duplicate identical siblings cannot redirect the selected span. Only the
+original selected source is replaced. Scoped table and cell root-attribute
+restoration checks qualified container topology, ancestry and binding
+conflicts. Global serializers, namespace replay and replacement remain
+unchanged. XML validation, count mismatch, preparation and final reopen
+failure publish nothing. Zero counts retain handles, while positive success
+publishes once and advances the binding revision once.
+
+Formal pass1 exposed recursive facade paragraph ordinals being used as
+direct-control ordinals. Native and actual Python before controls each changed
+B instead of A while reporting count one. The repair maps the actual paragraph
+identity to its direct owning control and uses that same direct ordinal for
+comment mutations. Deeper unsupported paths refuse. This adapts `hadim`'s
+[PR287](https://github.com/tensorbee/rdocx/pull/287) commit
+64854a40c9e44505dfac98aa975b4ad3505a2ec8 and completes the existing
+[Issue289](https://github.com/tensorbee/rdocx/issues/289) path correspondence
+alongside F-X185's snapshot payload work. No new path depth is introduced.
+
+**Deviations from the design plan.** None. Added controls remain qualified as
+after-only except the actual compiled exact-Base issue discriminator and
+separately executed attribute-loss and ordinal failures. Initial fixture,
+cache and toolchain failures are retained rather than counted as passes.
+The last Python fixture correction asserts the actual IndexError refusal
+without a production change. Issues264 and291 remain excluded and open.
+
+**Spec sections touched.** Exactly HLD04 package/source preservation, HLD10
+bindings and HLD12 testing. Affected README measurements and inventory tuples
+describe the current two changed published archives.
+
+**Tests.** The named scoped_text_replacement_preserves_unselected_content gate
+fails at compiled Base97c8b599 through the old global guarded API, then passes
+the required prepare rerun with one executed and919 filtered. Complete
+affected all-feature suites pass2422 tests: facade508 unit,364 integration,
+913 regression, XML634 unit and three doctests, with22 existing ignores.
+CLI11 global replacement controls, actual rebuilt Python core97, strict
+mypy2.3.0 seven files and stubtest six modules pass. Focused controls prove
+local scope, duplicate-sibling identity, namespace refusal, exact opaque XML,
+nested attributes, related stories, count guards and actual preparation and
+OPC reopen failures. Existing anchor and movement controls remain green.
+
+Affected all-target checks, denied-warning Clippy and rustdoc, both WASM
+graphs and all49 deterministic hashes pass. The complete scoped receipt has
+13 passing stages. README checks validate27 workspace READMEs and22 package
+inventories with five affected Rust examples compiled. Workflow140 tests
+pass with two existing skips in114.718s. Prose0, adapters26 and fmt pass.
+
+Root and reviewer independently open all four measured and actual dry-run
+archives and compare27 XML and31 facade Rust source/test members exactly.
+Measured compressed/normalized member bytes/member count are XML
+450129/2798010/32 and facade1564667/8680657/36. Actual compressed sizes are
+450128 and1564666, with identical normalized tuples, within the unchanged
+64-byte policy and below10MiB. Actual publication dry runs retain verification,
+all22 local patches and allow-dirty, with no upload. Current runtime extension
+71adef3ca0ba1615f1e2468c050d9276d651800eb62eaf2c86d0fbef348870ab is retained
+outside the worker and independently authenticated.
+
+Independent ALL pass2 reports zero defects, smells and nitpicks, review
+7b16a2a5. Final binder f312b62d authenticates18 files,47 evidence paths and
+three artifacts, with tracked diff465491ef and captured full diffc697783e.
+Prepare changes only authorized lifecycle metadata from the frozen source.
+
+**Hash harness.** All49 worker entries unchanged. All19 integrated code,
+HLD, measurement and review paths match CodeHeade543c089 byte for byte.
+No semantic integration conflict or baseline movement occurred. Final full
+integrated sprint verification and review remain due after remaining waves.
+
+**Notes for future sessions.** CodeHeade543c089 precedes handoff-onlyc1aa56d8.
+Integration56347304 consumes validated handoffc9749f04. Keep
+work/f-x187-codex through sprint close and remove only its clean completed
+worktree. Whole-story cleanup, PR290 and Issue292 follow in exclusive wave15,
+then full-catalogue F-282 resumes from its authenticated paused backup.
+Issues264 and291 remain untouched. No push, main merge, tag, publication or
+GitHub closure occurred. Complete issue and PR disposition waits for verified
+sprint close, and publication retains separate reviewed-SHA approval.
