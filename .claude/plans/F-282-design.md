@@ -335,6 +335,36 @@ d89ad48259fac10db21034302e4ac836acabf7fe61fabf1513cf994b29223ef2.
 
 ## Captured block and switch contract clarification
 
+Numeric CITATION operand and member evaluation for Ieee and Iso690Numeric
+consumes the first ten parsed instruction switches. Retain the complete raw
+instruction and all source
+metadata. Resolve effective locale, source membership and member modifiers
+within that prefix. Do not truncate the shared field parser or extend this
+measured boundary to other citation styles or BIBLIOGRAPHY. The authenticated
+threshold index c3d0c2828b8dc8cbd54fb89db2d9662a48b715073733a04789bf0f29293083c4
+records m and p at switch positions9/10,10/11 and11/12. Both apply in the first
+case, only m applies in the second, and neither applies in the third. The
+prior-member index108606397855bc62382c0eccd3751c6af0daec3226bd9c86e75bda8eb674c21b
+separately retains the all-options composition and isolated modifier contrasts.
+These records distinguish a counted boundary from a locale-switch reset or
+an unconditional field-wide first-modifier rule.
+Keep standard general-field-format application separate from numeric operand
+selection. Its behavior at this boundary requires its own formatting controls,
+not an inferred cutoff from the numeric member and page vectors.
+
+Numeric reference encounter discovery uses that same effective switch prefix.
+The independent hidden-member index
+b515a4a4334471a38350284dc96af3c907bc5e50497f0ca1c386c8ea610e7836
+places mB at position11 in the first citation of A, then cites C and B. Both
+styles display A1, C2 and B3. Word derives source RefOrder A1, B3 and C2, so
+the ignored member does not reserve an earlier number in this control. Assert
+actual following-citation numbering, raw instruction retention, unchanged
+library source XML, repeat materialization and Rust reopen together. Word's
+derived RefOrder remains a producer difference, not permission to rewrite it.
+Use the existing concrete numeric encounter and evaluation callers. No new
+type, wrapper, tokenizer, module or dependency is needed. Reconcile this
+contract into the existing HLD03 and HLD12 sections at completion.
+
 The pinned IEEE matched ordering captures contain fourteen inline CITATION
 owners and fifteen BIBLIOGRAPHY owners per document. Word converts the source
 simple bibliography fields to complex fields. Each bibliography result spans
