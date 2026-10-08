@@ -981,8 +981,31 @@ Its modeled base width, alignment, indent, borders, shading, look, and cell
 margins resolve base-first before direct table and cell overlays. Direct
 `w:jc` left, center, right, start and end values override style alignment.
 Center uses half the free width, and right or end uses the full free width.
-Other values retain the authored left indent. Direct width behavior remains
-unchanged.
+Other values retain the resolved left indent. Direct width behavior remains
+unchanged. Absent side margins resolve to zero after the selected style chain.
+Intrinsic autofit width and final layout apply direct cell margins edge by
+edge, including explicit zero, before falling back to the table margin.
+
+For the qualified built-in default with ID `TableNormal`, name `Normal Table`,
+table type, default flag, gallery priority99, semi-hidden and unhide metadata,
+zero dxa indent and zero top and bottom margins, the effective base LEFT margin
+is108 twips. Authored side values0,108 and288 in the pinned native controls
+share that left text start. Custom default identities preserve their authored
+margins. This bounded exception applies at the base style layer, so derived,
+direct table and direct cell overrides still win. It preserves every other
+property and does not assert a right-padding or wrapping exception.
+
+Compatibility modes below15, including an absent mode, compensate eligible
+top-level LTR, nonfloating tables. Left and start subtract the first accepted
+cell's resolved left margin when a resolved dxa indent exists. Right and end
+add that same left margin to the full free width even when indent is absent. Center,
+modern, nested, bidi and floating placement retain their existing policies.
+An absent indent differs from an explicit or style-inherited zero. This uses
+`LayoutInput::legacy_table_positioning`, including retained engine cache
+qualification, independently of tab and footnote compatibility facts. The
+required public field is an intentional pre-1.0 struct-literal source break.
+Relative bundled-font geometry is tested without claiming Word's subpoint
+border quantization or absolute Arial and Caladea parity.
 The direct table facade can author auto, fixed, and percentage width modes,
 left indentation, fixed or autofit layout, shading, aggregate or individual
 borders, default cell margins, conditional look flags, and the complete active

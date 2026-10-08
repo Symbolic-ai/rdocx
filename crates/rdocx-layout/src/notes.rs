@@ -421,6 +421,7 @@ mod tests {
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
+            legacy_table_positioning: false,
             modern_footnote_layout: false,
             footnote_layout_like_word8: false,
             math_properties: None,

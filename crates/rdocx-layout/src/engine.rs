@@ -2620,6 +2620,7 @@ struct ReusableEngineContext {
     do_not_use_html_paragraph_auto_spacing: bool,
     default_tab_stop: Option<rdocx_oxml::units::Twips>,
     clamp_tabs_past_margin: bool,
+    legacy_table_positioning: bool,
     modern_footnote_layout: bool,
     footnote_layout_like_word8: bool,
     math_properties: Option<rdocx_oxml::math::MathProperties>,
@@ -2715,6 +2716,7 @@ impl ReusableEngineContext {
             do_not_use_html_paragraph_auto_spacing: input.do_not_use_html_paragraph_auto_spacing,
             default_tab_stop: input.default_tab_stop,
             clamp_tabs_past_margin: input.clamp_tabs_past_margin,
+            legacy_table_positioning: input.legacy_table_positioning,
             modern_footnote_layout: input.modern_footnote_layout,
             footnote_layout_like_word8: input.footnote_layout_like_word8,
             math_properties: input.math_properties.clone(),
@@ -2806,6 +2808,7 @@ impl ReusableEngineContext {
                 == input.do_not_use_html_paragraph_auto_spacing
             && self.default_tab_stop == input.default_tab_stop
             && self.clamp_tabs_past_margin == input.clamp_tabs_past_margin
+            && self.legacy_table_positioning == input.legacy_table_positioning
             && self.modern_footnote_layout == input.modern_footnote_layout
             && self.footnote_layout_like_word8 == input.footnote_layout_like_word8
             && self.math_properties == input.math_properties
@@ -14851,6 +14854,7 @@ mod tests {
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
+            legacy_table_positioning: false,
             modern_footnote_layout: false,
             footnote_layout_like_word8: false,
             math_properties: None,
@@ -15012,6 +15016,52 @@ mod tests {
                 (vec![3], "1.".to_owned()),
             ]
         );
+    }
+
+    #[test]
+    fn legacy_table_compatibility_invalidates_retained_geometry() {
+        let mut input = make_input_with_text("");
+        input.document = rdocx_oxml::CT_Document::from_xml(br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:tbl><w:tblPr><w:tblW w:w="1440" w:type="dxa"/><w:tblInd w:w="0" w:type="dxa"/><w:tblLayout w:type="fixed"/><w:tblCellMar><w:left w:w="108" w:type="dxa"/></w:tblCellMar></w:tblPr><w:tblGrid><w:gridCol w:w="1440"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>Left</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>"#).unwrap();
+        let x = |result: &LayoutResult| {
+            let mut position = None;
+            oxml_layout::walk(&result.pages[0].elements, &mut |element, _| {
+                if let oxml_layout::PositionedElement::Text(run) = element
+                    && run.text == "Left"
+                {
+                    position = Some(run.origin.x);
+                }
+            });
+            position.unwrap()
+        };
+        let mut engine = Engine::new_deterministic().unwrap();
+        let modern = engine.layout(&input).unwrap();
+        input.legacy_table_positioning = true;
+        let legacy = engine.layout(&input).unwrap();
+        assert!((x(&modern) - x(&legacy) - 5.4).abs() < 1e-9);
+        let fresh = Engine::new_deterministic().unwrap().layout(&input).unwrap();
+        assert_layout_results_equal(&legacy, &fresh);
+        let mut retained = Some(engine);
+        input.legacy_table_positioning = false;
+        assert!(Engine::take_if_compatible(&mut retained, &input).is_none());
+        assert!(retained.is_some());
+        let restored = retained.as_mut().unwrap().layout(&input).unwrap();
+        assert_layout_results_equal(&modern, &restored);
+        // Floating tables retain their separately resolved anchor placement.
+        let BodyContent::Table(table) = &mut input.document.body.content[0] else {
+            panic!("table")
+        };
+        table.properties.as_mut().unwrap().float_position =
+            Some(Box::new(rdocx_oxml::table::CT_TblPPr {
+                horz_anchor: Some(rdocx_oxml::table::ST_TblAnchor::Page),
+                vert_anchor: Some(rdocx_oxml::table::ST_TblAnchor::Page),
+                tbl_p_x: Some(rdocx_oxml::Twips(1440)),
+                tbl_p_y: Some(rdocx_oxml::Twips(2880)),
+                ..Default::default()
+            }));
+        let modern_float = retained.as_mut().unwrap().layout(&input).unwrap();
+        input.legacy_table_positioning = true;
+        let legacy_float = retained.as_mut().unwrap().layout(&input).unwrap();
+        assert_layout_results_equal(&modern_float, &legacy_float);
     }
 
     fn five_large_caller_fonts() -> Vec<oxml_layout::FontFile> {
@@ -21488,6 +21538,7 @@ mod tests {
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
+            legacy_table_positioning: false,
             modern_footnote_layout: false,
             footnote_layout_like_word8: false,
             math_properties: None,
@@ -22025,6 +22076,7 @@ mod tests {
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
+            legacy_table_positioning: false,
             modern_footnote_layout: false,
             footnote_layout_like_word8: false,
             math_properties: None,
@@ -22099,6 +22151,7 @@ mod tests {
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
+            legacy_table_positioning: false,
             modern_footnote_layout: false,
             footnote_layout_like_word8: false,
             math_properties: None,
@@ -22194,6 +22247,7 @@ mod tests {
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
+            legacy_table_positioning: false,
             modern_footnote_layout: false,
             footnote_layout_like_word8: false,
             math_properties: None,
@@ -22385,6 +22439,7 @@ mod tests {
                 do_not_use_html_paragraph_auto_spacing: false,
                 default_tab_stop: None,
                 clamp_tabs_past_margin: false,
+                legacy_table_positioning: false,
                 modern_footnote_layout: false,
                 footnote_layout_like_word8: false,
                 math_properties: None,
@@ -22528,6 +22583,7 @@ mod tests {
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
+            legacy_table_positioning: false,
             modern_footnote_layout: false,
             footnote_layout_like_word8: false,
             math_properties: None,
@@ -22838,6 +22894,7 @@ mod tests {
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
+            legacy_table_positioning: false,
             modern_footnote_layout: false,
             footnote_layout_like_word8: false,
             math_properties: None,
@@ -23097,6 +23154,7 @@ mod tests {
                 do_not_use_html_paragraph_auto_spacing: false,
                 default_tab_stop: None,
                 clamp_tabs_past_margin: false,
+                legacy_table_positioning: false,
                 modern_footnote_layout: false,
                 footnote_layout_like_word8: false,
                 math_properties: None,
@@ -23246,6 +23304,7 @@ mod tests {
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
+            legacy_table_positioning: false,
             modern_footnote_layout: false,
             footnote_layout_like_word8: false,
             math_properties: None,
@@ -23591,6 +23650,7 @@ mod tests {
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
+            legacy_table_positioning: false,
             modern_footnote_layout: false,
             footnote_layout_like_word8: false,
             math_properties: None,
@@ -23686,6 +23746,7 @@ mod tests {
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
+            legacy_table_positioning: false,
             modern_footnote_layout: false,
             footnote_layout_like_word8: false,
             math_properties: None,
@@ -23807,6 +23868,7 @@ mod tests {
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
+            legacy_table_positioning: false,
             modern_footnote_layout: false,
             footnote_layout_like_word8: false,
             math_properties: None,
@@ -24027,6 +24089,7 @@ mod tests {
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
+            legacy_table_positioning: false,
             modern_footnote_layout: false,
             footnote_layout_like_word8: false,
             math_properties: None,

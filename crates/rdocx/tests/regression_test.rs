@@ -28336,6 +28336,7 @@ fn empty_story_layout_input() -> rdocx_layout::LayoutInput {
         sequence_snapshot: None,
         automatic_hyphenation: false,
         clamp_tabs_past_margin: false,
+        legacy_table_positioning: false,
         modern_footnote_layout: false,
         footnote_layout_like_word8: false,
         mirror_margins: false,
@@ -28870,15 +28871,15 @@ fn dense_form_matches_reviewed_one_page_geometry() {
         109.5 + word_line_shift
     ));
     assert!(has_line(
-        311.4,
+        306.0,
         92.375 + word_line_shift,
-        421.4,
+        416.0,
         92.375 + word_line_shift
     ));
     assert!(has_line(
-        421.4,
+        416.0,
         105.125 + word_line_shift,
-        531.4,
+        526.0,
         105.125 + word_line_shift
     ));
     assert!(has_line(
@@ -28919,8 +28920,9 @@ fn dense_form_matches_reviewed_one_page_geometry() {
         .chunks_exact(4)
         .filter(|pixel| *pixel == [255, 215, 215, 255])
         .count();
-    assert_eq!(checksum, 17_727_332_437_927_583_437);
-    assert_eq!(non_white_pixels, 32_467);
+    // F-X183 reviewed zero side padding changes cell and nested content geometry.
+    assert_eq!(checksum, 12_522_878_329_634_332_671);
+    assert_eq!(non_white_pixels, 32_421);
     assert_eq!(
         behind_pixels, 0,
         "page-behind stamp is covered by cell shading"
@@ -40049,6 +40051,7 @@ mod advanced_table_geometry_regressions {
             sequence_snapshot: None,
             automatic_hyphenation: false,
             clamp_tabs_past_margin: false,
+            legacy_table_positioning: false,
             modern_footnote_layout: false,
             footnote_layout_like_word8: false,
             mirror_margins: false,
@@ -40455,7 +40458,8 @@ mod advanced_table_geometry_regressions {
             .iter()
             .map(|width| (width * 100.0).round() / 100.0)
             .collect::<Vec<_>>();
-        assert_eq!(rounded, vec![20.34, 215.19]);
+        // F-X183 reviewed zero side padding removes10.8pt per intrinsic column.
+        assert_eq!(rounded, vec![9.54, 204.39]);
     }
 }
 
@@ -56430,6 +56434,139 @@ fn aligned_table_text_x(alignment: Option<Alignment>) -> Vec<(String, f64)> {
 }
 
 #[test]
+fn legacy_table_positions_use_resolved_cell_margins() {
+    // Missing side margins use zero, independently of font ink metrics.
+    // Issue278 native index ebf1233a distinguishes missing and styled margins.
+    let runs = aligned_table_text_x(None);
+    let x = |text: &str| runs.iter().find(|(value, _)| value == text).unwrap().1;
+    assert_eq!(x("Left") - x("Margin"), 0.0);
+    let near = |actual: f64, expected: f64| {
+        assert!((actual - expected).abs() < 1e-9, "{actual} != {expected}");
+    };
+    let margin = |side: &str, value: i32| format!(r#"<w:{side} w:w="{value}" w:type="dxa"/>"#);
+    for mode in ["15", "14", "12", "absent-mode", "absent-compat"] {
+        for nested in [false, true] {
+            for indent in [None, Some(0), Some(720)] {
+                for jc in ["left", "start", "center", "right", "end"] {
+                    for location in ["table", "first", "last", "right"] {
+                        let mut props = format!(r#"<w:jc w:val="{jc}"/>"#);
+                        if let Some(value) = indent {
+                            props.push_str(&format!(r#"<w:tblInd w:w="{value}" w:type="dxa"/>"#));
+                        }
+                        let table_left = if location == "table" { 288 } else { 108 };
+                        props.push_str(&format!(
+                            "<w:tblCellMar>{}{}</w:tblCellMar>",
+                            margin("left", table_left),
+                            margin("right", 108)
+                        ));
+                        let first = if location == "first" {
+                            format!("<w:tcMar>{}</w:tcMar>", margin("left", 288))
+                        } else {
+                            String::new()
+                        };
+                        let last = match location {
+                            "last" => format!("<w:tcMar>{}</w:tcMar>", margin("left", 288)),
+                            "right" => format!("<w:tcMar>{}</w:tcMar>", margin("right", 288)),
+                            _ => String::new(),
+                        };
+                        let mut doc = x183_table_fixture(&props, &first, &last, "", mode, nested);
+                        let before = doc.to_bytes().unwrap();
+                        let (text, edge, height) = x183_table_positions(&doc);
+                        assert_eq!(doc.to_bytes().unwrap(), before);
+                        let at = |name: &str| text.iter().find(|(t, _, _)| t == name).unwrap().1;
+                        let free = if nested { 360.0 - 144.0 } else { 468.0 - 144.0 };
+                        let first_padding = if location == "table" || location == "first" {
+                            14.4
+                        } else {
+                            5.4
+                        };
+                        let legacy = mode != "15" && !nested;
+                        let placement = match jc {
+                            "center" => free / 2.0,
+                            "right" | "end" => free + if legacy { first_padding } else { 0.0 },
+                            _ => {
+                                indent.unwrap_or(0) as f64 / 20.0
+                                    - if legacy && indent.is_some() {
+                                        first_padding
+                                    } else {
+                                        0.0
+                                    }
+                            }
+                        };
+                        near(edge - at("Margin"), placement);
+                        near(at("Left") - edge, first_padding);
+                        near(
+                            at("Right") - edge,
+                            72.0 + if location == "table" || location == "last" {
+                                14.4
+                            } else {
+                                5.4
+                            },
+                        );
+                        let reopened = Document::from_bytes(&before).unwrap();
+                        assert_eq!(x183_table_positions(&reopened), (text, edge, height));
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn legacy_table_positioning_skips_empty_accepted_cell_control_rows() {
+    const EMPTY_ROW: &str = concat!(
+        "<w:tr><w:sdt><w:sdtPr><w:id w:val=\"17\"/></w:sdtPr>",
+        "<w:sdtContent></w:sdtContent></w:sdt></w:tr>"
+    );
+    for mode in ["14", "15"] {
+        for nested in [false, true] {
+            for alignment in ["left", "start", "right", "end"] {
+                let properties = format!(
+                    r#"<w:jc w:val="{alignment}"/><w:tblInd w:w="0" w:type="dxa"/><w:tblCellMar><w:left w:w="108" w:type="dxa"/></w:tblCellMar>"#
+                );
+                let mut plain = x183_table_fixture(&properties, "", "", "", mode, nested);
+                let (_, plain_edge, _) = x183_table_positions(&plain);
+                let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(
+                    plain.to_bytes().unwrap(),
+                ))
+                .unwrap();
+                let xml =
+                    String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec())
+                        .unwrap();
+                let target = concat!(
+                    "<w:tblGrid><w:gridCol w:w=\"1440\"/>",
+                    "<w:gridCol w:w=\"1440\"/></w:tblGrid>"
+                );
+                assert_eq!(xml.matches(target).count(), 1);
+                let xml = xml.replace(target, &format!("{target}{EMPTY_ROW}"));
+                package.set_part("/word/document.xml", xml.as_bytes().to_vec());
+                let mut bytes = std::io::Cursor::new(Vec::new());
+                package.write_to(&mut bytes).unwrap();
+                let mut with_empty_row = Document::from_bytes(bytes.get_ref()).unwrap();
+                let before = with_empty_row.to_bytes().unwrap();
+                let (text, edge, _) = x183_table_positions(&with_empty_row);
+                assert!(
+                    (edge - plain_edge).abs() < 1e-9,
+                    "mode={mode} nested={nested} alignment={alignment}: {edge} != {plain_edge}"
+                );
+                let left = text.iter().find(|(text, _, _)| text == "Left").unwrap().1;
+                assert!((left - edge - 5.4).abs() < 1e-9);
+                assert_eq!(with_empty_row.to_bytes().unwrap(), before);
+                let saved =
+                    oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&before)).unwrap();
+                assert_eq!(
+                    saved.get_part("/word/document.xml").unwrap(),
+                    xml.as_bytes()
+                );
+                assert!(xml.contains(EMPTY_ROW));
+                let reopened = Document::from_bytes(&before).unwrap();
+                assert_eq!(x183_table_positions(&reopened).1, edge);
+            }
+        }
+    }
+}
+
+#[test]
 fn a_tables_own_alignment_places_it() {
     // Word 16.111 places a table by its own `w:jc` as it does by its style's.
     let x = |alignment: Option<Alignment>, text: &str| {
@@ -56609,9 +56746,10 @@ fn direct_table_alignment_overrides_style_and_reopens() {
                         Some("end"),
                     ] {
                         let result = render(direct, style, nested, rtl, false, false, mode);
+                        let legacy = !nested && !rtl && mode != "15";
                         let expected = match direct.or(style) {
-                            Some("center") => free / 2.0,
-                            Some("right" | "end") => free,
+                            Some("center") => free / 2.0 + if legacy { 5.4 } else { 0.0 },
+                            Some("right" | "end") => free + if legacy { 10.8 } else { 0.0 },
                             _ => 0.0,
                         };
                         let position = |text: &[(String, f64, f64)], name: &str| {
@@ -56664,5 +56802,447 @@ fn direct_table_alignment_overrides_style_and_reopens() {
             near(actual.2 - base.2, shift);
         }
         assert_eq!(result.3, plain.3);
+    }
+}
+
+/// Source-built fixed geometry with independent table and cell layers.
+fn x183_table_fixture(
+    properties: &str,
+    first_properties: &str,
+    last_properties: &str,
+    styles: &str,
+    mode: &str,
+    nested: bool,
+) -> Document {
+    let paragraph = |text: &str| {
+        format!(
+            r#"<w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr><w:r><w:t>{text}</w:t></w:r></w:p>"#
+        )
+    };
+    let (selected_style, properties) = if properties.starts_with("<w:tblStyle ") {
+        let (style, rest) = properties.split_once("/>").unwrap();
+        (format!("{style}/>"), rest)
+    } else {
+        (String::new(), properties)
+    };
+    let properties = if properties.contains("<w:tblCellMar>") {
+        properties.replace(
+            "<w:tblCellMar>",
+            "<w:tblLayout w:type=\"fixed\"/><w:tblCellMar>",
+        )
+    } else {
+        format!("{properties}<w:tblLayout w:type=\"fixed\"/>")
+    };
+    let table = format!(
+        r#"<w:tbl><w:tblPr>{selected_style}<w:tblW w:w="2880" w:type="dxa"/>{properties}</w:tblPr><w:tblGrid><w:gridCol w:w="1440"/><w:gridCol w:w="1440"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcW w:w="1440" w:type="dxa"/><w:shd w:fill="123456"/>{first_properties}</w:tcPr>{}</w:tc><w:tc><w:tcPr><w:tcW w:w="1440" w:type="dxa"/>{last_properties}</w:tcPr>{}</w:tc></w:tr></w:tbl>"#,
+        paragraph("Left"),
+        paragraph("Right")
+    );
+    let block = if nested {
+        format!(
+            r#"<w:tbl><w:tblPr><w:tblW w:w="7200" w:type="dxa"/><w:tblLayout w:type="fixed"/></w:tblPr><w:tblGrid><w:gridCol w:w="7200"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcW w:w="7200" w:type="dxa"/></w:tcPr>{table}{}</w:tc></w:tr></w:tbl>"#,
+            paragraph("")
+        )
+    } else {
+        table
+    };
+    let body = format!(
+        r#"{}{}{}<x:retained xmlns:x="urn:fx183" x:payload="untouched"/><w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>"#,
+        paragraph("Margin"),
+        block,
+        paragraph("After")
+    );
+    let mut document = document_with_producer_styles(&body, styles);
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    // This fixture owns its complete style catalogue, including absence.
+    package.set_part(
+        "/word/styles.xml",
+        format!(r#"<w:styles xmlns:w="{W_NS}">{styles}</w:styles>"#).into_bytes(),
+    );
+    let compat = match mode {
+        "absent-compat" => String::new(),
+        "absent-mode" => "<w:compat/>".to_owned(),
+        _ => format!(
+            r#"<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="{mode}"/></w:compat>"#
+        ),
+    };
+    package.set_part("/word/settings.xml", format!(r#"<w:settings xmlns:w="{W_NS}" xmlns:x="urn:fx183">{compat}<x:keep x:value="exact"/></w:settings>"#).into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    Document::from_bytes(bytes.get_ref()).unwrap()
+}
+
+fn x183_table_positions(document: &Document) -> (Vec<(String, f64, f64)>, f64, f64) {
+    let layout = document.layout_deterministic().unwrap();
+    assert_eq!(layout.layout.pages.len(), 1);
+    let mut text = Vec::new();
+    let mut edge = None;
+    oxml_layout::walk(
+        &layout.layout.pages[0].elements,
+        &mut |element, _| match element {
+            oxml_layout::PositionedElement::Text(run) => {
+                text.push((run.text.clone(), run.origin.x, run.origin.y))
+            }
+            oxml_layout::PositionedElement::FilledRect { rect, color, .. }
+                if *color == oxml_layout::Color::from_hex("123456") =>
+            {
+                edge = Some(rect.x);
+            }
+            _ => {}
+        },
+    );
+    (
+        text,
+        edge.expect("target cell fill"),
+        layout.body_layout_fragments(1).unwrap()[0].height,
+    )
+}
+
+#[test]
+fn table_defaults_from_effects_are_render_only_and_preserve_custom_styles() {
+    // Native TableNormal bb5fbb89 and custom-default aae88f9f pin coupled
+    // identity/name controls. Relative padding uses bundled fonts, not Arial ink.
+    const EFFECTS_REL: &str =
+        "http://schemas.microsoft.com/office/2007/relationships/stylesWithEffects";
+    fn style(id: &str, name: &str, value: i32) -> String {
+        format!(
+            r#"<w:style w:type="table" w:default="1" w:styleId="{id}"><w:name w:val="{name}"/><w:uiPriority w:val="99"/><w:semiHidden/><w:unhideWhenUsed/><w:tblPr><w:tblInd w:w="0" w:type="dxa"/><w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="{value}" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/><w:right w:w="{value}" w:type="dxa"/></w:tblCellMar></w:tblPr><x:opaque xmlns:x="urn:fx183" x:keep="exact"/></w:style>"#
+        )
+    }
+    fn add_effects(document: &mut Document, xml: &[u8], external: bool) -> Document {
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+                .unwrap();
+        package.set_part("/producer/layout/effects.xml", xml.to_vec());
+        package.content_types.add_override(
+            "/producer/layout/effects.xml",
+            "application/vnd.ms-word.stylesWithEffects+xml",
+        );
+        let rels = package.get_or_create_part_rels("/word/document.xml");
+        if external {
+            rels.add_external(EFFECTS_REL, "../producer/layout/effects.xml");
+        } else {
+            rels.add(EFFECTS_REL, "../producer/layout/effects.xml");
+        }
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        Document::from_bytes(bytes.get_ref()).unwrap()
+    }
+    let offset = |document: &Document| {
+        let (text, edge, _) = x183_table_positions(document);
+        text.iter().find(|(t, _, _)| t == "Left").unwrap().1 - edge
+    };
+    let near = |actual: f64, expected: f64| {
+        assert!((actual - expected).abs() < 1e-9, "{actual} != {expected}")
+    };
+    for (id, name, builtin) in [
+        ("TableNormal", "Normal Table", true),
+        ("S90CustomDefault", "S90 Custom Default", false),
+    ] {
+        for value in [0, 108, 288] {
+            for effects in [false, true] {
+                for explicit in [false, true] {
+                    let selected = if explicit {
+                        format!(r#"<w:tblStyle w:val="{id}"/>"#)
+                    } else {
+                        String::new()
+                    };
+                    let source_style = style(id, name, value);
+                    let mut document = x183_table_fixture(
+                        &selected,
+                        "",
+                        "",
+                        if effects { "" } else { &source_style },
+                        "15",
+                        false,
+                    );
+                    if effects {
+                        document = add_effects(
+                            &mut document,
+                            format!(r#"<w:styles xmlns:w="{W_NS}">{source_style}</w:styles>"#)
+                                .as_bytes(),
+                            false,
+                        );
+                    }
+                    let before = document.to_bytes().unwrap();
+                    near(
+                        offset(&document),
+                        if builtin { 5.4 } else { value as f64 / 20.0 },
+                    );
+                    assert_eq!(document.to_bytes().unwrap(), before);
+                    let source =
+                        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&before)).unwrap();
+                    document.add_paragraph("Unrelated");
+                    let saved = document.to_bytes().unwrap();
+                    let output =
+                        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+                    for part in [
+                        "/word/styles.xml",
+                        "/word/settings.xml",
+                        "/producer/layout/effects.xml",
+                    ] {
+                        assert_eq!(source.get_part(part), output.get_part(part));
+                    }
+                    assert_eq!(
+                        source.get_part_rels("/word/document.xml").unwrap().items,
+                        output.get_part_rels("/word/document.xml").unwrap().items
+                    );
+                    let doc_xml =
+                        std::str::from_utf8(output.get_part("/word/document.xml").unwrap())
+                            .unwrap();
+                    assert!(doc_xml.contains("x:payload=\"untouched\""));
+                    near(
+                        offset(&Document::from_bytes(&saved).unwrap()),
+                        if builtin { 5.4 } else { value as f64 / 20.0 },
+                    );
+                }
+            }
+        }
+    }
+    let base = style("TableNormal", "Normal Table", 288);
+    let derived = format!(
+        r#"{base}<w:style w:type="table" w:styleId="Derived"><w:name w:val="Derived"/><w:basedOn w:val="TableNormal"/><w:tblPr><w:tblCellMar><w:left w:w="0" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style>"#
+    );
+    let document = x183_table_fixture(
+        r#"<w:tblStyle w:val="Derived"/>"#,
+        "",
+        "",
+        &derived,
+        "15",
+        false,
+    );
+    near(offset(&document), 0.0);
+    let document = x183_table_fixture(
+        r#"<w:tblCellMar><w:left w:w="288" w:type="dxa"/></w:tblCellMar>"#,
+        r#"<w:tcMar><w:left w:w="0" w:type="dxa"/></w:tcMar>"#,
+        "",
+        &base,
+        "15",
+        false,
+    );
+    near(offset(&document), 0.0);
+    for (xml, external) in [
+        ("<not-xml".to_owned(), false),
+        (
+            format!(
+                r#"<w:styles xmlns:w="{W_NS}">{}</w:styles>"#,
+                base.replace(r#" w:styleId="TableNormal""#, "")
+            ),
+            false,
+        ),
+        (
+            r#"<x:styles xmlns:x="urn:foreign"><x:style/></x:styles>"#.to_owned(),
+            false,
+        ),
+        (
+            format!(r#"<w:styles xmlns:w="{W_NS}">{base}</w:styles>"#),
+            true,
+        ),
+        (
+            format!(
+                r#"<w:styles xmlns:w="{W_NS}">{base}{}</w:styles>"#,
+                style("Other", "Other", 108)
+            ),
+            false,
+        ),
+        (
+            format!(
+                r#"<w:styles xmlns:w="{W_NS}">{base}<w:style w:type="table" w:styleId="TableNormal"/></w:styles>"#
+            ),
+            false,
+        ),
+    ] {
+        let mut document = x183_table_fixture("", "", "", "", "15", false);
+        document = add_effects(&mut document, xml.as_bytes(), external);
+        let before = document.to_bytes().unwrap();
+        assert!(
+            offset(&document).abs() < 1e-9,
+            "unqualified effects external={external}: {xml}"
+        );
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+    // Main selected defaults remain authoritative, including explicit zero.
+    let main = style("CustomMain", "Custom Main", 0);
+    let mut document = x183_table_fixture("", "", "", &main, "15", false);
+    document = add_effects(
+        &mut document,
+        format!(r#"<w:styles xmlns:w="{W_NS}">{base}</w:styles>"#).as_bytes(),
+        false,
+    );
+    near(offset(&document), 0.0);
+    // Prefix aliases and unrelated extension owners remain source-preserved.
+    let alias = format!(
+        r#"<q:styles xmlns:q="{W_NS}" xmlns:x="urn:fx183">{}<x:style x:styleId="TableNormal"/></q:styles>"#,
+        base.replace("w:", "q:")
+    );
+    let mut document = x183_table_fixture("", "", "", "", "15", false);
+    document = add_effects(&mut document, alias.as_bytes(), false);
+    let before = document.to_bytes().unwrap();
+    near(offset(&document), 5.4);
+    assert_eq!(document.to_bytes().unwrap(), before);
+
+    // The main part and effects target need not use Word's conventional paths.
+    let mut document = x183_table_fixture("", "", "", "", "15", false);
+    document = add_effects(
+        &mut document,
+        format!(r#"<w:styles xmlns:w="{W_NS}">{base}</w:styles>"#).as_bytes(),
+        false,
+    );
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let old_owner = "/word/document.xml";
+    let owner = "/relocated/docs/main.xml";
+    let body = package.remove_part(old_owner).unwrap();
+    package.set_part(owner, body);
+    let mut rels = package.remove_part_rels(old_owner).unwrap();
+    for rel in &mut rels.items {
+        if rel.target_mode.as_deref() != Some("External") {
+            rel.target = if rel.rel_type == EFFECTS_REL {
+                "../../producer/layout/effects.xml".to_owned()
+            } else {
+                oxml_opc::OpcPackage::resolve_rel_target(old_owner, &rel.target)
+            };
+        }
+    }
+    package.set_part_rels(owner, rels);
+    let content_type = package.content_types.overrides.remove(old_owner).unwrap();
+    package.content_types.add_override(owner, &content_type);
+    let main = package
+        .package_rels
+        .items
+        .iter_mut()
+        .find(|rel| rel.rel_type == oxml_opc::relationship::rel_types::DOCUMENT)
+        .unwrap();
+    main.target = "relocated/docs/main.xml".to_owned();
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+    let before = document.to_bytes().unwrap();
+    near(offset(&document), 5.4);
+    assert_eq!(document.to_bytes().unwrap(), before);
+    document.add_paragraph("Unrelated");
+    let saved = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&saved).unwrap();
+    near(offset(&reopened), 5.4);
+    let output = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    for part in [
+        "/word/styles.xml",
+        "/word/settings.xml",
+        "/producer/layout/effects.xml",
+    ] {
+        assert_eq!(package.get_part(part), output.get_part(part));
+    }
+    // Missing target and two internal effects owners do not fabricate a default.
+    for missing in [true, false] {
+        let mut package = package.clone();
+        if missing {
+            package.remove_part("/producer/layout/effects.xml");
+        } else {
+            package
+                .get_or_create_part_rels(owner)
+                .add(EFFECTS_REL, "../../producer/layout/effects.xml");
+        }
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+        let before = document.to_bytes().unwrap();
+        near(offset(&document), 0.0);
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+    // Main ID collision without a default must not append a duplicate owner.
+    let main = r#"<w:style w:type="table" w:styleId="TableNormal"><w:name w:val="Producer override"/></w:style>"#;
+    let mut document = x183_table_fixture("", "", "", main, "15", false);
+    document = add_effects(
+        &mut document,
+        format!(r#"<w:styles xmlns:w="{W_NS}">{base}</w:styles>"#).as_bytes(),
+        false,
+    );
+    near(offset(&document), 0.0);
+
+    // A selected unbased bare style does not acquire the default's properties.
+    let styles = format!(
+        r#"{base}<w:style w:type="table" w:styleId="Bare"><w:name w:val="Bare"/></w:style>"#
+    );
+    near(
+        offset(&x183_table_fixture(
+            r#"<w:tblStyle w:val="Bare"/>"#,
+            "",
+            "",
+            &styles,
+            "15",
+            false,
+        )),
+        0.0,
+    );
+}
+
+#[test]
+fn legacy_table_compensation_uses_style_inherited_indent_and_direct_overrides() {
+    let styles = r#"<w:style w:type="table" w:styleId="Base"><w:name w:val="Base"/><w:tblPr><w:tblInd w:w="0" w:type="dxa"/><w:tblCellMar><w:left w:w="108" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style><w:style w:type="table" w:styleId="Derived"><w:name w:val="Derived"/><w:basedOn w:val="Base"/><w:tblPr><w:tblInd w:w="720" w:type="dxa"/></w:tblPr></w:style>"#;
+    for mode in ["14", "15"] {
+        for (style, inherited) in [("Base", 0.0), ("Derived", 36.0)] {
+            for jc in ["left", "right"] {
+                for direct in [None, Some(0), Some(1440)] {
+                    let indent = direct
+                        .map(|value| format!(r#"<w:tblInd w:w="{value}" w:type="dxa"/>"#))
+                        .unwrap_or_default();
+                    let properties =
+                        format!(r#"<w:tblStyle w:val="{style}"/><w:jc w:val="{jc}"/>{indent}"#);
+                    let mut document = x183_table_fixture(&properties, "", "", styles, mode, false);
+                    let before = document.to_bytes().unwrap();
+                    let positions = x183_table_positions(&document);
+                    let margin = positions
+                        .0
+                        .iter()
+                        .find(|(text, _, _)| text == "Margin")
+                        .unwrap()
+                        .1;
+                    let expected = if jc == "right" {
+                        324.0 + if mode == "14" { 5.4 } else { 0.0 }
+                    } else {
+                        direct.map_or(inherited, |value| value as f64 / 20.0)
+                            - if mode == "14" { 5.4 } else { 0.0 }
+                    };
+                    assert!((positions.1 - margin - expected).abs() < 1e-9);
+                    let left = positions
+                        .0
+                        .iter()
+                        .find(|(text, _, _)| text == "Left")
+                        .unwrap()
+                        .1;
+                    assert!((left - positions.1 - 5.4).abs() < 1e-9);
+                    assert_eq!(document.to_bytes().unwrap(), before);
+                    document.add_paragraph("Unrelated");
+                    let saved = document.to_bytes().unwrap();
+                    let source =
+                        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&before)).unwrap();
+                    let output =
+                        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+                    assert_eq!(
+                        source.get_part("/word/styles.xml"),
+                        output.get_part("/word/styles.xml")
+                    );
+                    assert_eq!(
+                        source.get_part("/word/settings.xml"),
+                        output.get_part("/word/settings.xml")
+                    );
+                    let reopened = Document::from_bytes(&saved).unwrap();
+                    let after = x183_table_positions(&reopened);
+                    assert_eq!(positions.1, after.1);
+                    assert_eq!(positions.2, after.2);
+                    assert_eq!(
+                        positions.0,
+                        after
+                            .0
+                            .into_iter()
+                            .filter(|(text, _, _)| text != "Unrelated")
+                            .collect::<Vec<_>>()
+                    );
+                }
+            }
+        }
     }
 }

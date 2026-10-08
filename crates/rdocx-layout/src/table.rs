@@ -431,6 +431,7 @@ pub fn layout_table(
         &WordStory::Document,
         &[],
         doc_grid,
+        true,
     )
     .map(|(block, _)| block)
 }
@@ -462,6 +463,7 @@ pub(crate) fn layout_table_with_provenance(
         story,
         path,
         doc_grid,
+        true,
     )
 }
 
@@ -479,6 +481,7 @@ fn layout_table_inner(
     story: &WordStory,
     path: &[usize],
     doc_grid: Option<&CT_DocGrid>,
+    top_level: bool,
 ) -> Result<(TableBlock, TableSemantics)> {
     let direct_width = tbl
         .properties
@@ -530,22 +533,16 @@ fn layout_table_inner(
     let table_width: f64 = col_widths.iter().sum();
 
     // Table indent
-    let authored_indent = tbl
+    let resolved_indent = tbl
         .properties
         .as_ref()
-        .and_then(|p| p.indent.as_ref())
-        .map(|ind| {
-            if ind.width_type == "dxa" {
-                ind.w as f64 / 20.0 // twips to pt
-            } else {
-                0.0
-            }
-        })
-        .unwrap_or(0.0);
-    let table_indent = match tbl.properties.as_ref().and_then(|properties| properties.jc) {
+        .and_then(|properties| properties.indent.as_ref())
+        .filter(|indent| indent.width_type == "dxa")
+        .map(|indent| indent.w as f64 / 20.0);
+    let mut table_indent = match tbl.properties.as_ref().and_then(|properties| properties.jc) {
         Some(ST_Jc::Center) => ((available_width - table_width) / 2.0).max(0.0),
         Some(ST_Jc::Right | ST_Jc::End) => (available_width - table_width).max(0.0),
-        _ => authored_indent,
+        _ => resolved_indent.unwrap_or(0.0),
     };
 
     // Direct table borders win. Table-style borders are the fallback.
@@ -573,11 +570,11 @@ fn layout_table_inner(
     let cell_margin_left = default_cell_margin
         .and_then(|m| m.left)
         .map(|t| t.to_pt())
-        .unwrap_or(5.4); // Word default ~108 twips
+        .unwrap_or(0.0);
     let cell_margin_right = default_cell_margin
         .and_then(|m| m.right)
         .map(|t| t.to_pt())
-        .unwrap_or(5.4);
+        .unwrap_or(0.0);
     let cell_margin_top = default_cell_margin
         .and_then(|m| m.top)
         .map(|t| t.to_pt())
@@ -915,6 +912,22 @@ fn layout_table_inner(
         }
     }
 
+    // Legacy movement uses the first accepted cell's resolved left margin.
+    // Missing indentation differs from an authored or style-inherited zero.
+    if top_level
+        && input.legacy_table_positioning
+        && !bidi_visual
+        && floating.is_none()
+        && let Some(first) = rows.iter().find_map(|row| row.cells.first())
+    {
+        match tbl.properties.as_ref().and_then(|properties| properties.jc) {
+            Some(ST_Jc::Center) => {}
+            Some(ST_Jc::Right | ST_Jc::End) => table_indent += first.margin_left,
+            _ if resolved_indent.is_some() => table_indent -= first.margin_left,
+            _ => {}
+        }
+    }
+
     let row_heights = rows.iter().map(|row| row.height).collect::<Vec<_>>();
     for (row, height) in rows.iter_mut().zip(&row_heights) {
         for cell in &mut row.cells {
@@ -1051,6 +1064,32 @@ fn resolve_base_table_properties(table: &CT_Tbl, styles: &CT_Styles) -> CT_TblPr
     for style in chain.into_iter().rev() {
         if let Some(properties) = &style.table_properties {
             overlay_table_properties(&mut resolved, properties);
+        }
+        // Native controls qualify this fixed built-in identity and metadata,
+        // not arbitrary defaults. Only the effective base left edge changes.
+        if style.style_id == "TableNormal"
+            && style.name.as_deref() == Some("Normal Table")
+            && style.style_type == rdocx_oxml::styles::StyleType::Table
+            && style.is_default
+            && style.based_on.is_none()
+            && style.ui_priority == Some(99)
+            && style.semi_hidden == Some(true)
+            && style.unhide_when_used == Some(true)
+            && style.table_properties.as_ref().is_some_and(|properties| {
+                properties
+                    .indent
+                    .as_ref()
+                    .is_some_and(|indent| indent.width_type == "dxa" && indent.w == 0)
+                    && properties.cell_margin.as_ref().is_some_and(|margin| {
+                        margin.top == Some(rdocx_oxml::Twips(0))
+                            && margin.bottom == Some(rdocx_oxml::Twips(0))
+                    })
+            })
+        {
+            resolved
+                .cell_margin
+                .get_or_insert_with(Default::default)
+                .left = Some(rdocx_oxml::Twips(108));
         }
     }
     if let Some(properties) = direct {
@@ -1390,12 +1429,6 @@ fn autofit_column_widths(
     }
 
     let default_cell_margin = properties.and_then(|properties| properties.cell_margin.as_ref());
-    let horizontal_margin = default_cell_margin
-        .and_then(|margin| margin.left)
-        .map_or(5.4, |value| value.to_pt())
-        + default_cell_margin
-            .and_then(|margin| margin.right)
-            .map_or(5.4, |value| value.to_pt());
 
     let mut minima = vec![0.0f64; column_count];
     let mut maxima = vec![0.0f64; column_count];
@@ -1409,6 +1442,20 @@ fn autofit_column_widths(
                 .unwrap_or(0) as usize)
                 .min(column_count);
         for (cell, cell_path) in &layout_row_cells(row, row_path) {
+            // Match the final pass's direct, edgewise cell overlay. A missing
+            // edge inherits the table, while an explicit zero remains zero.
+            let own_margin = cell
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.cell_margin.as_ref());
+            let horizontal_margin = own_margin
+                .and_then(|margin| margin.left)
+                .or_else(|| default_cell_margin.and_then(|margin| margin.left))
+                .map_or(0.0, |value| value.to_pt())
+                + own_margin
+                    .and_then(|margin| margin.right)
+                    .or_else(|| default_cell_margin.and_then(|margin| margin.right))
+                    .map_or(0.0, |value| value.to_pt());
             let grid_span = cell
                 .properties
                 .as_ref()
@@ -1712,6 +1759,7 @@ fn layout_cell_content(
                     story,
                     &source_path,
                     doc_grid,
+                    false,
                 )?;
                 blocks.push(CellBlock::Table(nested));
                 semantics.push(CellBlockSemantics::Table(nested_semantics));
@@ -1820,6 +1868,7 @@ fn layout_control_cell_content(
                     story,
                     &source_path,
                     doc_grid,
+                    false,
                 )?;
                 blocks.push(CellBlock::Table(nested));
                 semantics.push(CellBlockSemantics::Table(nested_semantics));
@@ -2196,6 +2245,7 @@ mod tests {
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
+            legacy_table_positioning: false,
             modern_footnote_layout: false,
             footnote_layout_like_word8: false,
             math_properties: None,
@@ -2242,6 +2292,75 @@ mod tests {
             None,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn absent_side_margins_match_zero_in_intrinsic_and_final_layout() {
+        let mut table = CT_Tbl::new();
+        table.properties = Some(CT_TblPr {
+            layout: Some("autofit".to_owned()),
+            ..Default::default()
+        });
+        let mut row = CT_Row::new();
+        let mut cell = CT_Tc::new();
+        cell.paragraphs_mut()[0].add_run("Unbreakable");
+        row.cells.push(cell);
+        table.rows.push(row);
+        let absent = layout_with_defaults(&table, 468.0);
+        table.properties.as_mut().unwrap().cell_margin = Some(CT_TblCellMar {
+            left: Some(Twips(0)),
+            right: Some(Twips(0)),
+            ..Default::default()
+        });
+        let zero = layout_with_defaults(&table, 468.0);
+        assert_eq!(absent.table_width, zero.table_width);
+        assert_eq!(absent.rows[0].cells[0].margin_left, 0.0);
+        assert_eq!(absent.rows[0].cells[0].margin_right, 0.0);
+        table.properties.as_mut().unwrap().cell_margin = Some(CT_TblCellMar {
+            left: Some(Twips(108)),
+            right: Some(Twips(108)),
+            ..Default::default()
+        });
+        let padded = layout_with_defaults(&table, 468.0);
+        assert!((padded.table_width - absent.table_width - 10.8).abs() < 1e-9);
+        // Direct edge overlays must contribute the same intrinsic padding as
+        // their equivalent resolved table margins, including explicit zero.
+        for (table_left, table_right, own_left, own_right) in [
+            (None, None, Some(108), Some(108)),
+            (Some(108), Some(108), Some(0), None),
+            (None, Some(108), Some(288), Some(0)),
+            (Some(108), None, None, Some(0)),
+        ] {
+            table.properties.as_mut().unwrap().cell_margin = Some(CT_TblCellMar {
+                left: table_left.map(Twips),
+                right: table_right.map(Twips),
+                ..Default::default()
+            });
+            table.rows[0].cells[0].properties = Some(CT_TcPr {
+                cell_margin: Some(CT_TblCellMar {
+                    left: own_left.map(Twips),
+                    right: own_right.map(Twips),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+            let direct = layout_with_defaults(&table, 468.0);
+            let left = own_left.or(table_left).unwrap_or(0);
+            let right = own_right.or(table_right).unwrap_or(0);
+            table.rows[0].cells[0].properties = None;
+            table.properties.as_mut().unwrap().cell_margin = Some(CT_TblCellMar {
+                left: Some(Twips(left)),
+                right: Some(Twips(right)),
+                ..Default::default()
+            });
+            let equivalent = layout_with_defaults(&table, 468.0);
+            assert_eq!(
+                direct.table_width, equivalent.table_width,
+                "direct-cell padding differs from equivalent table padding"
+            );
+            assert_eq!(direct.rows[0].cells[0].margin_left, left as f64 / 20.0);
+            assert_eq!(direct.rows[0].cells[0].margin_right, right as f64 / 20.0);
+        }
     }
 
     #[test]
@@ -2395,6 +2514,7 @@ mod tests {
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
+            legacy_table_positioning: false,
             modern_footnote_layout: false,
             footnote_layout_like_word8: false,
             math_properties: None,

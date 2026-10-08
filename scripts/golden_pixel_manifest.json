@@ -4,7 +4,7 @@
     "command": "pdftoppm",
     "version": "pdftoppm version 26.01.0"
   },
-  "reason": "F-X182: invoice totals table moves right by 36 pt after applying direct table alignment. Only invoice decoded pixels change, within the reviewed totals-table region at 150 DPI.",
+  "reason": "F-X183 DELTA pass1 reviewed zero side padding and wider cell content changes invoice and quote only; five other page-one RGBA arrays remain exact",
   "samples": {
     "contract": {
       "height": 1650,
@@ -18,7 +18,7 @@
     },
     "invoice": {
       "height": 1650,
-      "rgba_sha256": "4e6e4ab7fbbbb040629853b853cc0a9a4ac78d49fedcc97538cbe98ca1314337",
+      "rgba_sha256": "c9c5369f9e7a2145121a720ce20a236ec1983828bb0573f579726a6927db6dfd",
       "width": 1275
     },
     "letter": {
@@ -33,7 +33,7 @@
     },
     "quote": {
       "height": 1650,
-      "rgba_sha256": "db937ca654f4c8045c0f2893abc4fd05a7c67595890904ef67ae032d5897c95a",
+      "rgba_sha256": "ccd54d94a8774dcfadf1819d6ac52ffba46878abd2c63e81e1f3d36f864c2a26",
       "width": 1275
     },
     "report": {

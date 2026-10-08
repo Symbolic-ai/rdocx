@@ -26992,6 +26992,85 @@ impl Document {
             }
         }
 
+        // Rendering may consume a sole effects-only default without changing
+        // either authored style part or merging the effects style catalogue.
+        let mut layout_styles = self.styles.clone();
+        if layout_styles.get_default(StyleType::Table).is_none() {
+            let effects = self.package.get_part_rels(&self.doc_part_name).and_then(|rels| {
+                let mut candidates = rels.items.iter().filter(|rel| {
+                    rel.rel_type == "http://schemas.microsoft.com/office/2007/relationships/stylesWithEffects"
+                        && relationship_is_internal(rel)
+                });
+                let rel = candidates.next()?;
+                if candidates.next().is_some() {
+                    return None;
+                }
+                let target = OpcPackage::resolve_rel_target(&self.doc_part_name, &rel.target);
+                let xml = self.package.get_part(&target)?;
+                let parsed = CT_Styles::from_xml(xml).ok()?;
+                let mut style_ids = std::collections::HashSet::new();
+                if !parsed.styles.iter().all(|style| style_ids.insert(&style.style_id)) {
+                    return None;
+                }
+                // The general projection omits empty style owners. Reject an
+                // effects catalogue whose physical owners are not all modeled,
+                // rather than accepting an invisible duplicate or default.
+                let mut reader = NsReader::from_reader(xml);
+                let mut buffer = Vec::new();
+                let mut depth = 0usize;
+                let mut root_seen = false;
+                let mut style_count = 0usize;
+                loop {
+                    let (namespace, event) = reader.read_resolved_event_into(&mut buffer).ok()?;
+                    let word = matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == WORD_NAMESPACE.as_bytes());
+                    let starts_scope = matches!(&event, Event::Start(_));
+                    match event {
+                        Event::Start(element) | Event::Empty(element) => {
+                            if depth == 0 {
+                                if root_seen || !word || element.local_name().as_ref() != b"styles" {
+                                    return None;
+                                }
+                                root_seen = true;
+                            } else if depth == 1 && word && element.local_name().as_ref() == b"style" {
+                                style_count += 1;
+                            }
+                            // Empty events do not open an ownership level.
+                            if starts_scope {
+                                depth += 1;
+                            }
+                        }
+                        Event::End(_) => depth = depth.checked_sub(1)?,
+                        Event::DocType(_) => return None,
+                        Event::Text(text) if depth == 0 && !text.iter().all(u8::is_ascii_whitespace) => return None,
+                        Event::Eof => break,
+                        _ => {}
+                    }
+                    buffer.clear();
+                }
+                (root_seen && depth == 0 && style_count == parsed.styles.len()).then_some(parsed)
+            });
+            if let Some(effects) = effects {
+                let mut defaults = effects
+                    .styles
+                    .iter()
+                    .filter(|style| style.style_type == StyleType::Table && style.is_default);
+                if let Some(default) = defaults.next()
+                    && !default.style_id.is_empty()
+                    && defaults.next().is_none()
+                    && default.based_on.is_none()
+                    && layout_styles.get_by_id(&default.style_id).is_none()
+                    && effects
+                        .styles
+                        .iter()
+                        .filter(|style| style.style_id == default.style_id)
+                        .count()
+                        == 1
+                {
+                    layout_styles.styles.push(default.clone());
+                }
+            }
+        }
+
         LayoutInput {
             sequence_snapshot: None,
             revision_view: rdocx_layout::RevisionView::Accepted,
@@ -27005,6 +27084,7 @@ impl Document {
                 .as_ref()
                 .and_then(CT_Settings::default_tab_stop),
             clamp_tabs_past_margin: modern_compatibility,
+            legacy_table_positioning: !modern_compatibility,
             modern_footnote_layout: modern_compatibility,
             footnote_layout_like_word8: self
                 .settings
@@ -27048,7 +27128,7 @@ impl Document {
                     .and_then(CT_Settings::endnote_properties)
                     .cloned(),
             ],
-            styles: self.styles.clone(),
+            styles: layout_styles,
             numbering: self.numbering.clone(),
             story_part_names,
             story_bodies,

@@ -1327,6 +1327,15 @@ children remain at their schema positions. Unchanged projections reuse the
 preserved subtree. A typed mutation writes one canonical modeled child in
 `CT_Style` sequence order and reinserts unmodelled direct children once.
 
+Rendering can use a default table style found only through the main document's
+internal `stylesWithEffects` relationship. The target resolves relative to the
+actual main part. This fallback reads a sole self-contained default table style
+only when the main styles have no table default and its ID does not collide.
+It requires a Word `styles` root, complete direct style-owner projection and
+unique IDs. Missing, malformed, ambiguous or unprojected catalogues contribute
+no fallback. Other effects styles are not merged. Rendering uses an owned
+style copy and leaves both source parts, relationships and opaque XML intact.
+
 The style projection also owns `link`, automatic redefinition, visibility,
 gallery priority, quick-format, and locking values. Readers accept any prefix
 bound to the WordprocessingML namespace. Writers emit the fixed `w` prefix and

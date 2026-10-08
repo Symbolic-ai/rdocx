@@ -170,6 +170,9 @@ pub struct LayoutInput {
     /// Whether the document's `w:compatibilityMode` is 15 or later, where Word
     /// moves a tab stop past the right margin to the end of its line.
     pub clamp_tabs_past_margin: bool,
+    /// Whether compatibility mode is absent or below 15, selecting legacy
+    /// positioning for eligible top-level tables.
+    pub legacy_table_positioning: bool,
     /// Modern continuous-section footnote flow selected by compatibility mode 15.
     pub modern_footnote_layout: bool,
     /// Explicit `w:compat/w:footnoteLayoutLikeWW8` legacy flow override.

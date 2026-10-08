@@ -19542,6 +19542,7 @@ mod advanced_table_authoring_and_geometry {
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
+            legacy_table_positioning: false,
             modern_footnote_layout: false,
             footnote_layout_like_word8: false,
             math_properties: None,
@@ -20001,16 +20002,19 @@ mod advanced_table_authoring_and_geometry {
         assert_eq!(origins, GOLDEN_TABLE_GEOMETRY);
     }
 
-    /// Reviewed page geometry for
+    /// Reviewed deterministic page geometry for
     /// `fixed_autofit_and_nested_table_geometry_matches_reviewed_word_pages`,
     /// as `(x, y, width, height)` in points for every painted cell.
     ///
     /// Rows 1 to 6 are the fixed-grid table, which keeps its declared 144,
     /// 144 and 180 point columns. Rows 7 to 10 are the auto-width autofit
-    /// table, whose narrow `ID` column measures 20.34 points against a 242.28
+    /// table, whose narrow `ID` column measures 9.54 points against a 231.48
     /// point heading column and whose total stops short of the 468 point text
     /// column because the content fits. Rows 11 to 14 are the nested table,
     /// which resolves its own grid inside the owning cell content box.
+    /// F-X183 removes implicit side padding. Supplemental DELTA review binds
+    /// the exact Base and current outputs. This source-built geometry pin is
+    /// not an authenticated native Word GUI capture.
     const GOLDEN_TABLE_GEOMETRY: &[(f64, f64, f64, f64)] = &[
         (72.0, 72.0, 144.0, 22.49),
         (216.0, 72.0, 144.0, 22.49),
@@ -20018,14 +20022,14 @@ mod advanced_table_authoring_and_geometry {
         (72.0, 94.49, 144.0, 22.49),
         (216.0, 94.49, 144.0, 22.49),
         (360.0, 94.49, 180.0, 22.49),
-        (72.0, 116.98, 20.34, 22.49),
-        (92.34, 116.98, 242.28, 22.49),
-        (72.0, 139.47, 20.34, 22.49),
-        (92.34, 139.47, 242.28, 22.49),
-        (311.4, 184.45, 111.6, 22.49),
-        (423.0, 184.45, 111.6, 22.49),
-        (311.4, 206.94, 111.6, 22.49),
-        (423.0, 206.94, 111.6, 22.49),
+        (72.0, 116.98, 9.54, 22.49),
+        (81.54, 116.98, 231.48, 22.49),
+        (72.0, 139.47, 9.54, 22.49),
+        (81.54, 139.47, 231.48, 22.49),
+        (306.0, 184.45, 112.5, 22.49),
+        (418.5, 184.45, 112.5, 22.49),
+        (306.0, 206.94, 112.5, 22.49),
+        (418.5, 206.94, 112.5, 22.49),
     ];
 }
 
@@ -21211,7 +21215,7 @@ mod f266c_character_grid_and_vertical_text {
     /// and the six coefficients of the transform that maps the run into page
     /// space, which is what makes a lost or altered rotation fail here.
     const GRID_AND_VERTICAL_GEOMETRY_DIGEST: &str =
-        "02995cf452d8add0ceb9c147d65773d55bc9f8b065b7a92b0e42073fdd770f7f";
+        "2002409b412388ad17b7f85e170d36b8c3658e6c7e4cff84098220772c006b76";
 
     /// One coordinate, with the sign of zero normalised, as F-266a documents.
     fn number(value: f64) -> String {
