@@ -818,6 +818,8 @@ requires a material combined-lifecycle gap and an explicit preserve, edit and
 execute boundary. The roadmap stages reading and loss-aware editing before
 calculation and pivots. Rendering and distribution remain scheduled for S104.
 The request for a unified CLI/Python workflow and an earlier usable package
-adds integration and release tradeoffs to that decision. Keep the discussion
-open, and provide this scheduling answer with contributor thanks during
-verified S90 sprint-close reconciliation.
+adds integration and release tradeoffs to that decision. The existing
+[maintainer response](https://github.com/tensorbee/rdocx/issues/281#issuecomment-6058792996)
+answers those questions and invites concrete workflows and preservation needs.
+Keep the discussion open for F-184 and reconcile this existing response during
+verified S90 sprint close.

@@ -2033,9 +2033,9 @@ PR 279 supplies F-X182. PR 280 is stacked on it and supplies F-X183, including n
 Issue [281](https://github.com/tensorbee/rdocx/issues/281), raised by `hadim`,
 adds roadmap feedback to this sprint intake. Record its unified CLI/Python
 workflow, template filling, preservation-safe edits and rendering needs in the
-existing F-184 decision at S95. Answer the scheduling and staged-delivery
-questions against that gate during sprint-close contributor reconciliation.
-Keep the discussion open for the F-184 decision. S90 delivers the documented
+existing F-184 decision at S95. The [maintainer response](https://github.com/tensorbee/rdocx/issues/281#issuecomment-6058792996)
+answers scheduling and staged-delivery questions and requests concrete workflows
+and preservation needs. Keep the discussion open for the F-184 decision. S90 delivers the documented
 assessment, while spreadsheet implementation retains its affirmative decision
 barrier.
 
