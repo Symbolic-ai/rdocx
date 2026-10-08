@@ -83,6 +83,21 @@ Issues [282](https://github.com/tensorbee/rdocx/issues/282), [283](https://githu
 
 Pause F-282 only at an explicit saved external checkpoint. Run F-X184, F-X185, F-X186 and F-X187 in exclusive waves 11, 12, 13 and 14, respectively. F-X184 uses completed F-X179 and F-271. Complete each formal dependency before starting its consumer. F-X187 has no formal dependency but follows F-X186 because document, comment, binding and existing test entrypoints overlap. These waves exclusively own shared source, Cargo execution and HLD edits. Resume full-scope F-282 afterward, then F-283 in its existing wave 10 only after F-282 completion. Draft batch planning does not waive implementation barriers or the final integrated full gate. Issue 264 and F-X178 remain excluded. GitHub closure waits for verified sprint close and complete issue acceptance.
 
+
+
+Subsequent [PR 287](https://github.com/tensorbee/rdocx/pull/287), by Hadrien
+Mary (`hadim`), targets Issues 282, 283 and 284 at immutable head
+`e4b216934eb3abc58ea1a42d72a902f90aa8e120`, based on
+`20888b7a2c636e322ad23dc611f494beaac1c09b`. It is included in F-X184 through
+F-X186 contribution assessment. Existing F-X184 acceptance retains atomic
+partial-cut and fragment-detach refusal. Assess reusable anchor projection,
+typed binding and movement changes against the full F-X185 and F-X186 plans,
+without replacing the completed ownership protections or accepting the PR's
+stated note and header removal gaps. The stacked F-X179 contribution is
+already integrated. Read the exact contribution and preserve contributor
+attribution, with PR reconciliation only after complete integrated acceptance
+at verified sprint close. No additional F-ID or scope reduction is introduced.
+
 ## Definition of done for this sprint
 
 - Simple, complex and nested fields reopen with identical instruction semantics and ordered cached content.

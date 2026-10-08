@@ -2407,3 +2407,17 @@ Future breadth must preserve the properties that distinguish this workspace:
   one implementation per document family.
 - Offline operation by default, with network access isolated behind explicit
   adapters.
+
+
+Subsequent [PR 287](https://github.com/tensorbee/rdocx/pull/287), by Hadrien
+Mary (`hadim`), targets Issues 282, 283 and 284 at immutable head
+`e4b216934eb3abc58ea1a42d72a902f90aa8e120`, based on
+`20888b7a2c636e322ad23dc611f494beaac1c09b`. It is included in F-X184 through
+F-X186 contribution assessment. Existing F-X184 acceptance retains atomic
+partial-cut and fragment-detach refusal. Assess reusable anchor projection,
+typed binding and movement changes against the full F-X185 and F-X186 plans,
+without replacing the completed ownership protections or accepting the PR's
+stated note and header removal gaps. The stacked F-X179 contribution is
+already integrated. Read the exact contribution and preserve contributor
+attribution, with PR reconciliation only after complete integrated acceptance
+at verified sprint close. No additional F-ID or scope reduction is introduced.
