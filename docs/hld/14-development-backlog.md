@@ -6530,6 +6530,41 @@ fontdb/memmap` fails on the claimed base and passes after the fix. Default,
 no-default and no-default plus memmap checks and font tests pass, with all
 49 hash entries unchanged. Record the contributor disposition for sprint close.
 
+### F-X180, Correct cell nil and none border precedence (S)
+
+Adopt [PR 274](https://github.com/tensorbee/rdocx/pull/274) from `hadim`,
+reviewed at `59d9de9426233da389369ee10f5c8bd32ca8f75c`, against every
+criterion of [Issue 272](https://github.com/tensorbee/rdocx/issues/272).
+A cell `nil` removes its edge on the outer boundary as on the interior.
+A cell `none` is unset for layout and inherits the corresponding table edge.
+Both direct table borders and style-derived borders follow the same rule in
+painting and border bands. Preserve the distinct source tokens on save.
+**Depends on**: none.
+**Test gate**: regression. The seven reported direct and Table Grid variants,
+including a single unmodified corner and first-row top suppression, match
+pinned Word line sets. The contributed gate fails before the correction.
+The deterministic dense-form golden changes only the identified top segment,
+with unchanged row geometry. All 49 hash-harness entries remain unchanged.
+Record contributor provenance and complete issue acceptance for sprint close.
+
+### F-X181, Ignore page and column breaks inside table cells (S)
+
+Adopt [PR 275](https://github.com/tensorbee/rdocx/pull/275) from `hadim`,
+reviewed at `5ea2f5710d4bb13d0182bd74417fa5ca58522984`, against every
+criterion of [Issue 273](https://github.com/tensorbee/rdocx/issues/273).
+Inside table cells, including nested tables, page and column run breaks
+produce no page transition, line break or space. Text remains on one line and
+row height matches the input without the break. Ordinary line breaks remain
+line breaks and body page breaks still advance the page. Field-result control
+characters interpreted as page and column breaks follow the same cell rule.
+**Depends on**: none.
+**Test gate**: regression. Leading and inline page and column breaks in ordinary
+and nested cells match pinned Word text positions and no-break row geometry.
+Line-break and body page-break controls retain their existing behavior.
+The contributed gate fails before the correction. Source XML survives reopen,
+and all 49 hash-harness entries remain unchanged. Record contributor provenance
+and complete issue acceptance for sprint close.
+
 ### F-X179, Correct multi-paragraph comment threads from PR 271 (S)
 
 Adopt [PR 271](https://github.com/tensorbee/rdocx/pull/271) from `hadim`,

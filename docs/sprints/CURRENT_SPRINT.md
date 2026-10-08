@@ -30,6 +30,8 @@ the full pinned Word bibliography source, style and locale catalogue.
 | F-283 | Complete numbering-aware navigation fields | L | pending | - |
 | F-X178 | Clearable direct run formatting setters | S | pending | - |
 | F-X179 | Correct multi-paragraph comment threads from PR 271 | S | done | - |
+| F-X180 | Correct cell nil and none border precedence | S | pending | - |
+| F-X181 | Ignore page and column breaks inside table cells | S | pending | - |
 
 ## Sequencing note
 
@@ -46,6 +48,13 @@ F-X179 adopts PR 271 against all of Issue 270, including multiline text and
 last-paragraph thread metadata. It has no feature dependency. Issue 264 and
 F-X178 remain outside this intake. GitHub closure waits for sprint close.
 
+
+The user added Issues 272 and 273 with PRs 274 and 275 during S90.
+F-X180 and F-X181 validate each full issue before accepting its contribution.
+Their source and regression files overlap F-282 and F-283, so use separate
+waves after F-282 and before F-283, with focused integration checks for table
+geometry and bibliography output. Issue 264 remains excluded.
+
 ## Definition of done for this sprint
 
 - Simple, complex and nested fields reopen with identical instruction semantics and ordered cached content.
@@ -55,3 +64,5 @@ F-X178 remain outside this intake. GitHub closure waits for sprint close.
 - Citation and bibliography identifiers, ordering, display text and package round trips match the pinned Word oracle.
 - One source-built multilevel numbered document stays consistent across visible markers, navigation, references and saved caches.
 - The integrated full verification and sprint review pass, including the source-built document's field caches, page targets and numbering checks. Any intentional hash delta is declared and reviewed.
+
+- Cell border precedence and table-cell break handling satisfy Issues 272 and 273 against the pinned Word oracle.

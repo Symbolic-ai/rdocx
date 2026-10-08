@@ -1996,6 +1996,8 @@ citations, and numbering-aware navigation.
 | F-283 | Complete numbering-aware navigation fields | L |
 | F-X178 | Clearable direct run formatting setters | S |
 | F-X179 | Correct multi-paragraph comment threads from PR 271 | S |
+| F-X180 | Correct cell nil and none border precedence | S |
+| F-X181 | Ignore page and column breaks inside table cells | S |
 
 F-278 is the field substrate. F-279 uses the S89 note policy, and F-280 uses
 S89 range markers. F-281 follows the field, pagination, and caption work.
@@ -2008,6 +2010,13 @@ covers the full pinned Word bibliography source, style and locale catalogue.
 
 F-X179 integrates PR 271 only after every Issue 270 criterion passes. It has
 no dependency and preserves Issue 264 and F-X178 for separate work.
+
+
+The user added Issues 272 and 273 with PRs 274 and 275 during S90.
+F-X180 and F-X181 validate each full issue before accepting its contribution.
+Their source and regression files overlap F-282 and F-283, so use separate
+waves after F-282 and before F-283, with focused integration checks for table
+geometry and bibliography output. Issue 264 remains excluded.
 
 #### Sprint S91, Templates, controls, and forms
 
