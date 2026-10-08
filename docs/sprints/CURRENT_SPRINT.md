@@ -30,10 +30,10 @@ the full pinned Word bibliography source, style and locale catalogue.
 | F-283 | Complete numbering-aware navigation fields | L | pending | - |
 | F-X178 | Clearable direct run formatting setters | S | pending | - |
 | F-X179 | Correct multi-paragraph comment threads from PR 271 | S | done | - |
-| F-X180 | Correct cell nil and none border precedence | S | in-progress | codex |
-| F-X181 | Ignore page and column breaks inside table cells | S | in-progress | codex |
+| F-X180 | Correct cell nil and none border precedence | S | done | - |
+| F-X181 | Ignore page and column breaks inside table cells | S | done | - |
 | F-X182 | Honor direct table alignment | M | done | - |
-| F-X183 | Correct table margins and legacy positioning | M | in-progress | codex |
+| F-X183 | Correct table margins and legacy positioning | M | done | - |
 | F-X184 | Safe comment ownership during content removal | L | done | - |
 | F-X185 | Expose comment anchor text and story location | M | done | - |
 | F-X186 | Move comment anchors without losing threads | M | done | - |

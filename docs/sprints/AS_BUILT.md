@@ -18275,3 +18275,174 @@ F-282 resumes. This supersedes historical entries that excluded291. Issue264
 remains excluded, and Issue281 remains open for F-184. No push, main merge,
 tag, publication or GitHub closure occurred. Release preparation and separate
 reviewed-main-SHA publication approvals remain ahead.
+
+
+### F-X180, Correct cell nil and none border precedence
+
+**Sprint.** S90
+**Completed.** 2026-10-09
+**Size.** S, estimated 1 day, actual effort not recorded.
+
+**What was built.** Explicit cell nil suppresses both inner and outer borders.
+Cell none and omitted edges inherit the corresponding table edge. Painting
+and border-band geometry share the corrected concrete helper. This addresses
+all seven variants of Hadrien Mary (`hadim`)'s
+[Issue272](https://github.com/tensorbee/rdocx/issues/272), adopting
+[PR274](https://github.com/tensorbee/rdocx/pull/274) at59d9de94.
+Source border tokens and opaque cell XML survive save and reopen.
+
+**Non-obvious choices.** Deterministic bundled-font geometry is compared with
+pinned Word16.113.2 topology and relative positions. Native Arial and bundled
+Caladea metrics are not asserted equal. Formal pass1 corrected fixture child
+order before clean pass2. The separate dense-form golden intentionally loses
+one first-cell top segment,26to25 lines, checksum17727332437927583437,
+without changing row geometry.
+
+**Deviations from the design plan.** None. Original final standalone logs were
+not recovered during this delivery checkpoint. The durable reviewed commit
+and validated integration handoff attest the completed scoped gate, including
+140 workflow tests. The earlier clean review explicitly left that final
+workflow/README result pending. This entry does not claim freshly rehashed
+missing logs or measured total effort.
+
+**Spec sections touched.** Exactly HLD08 table-style cascade and border
+geometry. The later codecommit includes the completed HLD update.
+
+**Tests.** Contributed
+cell_nil_removes_every_edge_and_cell_none_falls_back_to_the_table has genuine
+before failure and after success recorded by ALL pass2. Full issue gate
+issue_272_cell_borders_match_all_seven_word_topologies covers all seven
+reported topologies. The reviewed native index188680c6 binds45 files,
+25 page geometries, seven border topologies and16 break controls. The review
+records affected suites, lint, fmt, archives and hash49 success. All six
+review-frozen inputs authenticate to CodeHeadb4addf1e. ALL pass2 has zero
+defects, smells and nitpicks. Publication dry runs remain local only.
+
+**Hash harness.** All49 worker entries unchanged. The separate dense-form
+golden delta is declared above. Final integrated verification remains due.
+
+**Notes for future sessions.** Claim Basecf58ed1d, CodeHeadb4addf1e and
+integration8eab4796 remain recorded. The consumed handoff retains the original
+scoped acceptance. The worker branch remains through sprint close. GitHub
+issue and PR disposition waits for verified close, with contributor credit
+retained. No new code, baseline, publication or external closure occurs at
+this delivery-record checkpoint.
+
+### F-X181, Ignore page and column breaks inside table cells
+
+**Sprint.** S90
+**Completed.** 2026-10-09
+**Size.** S, estimated 1 day, actual effort not recorded.
+
+**What was built.** Page and column breaks inside ordinary and nested table
+cells are consumed without emitting a line break or space. Field-display FF
+and VT use the same concrete cell context. Ordinary line breaks and body
+pagination retain their existing behavior. This addresses Hadrien Mary
+(`hadim`)'s [Issue273](https://github.com/tensorbee/rdocx/issues/273), adopting
+[PR275](https://github.com/tensorbee/rdocx/pull/275) at5ea2f571. Authored XML
+and opaque content remain unchanged.
+
+**Non-obvious choices.** The existing table paragraph entrypoint supplies the
+cell context, including nested traversal. Library comparisons use each own
+no-break control with deterministic fonts. Native topology and relative
+positions are accepted without an absolute Arial/Caladea or pixel parity
+claim. Native field update or reopen behavior is not inferred.
+
+**Deviations from the design plan.** None. Total effort was not measured.
+
+**Spec sections touched.** Exactly HLD08 line-breaking and page-transition
+rules. The committed HLD bytes equal the review freeze.
+
+**Tests.** The contributed
+page_and_column_breaks_inside_a_table_cell_are_dropped gate genuinely fails
+before production with shifted BBB baseline, then passes. The strengthened
+16-case ordinary/nested, leading/inline matrix, typed field variants, row
+height and body controls pass. Scoped suites record500unit,360integration,
+865regression and317layout passes, with existing ignores6/8/7/0 and passing
+doctests. All-target checks, denied-warning Clippy/docs, fmt,140 workflow tests
+with two skips,27 README examples and22 package inventories, prose0 and
+adapters26 pass. Locally patched verified dry runs retain layout tuple
+308999/1672132/15 and facade1518202/8403444/36 below10MiB. ALL pass1 has zero
+findings. Freeze c145897b retains19 logs, independently rehashed here, and all
+six nonplan frozen inputs equal CodeHead101ff340.
+
+**Hash harness.** All49 worker entries unchanged. No baseline movement.
+Final full integrated sprint gates remain due.
+
+**Notes for future sessions.** Claim Basee4801316, CodeHead101ff340 and
+integration90c2d300 remain recorded with the consumed handoff. Shared native
+index188680c6 retains qualified Word16.113.2 evidence. Keep the branch through
+sprint close. This checkpoint changes delivery records only, with no GitHub
+closure, upload or publication approval.
+
+### F-X183, Correct table margins and legacy positioning
+
+**Sprint.** S90
+**Completed.** 2026-10-09
+**Size.** M, estimated 2 days, actual effort not recorded.
+
+**What was built.** Missing resolved table side margins become zero in
+intrinsic and final layout, with direct cell overlays preserved. Eligible
+legacy top-level positioning consumes the first accepted laid-out cell's left
+margin and resolved-indent context. This addresses Hadrien Mary (`hadim`)'s
+[Issue276](https://github.com/tensorbee/rdocx/issues/276) and
+[Issue278](https://github.com/tensorbee/rdocx/issues/278), hardening the
+incremental [PR280](https://github.com/tensorbee/rdocx/pull/280) contribution
+at795b29d7. Its stacked PR279 alignment work is already credited to F-X182.
+
+**Non-obvious choices.** Measured legacy right/end placement depends on first
+left margin, rather than the contribution's last-right inference. Modern,
+centered, nested, bidi and floating placement remain separate controls.
+Effects-only default consumption is render-only and retains both source
+style parts. The bounded built-in TableNormal left-default exception does
+not generalize to custom defaults or claim unmeasured right padding.
+LayoutInput.legacy_table_positioning is a required public field, with
+pre-1.0 struct-literal compatibility impact. ALL pass1 D1 exposed a leading
+accepted row without a projected cell. The repaired traversal finds the
+first real cell without deleting the source row or control.
+
+**Deviations from the design plan.** None. The published scope retains the
+qualified original869-pass regression attempt plus corrected sole-target pass,
+not a fresh complete870-test invocation. Recorded measurement windows are
+bounded checkpoints, not total effort. Historical compiler/fixture failures
+are not accepted behavior proof.
+
+**Spec sections touched.** Exactly HLD04 package/style preservation and HLD08
+table cascade, geometry and compatibility placement. Both frozen HLD files
+authenticate to the committed source.
+
+**Tests.** The named legacy_table_positions_use_resolved_cell_margins gate
+fails at claim Base with missing margin5.4 versus0, then passes600 fixtures
+and the actual prepare rerun. Direct-cell intrinsic equivalence has its own
+before/after proof. D1 has actual72 versus66.6 before failure and16-case
+restored success. Layout319 plus one doctest, inherited24 controls, all-target
+checks, lint, fmt, hash49/golden7 and140 workflow tests with two skips pass.
+Prior unaffected facade500unit/360integration,869regression plus corrected
+sole-target, CLI3+58, binding, WASM and documentation evidence retain their
+explicit scope. ALL pass2 has zero findings, and three DELTA reviews approve
+the precise intentional outputs. Independent review authenticates491 native
+bindings, with no absolute native font or pixel parity claim.
+
+Freeze890efe77 binds final code and qualified evidence. Root rehashed85
+retained proof/archive/prior-review bindings and checked15 nonplan inputs
+against CodeHead2050ce5b. Verified archives retain layout310871/1681340/15,
+facade measured1526086/8447574/36 and actual1526084/8447574/36. Only README
+raw payload differs between measured and actual archive pairs. The two-byte
+compressed difference is within the existing64-byte policy, with no invented
+compression cause. All source/test members match and both archives remain
+below10MiB. No upload occurred.
+
+**Hash harness.** Exactly14 of49 entries change for declared zero-padding
+behavior, with35 unchanged. Source DOCX members, resources, page counts and
+MediaBoxes remain unchanged. Invoice/quote PNGs, dense-form, F266c and F268a
+geometry changes have independent attribution. F-X182's five changed events
+all overlap these14 keys. Together the two stories record19 change events
+affecting14 unique final keys, not19 distinct keys. Final integrated hash and
+review gates remain due.
+
+**Notes for future sessions.** Claim Based4b8f545, CodeHead2050ce5b,
+handoff-onlytipb038e00e and integration0a775842 remain recorded. The completed
+clean worktree was removed and its branch remains through sprint close.
+Do not repeat broad native capture or reinterpret narrow measurements as
+full Word behavior. This delivery checkpoint adds no code or baseline change.
+GitHub disposition and separate publication approval remain ahead.

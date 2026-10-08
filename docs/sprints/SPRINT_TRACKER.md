@@ -844,3 +844,7 @@ or changing the reviewed release boundary. Keep Issue281 open for F-184.
 | F-X187 | S90 | M | 2 | 1 | 2026-10-08 | Owned native and Python scoped replacement for hadim Issue285 and adapted PR286, direct-control correction from PR287, ALL pass2 clean, native2422/Python97/CLI11, hash49 unchanged |
 
 | F-X188 | S90 | L | 4 | not recorded | 2026-10-09 | Issues288/292 whole-story ownership and qualified glossary omission, ALL pass3 clean, native1878/Python99, hash49 unchanged. Actual effort was not measured |
+
+| F-X180 | S90 | S | 1 | not recorded | 2026-10-09 | All7 Issue272 nil/none topologies, ALL pass2 clean, durable final scoped attestation, hash49 unchanged and declared separate dense-form segment delta |
+| F-X181 | S90 | S | 1 | not recorded | 2026-10-09 | Full Issue273 cell/field/break controls, ALL pass1 clean,19 retained logs rehashed, hash49 unchanged |
+| F-X183 | S90 | M | 2 | not recorded | 2026-10-09 | Issues276/278 bounded legacy/default policies,600cases and accepted-empty-row proof, ALL pass2 plus three DELTA reviews,14 changed keys, qualified combined regression receipts |
