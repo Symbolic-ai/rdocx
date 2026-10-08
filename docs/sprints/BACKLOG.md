@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 23 | 1 | 30 |
-| X, Cross-cutting | 193 | 185 | 2 | 2 |
-| **Total** | **518** | **458** | **3** | **53** |
+| X, Cross-cutting | 193 | 185 | 3 | 1 |
+| **Total** | **518** | **458** | **4** | **52** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -736,5 +736,5 @@ regenerated, never hand-edited.
 | F-X180 | Correct cell nil and none border precedence | S90 | S | in-progress |
 | F-X181 | Ignore page and column breaks inside table cells | S90 | S | in-progress |
 | F-X182 | Honor direct table alignment | S90 | M | done |
-| F-X183 | Correct table margins and legacy positioning | S90 | M | pending |
+| F-X183 | Correct table margins and legacy positioning | S90 | M | in-progress |
 <!-- AUTOGEN:backlog-MX END -->
