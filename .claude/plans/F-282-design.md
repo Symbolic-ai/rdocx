@@ -247,6 +247,28 @@ installed candidates and any additional engine-discovered values. Published
 membership is candidate evidence, not observed acceptance by the pinned build.
 
 
+Microsoft's bibliography-specific Office LCID table establishes223 documented
+valid ordinary language IDs. Its final row excludes other values, while Word
+source LCID0 separately requests runtime application context. The installed
+Word language dictionary adds only0 and1024 to that ordinary table union,
+with1024 remaining a proofing sentinel. Implement every documented valid member
+with its independently observed native formatting, including English-equivalent
+results, rather than treating such members as unsupported. Matching complete
+rich output establishes supported behavior without asserting an unobservable
+internal alias or fallback bit. Successful F9 for undefined1133 or999999 does
+not admit either value to the valid catalogue. Preserve their imported caches
+and source metadata under the existing invalid-input boundary.
+
+The published table is a documented floor, not proof that the2026 pinned engine
+has no additional valid extension. Inspect bibliography-specific language UI
+for any actually exposed extension and capture it before claiming full coverage.
+Proofing labels alone are not that registry. Keep application-default context,
+source overrides, field selectors and filtering distinct in native controls.
+All223-by12 dense rows, additional grammar and mutation controls, actual reopen
+and native implementation parity remain required. The authenticated research
+report is /private/tmp/S90-F282-locale-acceptance-boundary-readiness.md, SHA256
+d89ad48259fac10db21034302e4ac836acabf7fe61fabf1513cf994b29223ef2.
+
 ## Captured block and switch contract clarification
 
 The pinned IEEE matched ordering captures contain fourteen inline CITATION
