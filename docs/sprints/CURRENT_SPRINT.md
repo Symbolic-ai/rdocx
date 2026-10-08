@@ -6,7 +6,7 @@
 field results across stories, then compose captions, cross-references, indexes,
 citations, and numbering-aware navigation. Build on S89's note and range
 contracts while preserving producer XML and saved field caches.
-Issues264 and291 are excluded. F-X178 is carried for separate work. F-282 covers
+Issue264 is excluded and Issue281 remains open. F-X178 is carried for separate work. F-282 covers
 the full pinned Word bibliography source, style and locale catalogue.
 
 ## Spec references
@@ -154,9 +154,12 @@ Issue [292](https://github.com/tensorbee/rdocx/issues/292), reported by
 `hadim`, extends F-X188's building-block ownership contract to creation,
 fragment update, extraction and insertion with isolated comments ownership.
 PR290 and updated PR287 are assessed contributions, not automatic acceptance.
-Issue [291](https://github.com/tensorbee/rdocx/issues/291) remains open and
-excluded at the user's instruction, alongside Issue264. No F-ID is added for
-Issue291. All source, Cargo and shared test execution remains exclusive.
+The user corrected the exclusion: Issue [281](https://github.com/tensorbee/rdocx/issues/281)
+remains open for F-184, while Issue [291](https://github.com/tensorbee/rdocx/issues/291)
+is included. Plan and verify its multi-run complex-field snapshot correction
+separately after F-X188 and before resuming F-282. Updated PR287 and PR290
+stacks require selective acceptance against each issue. Issue264 remains
+excluded. All source, Cargo and shared test execution remains exclusive.
 
 ## Definition of done for this sprint
 
@@ -178,6 +181,6 @@ Issue291. All source, Cargo and shared test execution remains exclusive.
 
 - Issues288 and289 satisfy whole-story comment closure and complete checked nested paragraph snapshots.
 
-- Issue292 satisfies documented building-block comment isolation without unanchored main comments. Issues264 and291 remain open and excluded.
+- Issue292 satisfies documented building-block comment isolation without unanchored main comments. Issue291 bulk field snapshots match direct field text across supported owners and namespace contexts. Issues264 and281 remain open.
 
 - Both approved new release families have exact versions, reviewed notes and contributor inventories, verified packages and installed Python evidence, plus a current reviewed-SHA hosted build-only rehearsal before close. Publication remains separately approved after close.

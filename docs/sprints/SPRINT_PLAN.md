@@ -2081,8 +2081,11 @@ excluded.
 
 Issue292 is included in F-X188 with documented comment omission from
 building-block transfers and physical glossary/main owner isolation.
-Issue291 remains open and excluded at the user's instruction, alongside264.
-Do not import that fix incidentally through an updated contribution.
+The user corrected the exclusion to Issue281, which remains open for F-184.
+Issue291 is included and requires its own planned, verified multi-run field
+snapshot correction after F-X188 and before F-282 resumes. Issue264 remains
+excluded. Assess updated stacked contributions selectively against complete
+issue acceptance before merging or closing any record.
 
 F-X188 owns exclusive wave15 after F-X187 and before full-catalogue F-282
 resumes. Its approved Issue288 contract completes the remaining replacement,

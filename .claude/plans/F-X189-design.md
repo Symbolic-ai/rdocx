@@ -44,9 +44,11 @@ The read-only contribution map is
 e9b53254f091635527ea293988be797b961bdb68a132d2c4b98ee184d642fbab.
 It records pending acceptance explicitly and is not a completion authority.
 Fresh intake includes PR290 and Issue292 within F-X188. Reconcile their
-verified contribution evidence in the release inventory. Issues264 and291
-are excluded at the user's instruction and remain open, including when an
-updated stacked PR contains additional changes for291.
+verified contribution evidence in the release inventory. The user corrected
+the exclusion to Issue281, which remains open for F-184. Issue291 is included
+and its separately verified field snapshot correction must complete before
+release preparation. Issue264 remains excluded. Updated stacked PRs require
+selective acceptance rather than automatic adoption of the complete stack.
 Refresh the inventory and exact previous family tags before writing claims.
 Issue264/F-X178 remain excluded, including release notifications. Preserve
 historical changelog credit without treating it as new S90 work. Issue281

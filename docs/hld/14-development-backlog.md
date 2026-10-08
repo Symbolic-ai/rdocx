@@ -6579,8 +6579,9 @@ fragment update, extraction and insertion. Filter qualified transferred
 markers before comment dependency import. Isolate glossary-local ownership
 from main comments even when numeric ids match, retain unrelated producer
 parts and refuse ambiguous ownership atomically. Metadata-only updates and
-general fragment behavior retain their existing contracts. Issue291 remains
-open and excluded at the user's instruction, alongside Issue264.
+general fragment behavior retain their existing contracts. Issue291 is
+included as a separate field snapshot correction after this story. Issue281
+remains open for F-184 and Issue264 remains excluded.
 **Depends on**: F-X184.
 **Test gate**: regression. `whole_story_removal_and_replacement_preserve_comment_closure` fails against the exact claimed Base for uncovered replacement and glossary routes, then passes source-built cleanup, shared-reference, companion, namespace and atomic refusal controls after save and reopen. Existing Rust, Python and CLI entrypoints cover the complete issue criteria. All 49 hash entries remain unchanged. Record reporter provenance and full acceptance for sprint close.
 

@@ -57,8 +57,10 @@ with main definitions of the same numeric id. The reporter permits either
 omitting comments from building blocks or implementing glossary-local review
 parts. This plan selects documented omission from transferred content, with
 qualified owner isolation and successful valid output. Mere refusal of every
-commented creation is not sufficient acceptance. Issue291 remains open and
-excluded at the user's subsequent instruction, alongside Issue264.
+commented creation is not sufficient acceptance. The user corrected the
+exclusion to Issue281, which remains open for F-184. Issue291 is included
+as a separate field snapshot correction after this story. Issue264 remains
+excluded. This story's ownership implementation scope is unchanged.
 
 F-X184 is completed. Run this story in exclusive wave15 after F-X187 because
 document.rs, Python bindings and existing regression entrypoints overlap.
