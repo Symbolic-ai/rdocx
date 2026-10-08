@@ -31,7 +31,7 @@ the full pinned Word bibliography source, style and locale catalogue.
 | F-X178 | Clearable direct run formatting setters | S | pending | - |
 | F-X179 | Correct multi-paragraph comment threads from PR 271 | S | done | - |
 | F-X180 | Correct cell nil and none border precedence | S | in-progress | codex |
-| F-X181 | Ignore page and column breaks inside table cells | S | pending | - |
+| F-X181 | Ignore page and column breaks inside table cells | S | in-progress | codex |
 
 ## Sequencing note
 
