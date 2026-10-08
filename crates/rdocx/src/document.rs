@@ -1015,6 +1015,14 @@ pub struct ReplacementCountMismatch {
     pub found: usize,
 }
 
+enum ScopedReplacementTarget<'a> {
+    Item(&'a ContentLocation),
+    Cell {
+        coordinates: (usize, usize, usize),
+        paragraph: Option<usize>,
+    },
+}
+
 /// An owned story range and the package dependencies it can reach.
 #[derive(Debug, Clone)]
 pub struct DocumentFragment {
@@ -5469,6 +5477,7 @@ fn bundle_relationship_precedes_story(rel_type: &str) -> bool {
 thread_local! {
     static LAYOUT_INVOCATIONS: Cell<usize> = const { Cell::new(0) };
     static FAIL_NEXT_HEADER_FOOTER_SERIALIZATION: Cell<bool> = const { Cell::new(false) };
+    static FAIL_NEXT_SCOPED_REOPEN: Cell<bool> = const { Cell::new(false) };
     static STORY_SOURCE_BUILDS: Cell<usize> = const { Cell::new(0) };
     static STORY_TEXT_PREFIX_BYTES: Cell<usize> = const { Cell::new(0) };
 }
@@ -16052,14 +16061,19 @@ impl Document {
             StoryKind::Body => {
                 match (self.document.body.content.get_mut(paragraph_slot), ordinal) {
                     (Some(BodyContent::Paragraph(paragraph)), None) => Ok(paragraph),
-                    (Some(BodyContent::ContentControl(control)), Some(mut remaining)) => {
-                        nth_paragraph_in_control(control, &mut remaining).ok_or_else(|| {
-                            Error::Other(format!(
-                                "comment content control has no paragraph {}",
-                                ordinal.unwrap_or_default()
-                            ))
+                    (Some(BodyContent::ContentControl(control)), Some(ordinal)) => control
+                        .content
+                        .iter_mut()
+                        .filter_map(|child| match child {
+                            SdtContent::Paragraph(paragraph) => Some(paragraph),
+                            _ => None,
                         })
-                    }
+                        .nth(ordinal)
+                        .ok_or_else(|| {
+                            Error::Other(format!(
+                                "comment content control has no paragraph {ordinal}"
+                            ))
+                        }),
                     _ => Err(Error::Other("comment body paragraph is missing".to_owned())),
                 }
             }
@@ -17021,8 +17035,7 @@ impl Document {
     // Keep canonical locations and fingerprints while restoring only the proved
     // namespace context used by rich comment projection. Physical event offsets
     // qualify every owner before a restored declaration can reinterpret a name.
-    pub(crate) fn comment_story_range_paragraphs(&self) -> Result<Vec<(ContentLocation, Vec<u8>)>> {
-        let mut paragraphs = self.story_range_paragraphs()?;
+    fn namespace_restored_main_source(&self) -> Result<Vec<u8>> {
         let canonical = self.document.to_xml()?;
         let original = self
             .package
@@ -17030,7 +17043,7 @@ impl Document {
             .ok_or_else(|| Error::Other("rich comment projection has no main source".into()))?;
         let mut namespace_owners = nested_modeled_namespace_owners(original)?;
         if namespace_owners.is_empty() {
-            return Ok(paragraphs);
+            return Ok(canonical);
         }
         let canonical_spans = modeled_owner_spans(&canonical)?;
         let mut needed = Vec::new();
@@ -17069,7 +17082,7 @@ impl Document {
         }
         let restored = replay_nested_namespace_declarations(&canonical, &needed)?;
         if restored == canonical {
-            return Ok(paragraphs);
+            return Ok(canonical);
         }
         let (boundaries, _) = comment_namespace_source_boundaries(&canonical, &restored)?
             .ok_or_else(|| {
@@ -17091,6 +17104,21 @@ impl Document {
                 "rich comment namespace replay changes story ownership".into(),
             ));
         }
+        Ok(restored)
+    }
+
+    pub(crate) fn comment_story_range_paragraphs(&self) -> Result<Vec<(ContentLocation, Vec<u8>)>> {
+        let mut paragraphs = self.story_range_paragraphs()?;
+        let canonical = self.document.to_xml()?;
+        let restored = self.namespace_restored_main_source()?;
+        if restored == canonical {
+            return Ok(paragraphs);
+        }
+        let (boundaries, _) = comment_namespace_source_boundaries(&canonical, &restored)?
+            .ok_or_else(|| {
+                Error::Other("rich comment namespace replay changed physical source".into())
+            })?;
+        let owners = scan_story_owners(&canonical, StoryKind::Body)?;
         let mut paragraph_spans = HashMap::new();
         for owner in &owners {
             let story = StoryId {
@@ -19935,28 +19963,41 @@ impl Document {
     /// A direct body paragraph has its one-segment story item path. A
     /// paragraph inside a block content control, which has no story item of
     /// its own, has a two-segment path: the control's story item index, then
-    /// the paragraph's position among the control's paragraphs. Only
-    /// [`Self::add_story_comment`] accepts the two-segment form. Returns
-    /// `None` when the index is out of range.
+    /// the paragraph's position among the control's paragraphs. Comment
+    /// operations and scoped literal replacement accept this form. Returns
+    /// `None` when the index is out of range or the paragraph belongs to a
+    /// nested control or table beyond this two-segment path.
     pub fn paragraph_story_location(
         &self,
         paragraph_index: usize,
     ) -> Result<Option<ContentLocation>> {
-        let mut remaining = paragraph_index;
-        let mut target = None;
-        for (slot, child) in self.document.body.content.iter().enumerate() {
-            let count = match child {
-                BodyContent::Paragraph(_) => 1,
-                BodyContent::ContentControl(control) => paragraph_count_in_control(control),
-                BodyContent::Table(_) | BodyContent::RawXml(_) => 0,
-            };
-            if remaining < count {
-                let ordinal = matches!(child, BodyContent::ContentControl(_)).then_some(remaining);
-                target = Some((slot, ordinal));
-                break;
-            }
-            remaining -= count;
-        }
+        let Some(paragraph) = self.paragraph(paragraph_index) else {
+            return Ok(None);
+        };
+        let selected = paragraph.inner;
+        // A facade handle counts recursively. The checked two-segment path
+        // counts only paragraphs directly owned by the outer block control.
+        let target = self
+            .document
+            .body
+            .content
+            .iter()
+            .enumerate()
+            .find_map(|(slot, child)| match child {
+                BodyContent::Paragraph(paragraph) if std::ptr::eq(paragraph, selected) => {
+                    Some((slot, None))
+                }
+                BodyContent::ContentControl(control) => control
+                    .content
+                    .iter()
+                    .filter_map(|child| match child {
+                        SdtContent::Paragraph(paragraph) => Some(paragraph),
+                        _ => None,
+                    })
+                    .position(|paragraph| std::ptr::eq(paragraph, selected))
+                    .map(|ordinal| (slot, Some(ordinal))),
+                _ => None,
+            });
         let Some((slot, ordinal)) = target else {
             return Ok(None);
         };
@@ -26464,6 +26505,338 @@ impl Document {
         let count = candidate.replace_batch(&[(placeholder, replacement)])?;
         self.commit_staged_mutation(candidate);
         Ok(count)
+    }
+
+    /// Replace literal text only within one checked paragraph, table or block control.
+    /// Matching retains run formatting and never crosses paragraph or wrapper boundaries.
+    /// Count mismatch and preparation failures leave the complete document unchanged.
+    pub fn try_replace_text_at(
+        &mut self,
+        location: &ContentLocation,
+        placeholder: &str,
+        replacement: &str,
+        expected: Option<usize>,
+    ) -> Result<std::result::Result<usize, ReplacementCountMismatch>> {
+        self.try_replace_scoped(
+            ScopedReplacementTarget::Item(location),
+            placeholder,
+            replacement,
+            expected,
+        )
+    }
+
+    /// Replace text in exactly one physical body table cell or one of its paragraphs.
+    /// Whole-cell scope includes supported nested tables and controls.
+    #[doc(hidden)]
+    pub fn try_replace_text_in_cell(
+        &mut self,
+        cell: (usize, usize, usize),
+        paragraph: Option<usize>,
+        placeholder: &str,
+        replacement: &str,
+        expected: Option<usize>,
+    ) -> Result<std::result::Result<usize, ReplacementCountMismatch>> {
+        self.try_replace_scoped(
+            ScopedReplacementTarget::Cell {
+                coordinates: cell,
+                paragraph,
+            },
+            placeholder,
+            replacement,
+            expected,
+        )
+    }
+
+    fn try_replace_scoped(
+        &mut self,
+        target: ScopedReplacementTarget<'_>,
+        placeholder: &str,
+        replacement: &str,
+        expected: Option<usize>,
+    ) -> Result<std::result::Result<usize, ReplacementCountMismatch>> {
+        oxml_core::xml::reject_non_xml_characters("replacement text", replacement)?;
+        let mut candidate = self.clone_for_staging();
+        let (story, path, paragraph) = match target {
+            ScopedReplacementTarget::Item(location) => {
+                if location.is_end
+                    || !matches!(
+                        location.item_kind,
+                        StoryItemKind::Paragraph
+                            | StoryItemKind::Table
+                            | StoryItemKind::ContentControl
+                    )
+                {
+                    return Err(Error::Other("scoped replacement requires an existing paragraph, table or content control".into()));
+                }
+                candidate.story_range_paragraph_source(location)?;
+                (location.story.clone(), Some(location.clone()), None)
+            }
+            ScopedReplacementTarget::Cell {
+                coordinates: (table, row, cell),
+                paragraph,
+            } => {
+                let selected = candidate
+                    .table(table)
+                    .and_then(|t| t.cell(row, cell).map(|c| c.inner as *const CT_Tc))
+                    .ok_or_else(|| {
+                        Error::Other(format!("cell {table}:{row}:{cell} is out of range"))
+                    })?;
+                let xml = candidate.document.to_xml()?;
+                let owners = scan_story_owners(&xml, StoryKind::Body)?;
+                let mut found = None;
+                for owner in owners
+                    .iter()
+                    .filter(|owner| owner.kind == StoryKind::TableCell)
+                {
+                    let (content, mut ordinal) = modeled_main_cell_route(&xml, owner)?;
+                    let modeled = match candidate.document.body.content.get_mut(content) {
+                        Some(BodyContent::Table(t)) => nth_cell_in_table(t, &mut ordinal),
+                        Some(BodyContent::ContentControl(c)) => {
+                            nth_cell_in_control(c, &mut ordinal)
+                        }
+                        _ => None,
+                    };
+                    if modeled.is_some_and(|c| std::ptr::eq(selected, c)) {
+                        found = Some(StoryId {
+                            kind: owner.kind,
+                            part_name: candidate.doc_part_name.clone(),
+                            owner_index: owner.owner_index,
+                            fingerprint: owner.fingerprint,
+                        });
+                        break;
+                    }
+                }
+                (
+                    found.ok_or_else(|| {
+                        Error::Other("cell has no checked physical story owner".into())
+                    })?,
+                    None,
+                    paragraph,
+                )
+            }
+        };
+        // Flush only the private candidate before choosing the preserved physical span.
+        candidate.prepare_staged_package()?;
+        let (canonical, canonical_owner) = candidate.story_source_and_owner(&story)?;
+        let (source, owner) = candidate.fragment_story_source_and_owner(&story)?;
+        let canonical_owners = scan_story_owners(&canonical.xml, canonical.root_kind)?;
+        let actual_owners = scan_story_owners(&source.xml, source.root_kind)?;
+        if canonical_owners
+            .iter()
+            .map(|o| (o.kind, o.owner_index))
+            .collect::<Vec<_>>()
+            != actual_owners
+                .iter()
+                .map(|o| (o.kind, o.owner_index))
+                .collect::<Vec<_>>()
+        {
+            return Err(Error::Other(
+                "scoped replacement namespace context changes physical ownership".into(),
+            ));
+        }
+        let (canonical_span, span) = if let Some(location) = path {
+            let canonical_items = scan_story_items(&canonical.xml, &canonical_owner)?;
+            let index = location.index_path[0];
+            let selected = canonical_items.get(index).ok_or(StoryError::OutOfBounds {
+                index,
+                len: canonical_items.len(),
+            })?;
+            if !selected.direct_owner_child {
+                return Err(Error::Other(
+                    "scoped replacement requires a block owner item".into(),
+                ));
+            }
+            let canonical_direct = direct_story_content_items(&canonical.xml, &canonical_owner)?;
+            let actual_direct = direct_story_content_items(&source.xml, &owner)?;
+            let slot = canonical_direct
+                .iter()
+                .position(|item| item.full == selected.full)
+                .ok_or_else(|| {
+                    Error::Other("scoped replacement has no direct physical slot".into())
+                })?;
+            let item = actual_direct.get(slot).ok_or(StoryError::OutOfBounds {
+                index: slot,
+                len: actual_direct.len(),
+            })?;
+            if item.kind != selected.kind {
+                return Err(StoryError::KindMismatch {
+                    expected: selected.kind,
+                    actual: item.kind,
+                }
+                .into());
+            }
+            if let [_, ordinal] = location.index_path.as_slice() {
+                let canonical_paragraphs = scan_story_control_paragraphs(&canonical.xml, selected)?;
+                let paragraphs = scan_story_control_paragraphs(&source.xml, item)?;
+                let select = |paragraphs: &[Range<usize>]| {
+                    paragraphs
+                        .get(*ordinal)
+                        .cloned()
+                        .ok_or(StoryError::OutOfBounds {
+                            index: *ordinal,
+                            len: paragraphs.len(),
+                        })
+                };
+                (select(&canonical_paragraphs)?, select(&paragraphs)?)
+            } else {
+                (selected.full.clone(), item.full.clone())
+            }
+        } else {
+            (canonical_owner.full.clone(), owner.full.clone())
+        };
+        if source.part_name == candidate.doc_part_name {
+            candidate.prove_scoped_main_source(
+                &canonical.xml,
+                canonical_span,
+                &source.xml,
+                span.clone(),
+            )?;
+        } else if canonical.xml != source.xml || canonical_span != span {
+            return Err(Error::Other(
+                "scoped related-story source correspondence changed".into(),
+            ));
+        }
+        let part = source.part_name.clone();
+        let mut xml = source.xml.into_owned();
+        let scope = story_namespace_scope_at(&xml, span.start)?;
+        let mut raw = close_content_fragment_namespaces(&xml[span.clone()], &scope)?;
+        let count = rdocx_oxml::placeholder::try_replace_in_block(
+            &mut raw,
+            paragraph,
+            placeholder,
+            replacement,
+        )?;
+        if let Some(expected) = expected
+            && count != expected
+        {
+            return Ok(Err(ReplacementCountMismatch {
+                index: 0,
+                placeholder: placeholder.into(),
+                expected,
+                found: count,
+            }));
+        }
+        if count == 0 {
+            return Ok(Ok(0));
+        }
+        xml.splice(span, raw);
+        set_story_source_xml(&mut candidate, &part, xml)?;
+        candidate.prepare_staged_package()?;
+        let limits = PackageReadLimits::UNBOUNDED;
+        #[cfg(test)]
+        let limits = if FAIL_NEXT_SCOPED_REOPEN.replace(false) {
+            PackageReadLimits {
+                max_entries: 0,
+                ..limits
+            }
+        } else {
+            limits
+        };
+        let reopened = candidate.reopen_prepared_staged_with_limits(limits)?;
+        self.commit_staged_mutation(reopened);
+        Ok(Ok(count))
+    }
+
+    // A private model probe distinguishes physical positions even when siblings
+    // contain identical text. Producer normalization is allowed, raw output is
+    // still edited only at the proved retained span.
+    fn prove_scoped_main_source(
+        &self,
+        canonical: &[u8],
+        canonical_span: Range<usize>,
+        original: &[u8],
+        retained_span: Range<usize>,
+    ) -> Result<()> {
+        let restored = self.namespace_restored_main_source()?;
+        let (boundaries, _) = comment_namespace_source_boundaries(canonical, &restored)?
+            .ok_or_else(|| {
+                Error::Other("scoped canonical namespace source changed payload".into())
+            })?;
+        let start = *boundaries.get(&canonical_span.start).ok_or_else(|| {
+            Error::Other("scoped start has no physical namespace boundary".into())
+        })?;
+        let end = *boundaries
+            .get(&canonical_span.end)
+            .ok_or_else(|| Error::Other("scoped end has no physical namespace boundary".into()))?;
+        // One typed serialization establishes the same canonical defaults and
+        // root namespace inventory on both sides before model comparison.
+        let normalize = |xml: &[u8]| -> Result<CT_Document> {
+            Ok(CT_Document::from_xml(
+                &CT_Document::from_xml(xml)?.to_xml()?,
+            )?)
+        };
+        let baseline = normalize(original)?;
+        if normalize(&self.document.to_xml()?)? != baseline || normalize(&restored)? != baseline {
+            return Err(Error::Other(
+                "scoped source has no equivalent checked model projection".into(),
+            ));
+        }
+        let mut identity = 0usize;
+        let marker = loop {
+            let marker = format!("rdocxScopedPositionProof{identity}");
+            if !original
+                .windows(marker.len())
+                .any(|bytes| bytes == marker.as_bytes())
+                && !restored
+                    .windows(marker.len())
+                    .any(|bytes| bytes == marker.as_bytes())
+            {
+                break marker;
+            }
+            identity = identity
+                .checked_add(1)
+                .ok_or_else(|| Error::Other("scoped source proof identity exhausted".into()))?;
+        };
+        let scope = story_namespace_scope_at(&restored, start)?;
+        let selected_closed = close_content_fragment_namespaces(&restored[start..end], &scope)?;
+        let mut reader = NsReader::from_reader(selected_closed.as_slice());
+        let (namespace, event) = reader
+            .read_resolved_event()
+            .map_err(|error| Error::Other(error.to_string()))?;
+        let root = match event {
+            Event::Start(element) | Event::Empty(element) => element,
+            _ => return Err(Error::Other("scoped source proof has no root".into())),
+        };
+        if !word_element(&namespace) {
+            return Err(Error::Other(
+                "scoped source proof needs a qualified Word block".into(),
+            ));
+        }
+        let paragraph =
+            format!(r#"<w:p xmlns:w="{WORD_NAMESPACE}"><w:r><w:t>{marker}</w:t></w:r></w:p>"#);
+        let sentinel = match root.local_name().as_ref() {
+            b"p" => paragraph,
+            b"tbl" => format!(
+                r#"<w:tbl xmlns:w="{WORD_NAMESPACE}"><w:tr><w:tc>{paragraph}</w:tc></w:tr></w:tbl>"#
+            ),
+            b"tc" => format!(r#"<w:tc xmlns:w="{WORD_NAMESPACE}">{paragraph}</w:tc>"#),
+            b"sdt" => format!(
+                r#"<w:sdt xmlns:w="{WORD_NAMESPACE}"><w:sdtPr/><w:sdtContent>{paragraph}</w:sdtContent></w:sdt>"#
+            ),
+            _ => return Err(Error::Other("unsupported scoped source proof kind".into())),
+        };
+        let mut checked_probe = restored;
+        checked_probe.splice(start..end, sentinel.bytes());
+        let mut retained_probe = original.to_vec();
+        retained_probe.splice(retained_span, sentinel.bytes());
+        let checked_model = normalize(&checked_probe)?;
+        let retained_model = normalize(&retained_probe)?;
+        let occurrences = |model: &CT_Document| -> Result<usize> {
+            Ok(model
+                .to_xml()?
+                .windows(marker.len())
+                .filter(|bytes| *bytes == marker.as_bytes())
+                .count())
+        };
+        if occurrences(&checked_model)? != 1
+            || occurrences(&retained_model)? != 1
+            || checked_model != retained_model
+        {
+            return Err(Error::Other(
+                "scoped selection does not identify the same physical source".into(),
+            ));
+        }
+        Ok(())
     }
 
     /// Replace multiple placeholders at once. Returns total replacements.
@@ -41198,5 +41571,107 @@ mod odttf_tests {
             "{error}"
         );
         assert_eq!(destination.to_bytes().unwrap(), before);
+    }
+    #[test]
+    fn scoped_source_probe_distinguishes_identical_sibling_positions_and_publishes_nothing() {
+        let mut document = Document::new();
+        document.add_paragraph("identical");
+        document.add_paragraph("identical");
+        document.prepare_staged_package().unwrap();
+        let canonical = document.document.to_xml().unwrap();
+        let original = document
+            .package
+            .get_part(&document.doc_part_name)
+            .unwrap()
+            .to_vec();
+        let owner = scan_story_owners(&canonical, StoryKind::Body)
+            .unwrap()
+            .into_iter()
+            .find(|o| o.kind == StoryKind::Body)
+            .unwrap();
+        let items = direct_story_content_items(&canonical, &owner).unwrap();
+        let retained_owner = scan_story_owners(&original, StoryKind::Body)
+            .unwrap()
+            .into_iter()
+            .find(|o| o.kind == StoryKind::Body)
+            .unwrap();
+        let retained = direct_story_content_items(&original, &retained_owner).unwrap();
+        assert!(
+            document
+                .prove_scoped_main_source(
+                    &canonical,
+                    items[0].full.clone(),
+                    &original,
+                    retained[0].full.clone()
+                )
+                .is_ok()
+        );
+        assert!(
+            document
+                .prove_scoped_main_source(
+                    &canonical,
+                    items[0].full.clone(),
+                    &original,
+                    retained[1].full.clone()
+                )
+                .is_err()
+        );
+        assert_eq!(
+            document.package.get_part(&document.doc_part_name),
+            Some(original.as_slice())
+        );
+    }
+
+    #[test]
+    fn scoped_replacement_preparation_failures_leave_models_and_package_unchanged() {
+        use std::io::Cursor;
+        let mut source =
+            Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
+        source.add_paragraph("Version");
+        let mut package = OpcPackage::from_reader(Cursor::new(source.to_bytes().unwrap())).unwrap();
+        let relationships = package.get_or_create_part_rels("/word/document.xml");
+        relationships
+            .items
+            .retain(|relationship| relationship.rel_type != rel_types::STYLES);
+        relationships.add_with_id(&format!("rId{}", u32::MAX), "urn:producer", "producer.bin");
+        package.parts.remove(DEFAULT_STYLES_PART);
+        package.content_types.overrides.remove(DEFAULT_STYLES_PART);
+        let mut bytes = Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+        let location = document.paragraph_story_location(0).unwrap().unwrap();
+        let model = document.document.clone();
+        let mut before = Cursor::new(Vec::new());
+        document.package.write_to(&mut before).unwrap();
+        let result = document.try_replace_text_at(&location, "Version", "Release", Some(1));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("styles relationship allocation failed")
+        );
+        assert_eq!(document.document, model);
+        let mut after = Cursor::new(Vec::new());
+        document.package.write_to(&mut after).unwrap();
+        assert_eq!(after.into_inner(), before.into_inner());
+    }
+    #[test]
+    fn scoped_replacement_final_reopen_failure_discards_the_complete_candidate() {
+        let mut document = Document::new();
+        document.add_paragraph("Version");
+        document.add_paragraph("Version");
+        let location = document.paragraph_story_location(0).unwrap().unwrap();
+        let before = document.to_bytes().unwrap();
+        let model = document.document.clone();
+        FAIL_NEXT_SCOPED_REOPEN.set(true);
+        let result = document.try_replace_text_at(&location, "Version", "Release", Some(1));
+        let missed_boundary = FAIL_NEXT_SCOPED_REOPEN.replace(false);
+        assert!(
+            !missed_boundary,
+            "final reopen boundary must have been reached"
+        );
+        assert!(result.unwrap_err().to_string().contains("entry count"));
+        assert_eq!(document.document, model);
+        assert_eq!(document.to_bytes().unwrap(), before);
     }
 }

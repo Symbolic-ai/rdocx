@@ -3726,3 +3726,28 @@ references, property insertion, typed replacement, removal, splitting and
 segment serialization. Python runtime and typing cover revision invalidation
 and text occurrence errors. CLI outputs reopen with the same thread identity.
 These source-built checks do not claim a native Word rendering oracle.
+
+
+### Checked Word scoped literal replacement
+
+`scoped_text_replacement_preserves_unselected_content` proves the duplicate-clause
+failure through the old guarded global API at the exact claim Base, then proves
+the selected-owner operation. After-only controls cover split runs, first-run
+formatting, complete comment threads, ordered Comment and PI nodes, opaque XML,
+cell descendants, block-control paths, table scope, headers, footers and normal
+notes through save and reopen. Unselected OPC members and producer owner bytes
+remain exact. Prefix/property normalization positives and qualified owner
+reinterpretation refusal protect source selection.
+
+The private physical-position probe rejects a different identical sibling and
+requires one collision-free sentinel in each normalized model. Separate unit
+controls exercise initial relationship-allocation failure and actual final OPC
+reopen entry-limit refusal, retaining the complete live model and package. Native
+and actual Python control-ordinal regressions prove that nested controls
+cannot redirect a handle to a later direct sibling. Empty direct paragraphs and
+table descendants preserve the supported two-segment axis. Reopened comment
+anchors and scoped paragraph edits resolve the same direct p3 paragraph. The Python
+runtime checks local mismatch attributes and pickling, invalid text, stale
+handles, zero no-op and positive publication. Typed call shapes independently
+cover Paragraph, Cell and detached StoryItem operations. All 49 deterministic
+hash entries remain unchanged. These controls require no external native oracle.

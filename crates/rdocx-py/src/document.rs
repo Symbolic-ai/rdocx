@@ -1869,6 +1869,25 @@ impl PyDocument {
         Ok(counts)
     }
 
+    // Both checked item and physical cell routes share singular count/error and
+    // publication policy. The concrete closures are the two actual consumers.
+    pub(crate) fn scoped_replacement<F>(&mut self, py: Python<'_>, mutation: F) -> PyResult<usize>
+    where
+        F: FnOnce(
+                &mut rdocx::Document,
+            ) -> rdocx::Result<Result<usize, rdocx::ReplacementCountMismatch>>
+            + Send,
+    {
+        let count = py
+            .detach(|| mutation(&mut self.inner))
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+            .map_err(|mismatch| crate::replacement_count_to_pyerr(py, &mismatch, false))?;
+        if count > 0 {
+            self.revisions.bump();
+        }
+        Ok(count)
+    }
+
     /// Check the names and the section of one header or footer variant.
     fn section_story_target(
         &self,
@@ -3527,6 +3546,22 @@ impl PyDocument {
 
     fn reject_revision_id(&mut self, py: Python<'_>, id: i32) -> PyResult<usize> {
         self.counted_mutation(py, |document| document.reject_revision_id(id))
+    }
+
+    /// Replace literal text only inside a checked paragraph, table or control item.
+    #[pyo3(signature = (item, old, new, *, expect = None))]
+    fn replace_text_at(
+        &mut self,
+        py: Python<'_>,
+        item: &PyStoryItem,
+        old: &str,
+        new: &str,
+        expect: Option<usize>,
+    ) -> PyResult<usize> {
+        let location = self.native_location(py, item)?;
+        self.scoped_replacement(py, |document| {
+            document.try_replace_text_at(&location, old, new, expect)
+        })
     }
 
     #[pyo3(signature = (placeholder, replacement, *, expect = None))]

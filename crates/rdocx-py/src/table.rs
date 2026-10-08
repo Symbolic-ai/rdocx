@@ -1044,6 +1044,23 @@ impl PyCell {
 
 #[pymethods]
 impl PyCell {
+    /// Replace literal text in this cell and its supported nested descendants.
+    #[pyo3(signature = (old, new, *, expect = None))]
+    fn replace_text(
+        &self,
+        py: Python<'_>,
+        old: &str,
+        new: &str,
+        expect: Option<usize>,
+    ) -> PyResult<usize> {
+        let cell = self.validate(py)?;
+        self.document
+            .borrow_mut(py)
+            .scoped_replacement(py, |document| {
+                document.try_replace_text_in_cell(cell, None, old, new, expect)
+            })
+    }
+
     #[getter]
     fn text(&self, py: Python<'_>) -> PyResult<String> {
         let (table, row, cell) = self.validate(py)?;

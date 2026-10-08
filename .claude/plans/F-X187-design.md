@@ -1,6 +1,6 @@
 # F-X187, Scoped paragraph and cell text replacement
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S90
 **Size**: M
 **Depends on**: none
@@ -22,6 +22,8 @@ The global replacement at `crates/rdocx/src/document.rs:25484` searches every ow
 Reporter `hadim` opened Issue 285 on 2026-10-08 at 13:35 UTC. The complete issue body was read through GitHub against canonical source SHA `0a775842a8fd12f088bf4f2b3d0a049ddc3e976b`. No matching PR or contribution commit exists at intake. No contribution is accepted by this design. Preserve the issue URL and reporter attribution in final acceptance records. Issue 264 and F-X178 remain untouched.
 
 Subsequent intake includes [PR 286](https://github.com/tensorbee/rdocx/pull/286), opened by `hadim` on 2026-10-08 at 14:15 UTC. Its immutable observed intake head is `08361f6af99110cbae71bf9f0498a12feadc01db`, based on main `20888b7a2c636e322ad23dc611f494beaac1c09b`. It claims to close Issue 285. Preserve and assess the complete contribution before implementation. Its paragraph and cell matcher reuse and source-built controls are candidates, not verified acceptance. The approved owned-document staging, checked block-control paragraph paths, exact preservation and complete scoped risk riders remain the contract. PR naming differs from the approved Document API and does not change it automatically. Reconcile the patch against the integrated prefix, extend missing criteria, remeasure archives locally and retain contributor attribution. Merge or closure requires complete verified issue acceptance at sprint close.
+
+Subsequent approved remediation includes the direct-control ordinal correction from Hadrien Mary (`hadim`) in [PR 287](https://github.com/tensorbee/rdocx/pull/287), commit `64854a40c9e44505dfac98aa975b4ad3505a2ec8` at observed updated head `d823ba2ae205b6e9b9a71a75c4519031664d19d6`. Formal microscope pass 1 and actual native/current Python source-built controls demonstrated that a recursive paragraph ordinal could select a later direct sibling. Adapt the bounded approach by mapping actual facade paragraph identity to its direct outer-control ordinal and resolving the same direct ordinal for comment mutation. Nested control or table descendants return no two-segment location. This corrective behavior preserves the existing path axis and current namespace-closed snapshot API. Empty direct paragraph scanning already works and is not a new fix. Reopened comment anchors and scoped Paragraph replacement must select the same exact direct paragraph. Preserve contributor attribution and distinguish this measured pre-remediation failure from the exact-Base issue discriminator and after-only controls.
 
 This is a batch draft under `/run-sprint`. The batch may describe unfinished dependencies, but implementation cannot begin before approval and completion of every formal prerequisite. F-X179 and F-271 are already done. F-282 must pause at an explicit saved external checkpoint before exclusive waves 11 through 14. F-X187 owns wave 14. F-X187 is formally independent but file-exclusive after F-X186. Resume full-catalogue F-282 after this intake, then F-283 in existing wave 10 only after F-282 completion. No concurrent source or Cargo ownership.
 
@@ -75,12 +77,14 @@ Expected unchanged: all 49 deterministic harness entries, existing PDF resources
 ## Implementation checklist
 
 - [x] Approve the batch design. Confirm dependency completion and sole writer ownership before implementation.
-- [ ] Capture fail-before evidence for the named positive gate and every reported operation.
-- [ ] Implement only the concrete existing-file API and source ownership contract.
-- [ ] Pass runtime, typing, CLI, exact preservation and atomic refusal controls.
-- [ ] Pass scoped risk riders, archive/README checks and zero-finding microscope.
-- [ ] Update exactly the HLD impact files and prepare the structured handoff.
-- [ ] Reconcile complete issue acceptance at verified sprint close.
+- [x] Capture genuine fail-before evidence for the named issue gate and measured attribute-loss and control-ordinal defects. Qualify remaining controls as after-only.
+- [x] Implement only the concrete existing-file API and source ownership contract.
+- [x] Pass runtime, typing, CLI, exact preservation and atomic refusal controls.
+- [x] Pass scoped risk riders, archive/README checks and zero-finding microscope.
+- [x] Update exactly the HLD impact files and prepare the structured handoff.
+- [x] Record implemented complete issue acceptance ready for root reconciliation at verified sprint close.
+
+GitHub closure and final integrated acceptance remain root obligations after the full sprint gate and sprint review. Worker prepare records implementation evidence and does not close Issues 285 or 289.
 
 ## Open questions
 

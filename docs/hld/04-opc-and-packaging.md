@@ -186,6 +186,29 @@ invalid paths, bounds failures, kind mismatches, non-text items, XML failures,
 and reopen failures leave the original document bytes and facade-owned package
 state unchanged.
 
+Scoped literal replacement uses the existing run-aware matcher through an owned
+Document transaction. `try_replace_text_at` checks paragraph, table and block
+control locations, including supported two-segment control paragraph paths.
+A recursive facade handle maps by actual direct paragraph identity. Nested
+control and table paragraphs have no two-segment location.
+The hidden cell-coordinate entrance selects one physical cell or one of its
+paragraphs. Whole-cell scope includes supported nested tables and controls.
+Fields, drawings and opaque story items are not independently writable targets.
+Matching retains existing wrapper, revision and field boundaries and never
+joins paragraphs or searches another textbox story. Count mismatch and zero
+matches publish nothing. Positive edits serialize and reopen the complete
+candidate before one commit.
+
+Main-source selection preserves original unselected bytes. Existing strict
+namespace replay proves the current canonical physical owner inventory. Two
+private existing-model projections replace the canonical and proposed retained
+selected spans with the same collision-free schema-valid sentinel. Normalized
+baseline equivalence and exact probe equality, with one observable sentinel in
+each, prove the physical position even among identical siblings. Selected and
+unrelated producer property normalization is supported. The sentinel never
+enters the published candidate. Namespace, projection or reopening refusal
+leaves the live model and package untouched.
+
 Generic story content mutation uses the same package boundary. Existing-item
 destinations are canonical flattened locations that must resolve to actual
 direct owner children. The explicit story-end destination remains before body

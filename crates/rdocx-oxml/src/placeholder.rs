@@ -801,6 +801,272 @@ fn edit_raw_block(
     count
 }
 
+/// Run the literal matcher on one namespace-closed paragraph, table, control or cell.
+/// Unlike the legacy raw walker, parsing and namespace refusal are errors.
+#[doc(hidden)]
+pub fn try_replace_in_block(
+    raw: &mut Vec<u8>,
+    paragraph: Option<usize>,
+    placeholder: &str,
+    replacement: &str,
+) -> crate::Result<usize> {
+    use crate::OxmlError;
+    use quick_xml::events::Event;
+    use quick_xml::name::ResolveResult;
+    use quick_xml::{NsReader, Reader, Writer};
+
+    // Validate the whole closed source, including attributes and opaque children.
+    let mut checked = NsReader::from_reader(raw.as_slice());
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    let mut roots = 0usize;
+    loop {
+        let (namespace, event) = checked.read_resolved_event_into(&mut buffer)?;
+        if matches!(namespace, ResolveResult::Unknown(_)) {
+            return Err(OxmlError::InvalidValue(
+                "unbound scoped replacement element".into(),
+            ));
+        }
+        match event {
+            Event::Start(ref start) | Event::Empty(ref start) => {
+                if depth == 0 {
+                    roots += 1;
+                }
+                for attribute in start.attributes() {
+                    let attribute = attribute?;
+                    if matches!(
+                        checked.resolver().resolve_attribute(attribute.key).0,
+                        ResolveResult::Unknown(_)
+                    ) {
+                        return Err(OxmlError::InvalidValue(
+                            "unbound scoped replacement attribute".into(),
+                        ));
+                    }
+                }
+            }
+            Event::End(_) if depth == 0 => {
+                return Err(OxmlError::InvalidValue("unmatched scoped block end".into()));
+            }
+            Event::Eof => {
+                if depth != 0 || roots != 1 {
+                    return Err(OxmlError::InvalidValue(
+                        "scoped replacement needs one complete block".into(),
+                    ));
+                }
+                break;
+            }
+            Event::Text(ref text)
+                if depth == 0 && text.as_ref().iter().any(|b| !b.is_ascii_whitespace()) =>
+            {
+                return Err(OxmlError::InvalidValue("text outside scoped block".into()));
+            }
+            Event::DocType(_) => {
+                return Err(OxmlError::InvalidValue(
+                    "scoped block forbids a document type".into(),
+                ));
+            }
+            _ => {}
+        }
+        match event {
+            Event::Start(_) => depth += 1,
+            Event::End(_) => depth -= 1,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    let mut reader = Reader::from_reader(raw.as_slice());
+    let start = match reader.read_event_into(&mut buffer)? {
+        Event::Start(start) | Event::Empty(start) => start.into_owned(),
+        _ => {
+            return Err(OxmlError::InvalidValue(
+                "scoped replacement needs one block".into(),
+            ));
+        }
+    };
+    let prefixes = word_prefixes_at(&start, &[])?;
+    let bindings = local_namespace_overrides(&start, &[])?;
+    let mut writer = Writer::new(Vec::new());
+    let mut edit = |p: &mut CT_P| replace_in_paragraph(p, placeholder, replacement);
+    let count = if is_word_element(start.name().as_ref(), b"p", &prefixes) && paragraph.is_none() {
+        let mut value =
+            CT_P::from_xml_with_prefixes_and_root(&mut reader, &prefixes, Some(&start))?;
+        let count = edit(&mut value);
+        if count > 0 {
+            value.to_xml(&mut writer)?;
+        }
+        count
+    } else if is_word_element(start.name().as_ref(), b"tbl", &prefixes) && paragraph.is_none() {
+        let mut value =
+            CT_Tbl::from_xml_with_prefixes_and_owner_bindings(&mut reader, &prefixes, &bindings)?;
+        let count = edit_table(&mut value, &mut edit);
+        if count > 0 {
+            value.to_xml(&mut writer)?;
+        }
+        count
+    } else if is_word_element(start.name().as_ref(), b"sdt", &prefixes) && paragraph.is_none() {
+        let mut value = CT_Sdt::from_body_raw(raw, &prefixes)
+            .ok_or_else(|| OxmlError::InvalidValue("unsupported scoped content control".into()))?;
+        let count = edit_control(&mut value, &mut edit);
+        if count > 0 {
+            value.to_xml(&mut writer)?;
+        }
+        count
+    } else if is_word_element(start.name().as_ref(), b"tc", &prefixes) {
+        let mut value =
+            CT_Tc::from_xml_with_prefixes_and_owner_bindings(&mut reader, &prefixes, &bindings)?;
+        let selected = paragraph
+            .map(|index| {
+                value
+                    .paragraphs()
+                    .get(index)
+                    .map(|p| *p as *const CT_P)
+                    .ok_or_else(|| {
+                        OxmlError::InvalidValue(format!("cell paragraph {index} is out of range"))
+                    })
+            })
+            .transpose()?;
+        let count = edit_cell(&mut value, &mut |p| {
+            if selected.is_none_or(|target| std::ptr::eq(target, p)) {
+                edit(p)
+            } else {
+                0
+            }
+        });
+        if count > 0 {
+            value.to_xml(&mut writer)?;
+        }
+        count
+    } else {
+        return Err(OxmlError::InvalidValue(
+            "unsupported scoped replacement block".into(),
+        ));
+    };
+    if count > 0 {
+        let rewritten = with_source_namespaces(raw, &writer.into_inner(), &bindings, &[])
+            .ok_or_else(|| {
+                OxmlError::InvalidValue(
+                    "scoped replacement cannot preserve namespace bindings".into(),
+                )
+            })?;
+        *raw = restore_scoped_container_attributes(raw, &rewritten)?;
+    }
+    Ok(count)
+}
+
+// Table and cell models do not retain their root attributes. Keep their source
+// carriers only after proving that replacement preserved qualified container
+// order and ancestry. This correction belongs to the scoped transaction only.
+struct ScopedContainerStart {
+    range: std::ops::Range<usize>,
+    local: Vec<u8>,
+    parent: Option<usize>,
+    start: quick_xml::events::BytesStart<'static>,
+    empty: bool,
+    attributes: Option<Vec<u8>>,
+    scope: Vec<String>,
+}
+
+fn scoped_container_starts(raw: &[u8]) -> crate::Result<Vec<ScopedContainerStart>> {
+    use quick_xml::events::Event;
+    let mut reader = quick_xml::Reader::from_reader(raw);
+    let mut buffer = Vec::new();
+    let mut stack: Vec<(Vec<String>, Option<usize>)> = Vec::new();
+    let mut result = Vec::new();
+    loop {
+        let from = reader.buffer_position() as usize;
+        let event = reader.read_event_into(&mut buffer)?;
+        match event {
+            Event::Start(ref start) | Event::Empty(ref start) => {
+                let inherited = stack.last().map_or(&[][..], |entry| entry.0.as_slice());
+                let scope = word_prefixes_at(start, inherited)?;
+                let parent = stack.last().and_then(|entry| entry.1);
+                let local = [b"tbl".as_slice(), b"tc".as_slice()]
+                    .into_iter()
+                    .find(|local| is_word_element(start.name().as_ref(), local, &scope));
+                let owner = if let Some(local) = local {
+                    let index = result.len();
+                    result.push(ScopedContainerStart {
+                        range: from..reader.buffer_position() as usize,
+                        local: local.to_vec(),
+                        parent,
+                        start: start.clone().into_owned(),
+                        empty: matches!(event, Event::Empty(_)),
+                        attributes: crate::text::capture_root_attribute_record(start, &scope)?,
+                        scope: scope.clone(),
+                    });
+                    Some(index)
+                } else {
+                    parent
+                };
+                if matches!(event, Event::Start(_)) {
+                    stack.push((scope, owner));
+                }
+            }
+            Event::End(_) => {
+                stack.pop();
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    Ok(result)
+}
+
+fn restore_scoped_container_attributes(source: &[u8], rewritten: &[u8]) -> crate::Result<Vec<u8>> {
+    use crate::OxmlError;
+    use quick_xml::events::Event;
+    let original = scoped_container_starts(source)?;
+    let retained = scoped_container_starts(rewritten)?;
+    let refuse =
+        || OxmlError::InvalidValue("scoped container attribute correspondence changed".into());
+    if original.len() != retained.len() {
+        return Err(refuse());
+    }
+    let mut output = rewritten.to_vec();
+    for (original, mut retained) in original.into_iter().zip(retained).rev() {
+        if original.local != retained.local || original.parent != retained.parent {
+            return Err(refuse());
+        }
+        if original.attributes == retained.attributes {
+            continue;
+        }
+        let Some(attributes) = original.attributes else {
+            return Err(refuse());
+        };
+        if retained.attributes.is_some() {
+            return Err(refuse());
+        }
+        // A declaration restored for an attribute must not redirect names in
+        // the rewritten subtree. Refuse conflicting inherited bindings too.
+        let mut reader = quick_xml::Reader::from_reader(attributes.as_slice());
+        if let Event::Empty(record) = reader.read_event()? {
+            let bindings = namespace_bindings(&retained.scope);
+            for attribute in record.attributes() {
+                let attribute = attribute?;
+                if let Some(prefix) = attribute.key.as_ref().strip_prefix(b"xmlns:")
+                    && bindings.iter().any(|(bound, uri)| {
+                        bound.as_bytes() == prefix && uri.as_bytes() != attribute.value.as_ref()
+                    })
+                {
+                    return Err(refuse());
+                }
+            }
+        } else {
+            return Err(refuse());
+        }
+        crate::text::push_root_attribute_record(&mut retained.start, &attributes, None)?;
+        let mut writer = quick_xml::Writer::new(Vec::new());
+        writer.write_event(if retained.empty {
+            Event::Empty(retained.start)
+        } else {
+            Event::Start(retained.start)
+        })?;
+        output.splice(retained.range, writer.into_inner());
+    }
+    Ok(output)
+}
+
 /// Declare the namespaces that the start tag of `source` declares other
 /// than the part does, `start_bindings`, again on `rewritten`, the element
 /// the typed writers produced from it, since they leave them out. They leave
@@ -2746,5 +3012,77 @@ mod tests {
             _ => panic!("expected paragraph"),
         };
         assert_eq!(para.text(), "Value: [item]");
+    }
+    #[test]
+    fn scoped_raw_replacement_distinguishes_refusal_from_no_match() {
+        for source in [
+            "<w:p>",
+            "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"/><w:p/>",
+            "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><z:opaque/></w:p>",
+        ] {
+            let mut raw = source.as_bytes().to_vec();
+            let original = raw.clone();
+            assert!(
+                try_replace_in_block(&mut raw, None, "absent", "x").is_err(),
+                "{source}"
+            );
+            assert_eq!(raw, original);
+        }
+        let mut raw = format!(r#"<q:p xmlns:q="{W_NS}" xmlns:w="{W_NS}"><q:r><q:t>Version</q:t></q:r><x:opaque xmlns:x="urn:producer">Version</x:opaque></q:p>"#).into_bytes();
+        let before = raw.clone();
+        assert_eq!(
+            try_replace_in_block(&mut raw, None, "absent", "x").unwrap(),
+            0
+        );
+        assert_eq!(raw, before);
+        assert_eq!(
+            try_replace_in_block(&mut raw, None, "Version", "Release").unwrap(),
+            1
+        );
+        let text = String::from_utf8(raw).unwrap();
+        assert!(text.contains("Release"));
+        assert!(text.contains(r#"<x:opaque xmlns:x="urn:producer">Version</x:opaque>"#));
+    }
+    #[test]
+    fn scoped_container_carriers_preserve_aliases_and_foreign_lookalikes() {
+        let source = format!(
+            r#"<q:tc xmlns:q="{W_NS}" xmlns:w="{W_NS}" xmlns:x="urn:producer" q:rsidR="A" x:producer="cell"><q:p><q:r><q:t>Version</q:t></q:r></q:p><x:tbl x:producer="foreign" xmlns:x="urn:producer"><x:tc>Version</x:tc></x:tbl></q:tc>"#
+        );
+        let mut raw = source.into_bytes();
+        assert_eq!(
+            try_replace_in_block(&mut raw, None, "Version", "Release").unwrap(),
+            1
+        );
+        let text = String::from_utf8(raw).unwrap();
+        assert!(text.contains(r#"q:rsidR="A""#));
+        assert!(text.contains(r#"x:producer="cell""#));
+        assert!(
+            text.contains(
+                r#"<x:tbl x:producer="foreign" xmlns:x="urn:producer"><x:tc>Version</x:tc></x:tbl>"#
+            ),
+            "{text}"
+        );
+        assert!(text.contains("Release"));
+    }
+
+    #[test]
+    fn scoped_container_carriers_refuse_topology_and_namespace_conflicts() {
+        let source = format!(
+            r#"<w:tbl xmlns:w="{W_NS}" xmlns:x="urn:producer"><w:tr><w:tc x:producer="cell"><w:p/></w:tc></w:tr></w:tbl>"#
+        );
+        let moved = format!(r#"<w:tbl xmlns:w="{W_NS}"/><w:tc xmlns:w="{W_NS}"><w:p/></w:tc>"#);
+        assert!(restore_scoped_container_attributes(source.as_bytes(), moved.as_bytes()).is_err());
+        let rebound = format!(
+            r#"<w:tbl xmlns:w="{W_NS}" xmlns:x="urn:other"><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl>"#
+        );
+        assert!(
+            restore_scoped_container_attributes(source.as_bytes(), rebound.as_bytes()).is_err()
+        );
+        let changed = format!(
+            r#"<w:tbl xmlns:w="{W_NS}" xmlns:x="urn:producer"><w:tr><w:tc x:producer="changed"><w:p/></w:tc></w:tr></w:tbl>"#
+        );
+        assert!(
+            restore_scoped_container_attributes(source.as_bytes(), changed.as_bytes()).is_err()
+        );
     }
 }

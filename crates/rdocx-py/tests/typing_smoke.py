@@ -361,3 +361,9 @@ if TYPE_CHECKING:
     TableCollection()  # type: ignore[call-arg]
     Document().compare(Document(), "Ada", "2026-09-14T09:00:00Z", granularity="words")  # type: ignore[arg-type]
     Document().compare(Document(), "Ada", "2026-09-14T09:00:00Z", ignored_stories="header")  # type: ignore[arg-type]
+
+
+def scoped_replacement_signatures_cover_paragraph_cell_and_story_item(document: Document, paragraph: Paragraph, cell: Cell, item: StoryItem) -> None:
+    assert_type(paragraph.replace_text("old", "new", expect=1), int)
+    assert_type(cell.replace_text(old="old", new="new", expect=1), int)
+    assert_type(document.replace_text_at(item, "old", "new", expect=1), int)

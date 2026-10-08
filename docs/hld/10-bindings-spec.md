@@ -375,8 +375,8 @@ field cache update operations. `RunPosition` and
 `StoryRunPosition` also accepts a body `Paragraph` handle. A handle to a
 paragraph inside a block content control yields an item with the two-segment
 path of `Document::paragraph_story_location`, the control's story item index
-then the paragraph's position among the control's paragraphs, which only
-comment positions accept. Both paragraph-handle positions and returned comment
+then the paragraph's position among the control's paragraphs. Comment positions
+and scoped paragraph replacement accept this path. Both paragraph-handle positions and returned comment
 endpoints carry checked accepted paragraph text and nonempty paragraph XML.
 `Document.add_comment` accepts either range form.
 `Document.add_comment_on_text` comments on the zero-based occurrence of an
@@ -405,6 +405,27 @@ the revision once only when that state changes. Revision resolution,
 replacement, and field updates release the GIL and advance the revision once
 only when they report a nonzero count. A native error publishes no
 candidate and does not advance the binding revision.
+
+`Paragraph.replace_text(old, new, *, expect=None)`,
+`Cell.replace_text(old, new, *, expect=None)` and
+`Document.replace_text_at(item, old, new, *, expect=None)` return a local
+literal replacement count. Paragraphs keep run formatting and never join
+separate paragraphs. Cells search their supported nested tables and controls,
+without visiting neighboring cells. The explicit Document operation accepts
+checked paragraph, table and block-control StoryItems, including related header,
+footer and normal note paragraphs. StoryItem remains frozen and detached.
+Paragraph handles inside block controls retain their checked two-segment paths.
+Cell and cell-paragraph handles use physical table, row and cell coordinates.
+
+Each route stages the owning native Document and reopens the complete package
+before publication. `expect` mismatch raises `ReplacementCountError` with
+`index=None`, `expected` and `found`, preserving the document and all handles.
+Invalid XML text, stale selection, unsupported targets and preparation failures
+also preserve bytes and revisions. Zero replacements, including an empty old
+literal, do not advance the revision. A positive count publishes once, releases
+the GIL while working and advances the revision once, staling prior handles.
+The shared binding generic has checked StoryItem and physical cell closures as
+its existing consumers. Global replacement and CLI signatures remain unchanged.
 
 `Document.remove_content` returns false for an absent index and raises
 `RdocxError` for an unsafe comment cut. Complete thread deletion and cell text
@@ -1692,8 +1713,10 @@ constructed records. Equality retains the original seven metadata fields, since
 derived revision-bound locations are not comment metadata identity. Document
 listing materializes real `StoryRunRange`
 endpoints with checked story identity, paragraph path and revision. Paragraphs
-inside block controls retain their two-segment path and actual containing body
-index. Non-body owners never acquire a body index. Snapshots remain readable
+directly inside block controls retain their two-segment path and actual containing
+body index. Recursive facade handles use the actual direct paragraph identity,
+so nested control or table descendants have no two-segment location. Non-body
+owners never acquire a body index. Snapshots remain readable
 after mutation, while reuse of their stale range refuses. Listing propagates
 extraction errors instead of converting unsupported sources to orphans.
 CLI `comment list --json` retains metadata and adds nullable `anchor_text` and

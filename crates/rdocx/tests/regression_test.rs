@@ -59764,3 +59764,563 @@ fn comment_anchor_namespace_context_does_not_promote_or_guess_story_owners() {
         assert_eq!(document.stories().unwrap(), stories);
     }
 }
+
+#[test]
+fn scoped_text_replacement_preserves_unselected_content() {
+    let mut document = Document::new();
+    document.add_paragraph("Version head");
+    document.add_paragraph("Version head");
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    let result = document.try_replace_text_at(&location, "Version", "Release", Some(1));
+    assert!(
+        result.unwrap().is_ok(),
+        "a selected paragraph must count only its own occurrence"
+    );
+    assert_eq!(document.paragraphs()[0].text(), "Release head");
+    assert_eq!(document.paragraphs()[1].text(), "Version head");
+}
+
+fn fx187_from_body(body: &str) -> Document {
+    let mut seed = Document::new();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    package.set_part(
+        "/word/document.xml",
+        wrap_word_body(body)
+            .replacen("<w:document ", r#"<w:document xmlns:x="urn:fx187" "#, 1)
+            .into_bytes(),
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    Document::from_bytes(bytes.get_ref()).unwrap()
+}
+
+#[test]
+fn scoped_replacement_preserves_anchors_properties_and_opaque_xml() {
+    let mut document = fx187_from_body(
+        r#"<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>pre Ver</w:t></w:r><!--ordered--><?producer keep?><w:r><w:rPr><w:i/></w:rPr><w:t>sion post</w:t></w:r><x:opaque xmlns:x="urn:fx187" x:value="exact"><x:t>Version</x:t></x:opaque></w:p><w:p><w:r><w:t>Version</w:t></w:r></w:p>"#,
+    );
+    let id = document
+        .add_comment_on_text(
+            "Version",
+            0,
+            "Ada",
+            Some("A"),
+            "Review",
+            Some("2026-10-08T12:00:00Z"),
+        )
+        .unwrap();
+    document.reply_to(id, "Ben", "Reply").unwrap();
+    document.resolve_comment(id, true).unwrap();
+    let before = document.to_bytes().unwrap();
+    let original = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&before)).unwrap();
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    assert_eq!(
+        document
+            .try_replace_text_at(&location, "Version", "Release", Some(1))
+            .unwrap()
+            .unwrap(),
+        1
+    );
+    let bytes = document.to_bytes().unwrap();
+    let output = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    for (part, data) in &original.parts {
+        if part != "/word/document.xml" {
+            assert_eq!(output.get_part(part), Some(data.as_slice()), "{part}");
+        }
+    }
+    let xml = std::str::from_utf8(output.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(xml.contains("<!--ordered--><?producer keep?>"), "{xml}");
+    assert!(
+        xml.contains(
+            r#"<x:opaque xmlns:x="urn:fx187" x:value="exact"><x:t>Version</x:t></x:opaque>"#
+        ),
+        "{xml}"
+    );
+    assert!(xml.contains(r#"<w:b/>"#));
+    assert!(xml.contains(r#"<w:i/>"#));
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    assert_eq!(reopened.paragraphs()[0].text(), "pre Release post");
+    assert_eq!(reopened.paragraphs()[1].text(), "Version");
+    assert_eq!(
+        reopened.comment_anchor_text(id).unwrap().as_deref(),
+        Some("Release")
+    );
+    assert_eq!(reopened.comments().len(), 2);
+}
+
+#[test]
+fn scoped_cell_replacement_visits_nested_supported_descendants_and_no_neighbors() {
+    let body = r#"<w:p><w:r><w:t>Version outside</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>Version direct</w:t></w:r></w:p><w:sdt><w:sdtPr><w:tag w:val="retained"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>Version control</w:t></w:r></w:p></w:sdtContent></w:sdt><w:tbl><w:tr><w:tc><w:p><w:r><w:t>Version nested</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:tc><w:tc><w:p><w:r><w:t>Version neighbor</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#;
+    let mut document = fx187_from_body(body);
+    let before = document.to_bytes().unwrap();
+    let mismatch = document
+        .try_replace_text_in_cell((0, 0, 0), None, "Version", "Release", Some(1))
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(
+        (mismatch.index, mismatch.expected, mismatch.found),
+        (0, 1, 3)
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+    assert_eq!(
+        document
+            .try_replace_text_in_cell((0, 0, 0), Some(1), "Version", "Release", Some(1))
+            .unwrap()
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        document
+            .table(0)
+            .unwrap()
+            .cell(0, 0)
+            .unwrap()
+            .paragraph(0)
+            .unwrap()
+            .text(),
+        "Version direct"
+    );
+    assert_eq!(
+        document
+            .table(0)
+            .unwrap()
+            .cell(0, 0)
+            .unwrap()
+            .paragraph(1)
+            .unwrap()
+            .text(),
+        "Release control"
+    );
+    let mut document = fx187_from_body(body);
+    assert_eq!(
+        document
+            .try_replace_text_in_cell((0, 0, 0), None, "Version", "Release", Some(3))
+            .unwrap()
+            .unwrap(),
+        3
+    );
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(
+        reopened.table(0).unwrap().cell(0, 1).unwrap().text(),
+        "Version neighbor"
+    );
+    assert_eq!(reopened.paragraphs()[0].text(), "Version outside");
+    let xml = document_xml(&mut document);
+    assert!(xml.contains("Release nested"));
+    assert!(xml.contains(r#"w:val="retained""#));
+    let mut document = fx187_from_body(body);
+    let story = f254_story(&document, StoryKind::Body);
+    let table = document
+        .story_items(&story)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind() == StoryItemKind::Table)
+        .unwrap()
+        .location()
+        .clone();
+    assert_eq!(
+        document
+            .try_replace_text_at(&table, "Version", "Release", Some(4))
+            .unwrap()
+            .unwrap(),
+        4
+    );
+    assert_eq!(document.paragraphs()[0].text(), "Version outside");
+    assert_eq!(
+        document.table(0).unwrap().cell(0, 1).unwrap().text(),
+        "Release neighbor"
+    );
+}
+
+#[test]
+fn scoped_replacement_covers_checked_controls_and_related_owners() {
+    let mut control = fx187_from_body(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="exact"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>Version A</w:t></w:r></w:p><w:p><w:r><w:t>Version B</w:t></w:r></w:p></w:sdtContent></w:sdt><w:p><w:r><w:t>Version outside</w:t></w:r></w:p>"#,
+    );
+    let paragraph = control.paragraph_story_location(1).unwrap().unwrap();
+    assert_eq!(paragraph.index_path().len(), 2);
+    assert_eq!(
+        control
+            .try_replace_text_at(&paragraph, "Version", "Release", Some(1))
+            .unwrap()
+            .unwrap(),
+        1
+    );
+    assert_eq!(control.paragraphs()[0].text(), "Version A");
+    assert_eq!(control.paragraphs()[1].text(), "Release B");
+    let story = f254_story(&control, StoryKind::Body);
+    let selected = control
+        .story_items(&story)
+        .unwrap()
+        .into_iter()
+        .find(|i| i.kind() == StoryItemKind::ContentControl)
+        .unwrap()
+        .location()
+        .clone();
+    assert_eq!(
+        control
+            .try_replace_text_at(&selected, "Version", "Release", Some(1))
+            .unwrap()
+            .unwrap(),
+        1
+    );
+    for kind in [
+        StoryKind::Header,
+        StoryKind::Footer,
+        StoryKind::Footnote,
+        StoryKind::Endnote,
+    ] {
+        let mut document = Document::new();
+        document.add_paragraph("Version outside");
+        document.set_header("Version header");
+        document.set_footer("Version footer");
+        document.add_footnote("Version footnote");
+        let reference = document.paragraph_story_location(0).unwrap().unwrap();
+        document
+            .create_endnote(&reference, "Version endnote")
+            .unwrap();
+        let story = f254_story(&document, kind);
+        let selected = document
+            .story_items(&story)
+            .unwrap()
+            .into_iter()
+            .find(|i| i.kind() == StoryItemKind::Paragraph)
+            .unwrap()
+            .location()
+            .clone();
+        let before = document.to_bytes().unwrap();
+        let original = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(before)).unwrap();
+        assert_eq!(
+            document
+                .try_replace_text_at(&selected, "Version", "Release", Some(1))
+                .unwrap()
+                .unwrap(),
+            1,
+            "{kind:?}"
+        );
+        let bytes = document.to_bytes().unwrap();
+        let output = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+        for (part, data) in &original.parts {
+            if part != story.part_name() {
+                assert_eq!(
+                    output.get_part(part),
+                    Some(data.as_slice()),
+                    "{kind:?} {part}"
+                );
+            }
+        }
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        assert!(
+            reopened
+                .story_items(&f254_story(&reopened, kind))
+                .unwrap()
+                .iter()
+                .any(|item| item
+                    .text()
+                    .unwrap()
+                    .is_some_and(|text| text.contains("Release")))
+        );
+        assert!(reopened.paragraphs()[0].text().contains("Version outside"));
+    }
+}
+
+#[test]
+fn scoped_replacement_keeps_literal_wrapper_field_and_revision_boundaries() {
+    let body = r#"<w:p><w:r><w:t>AB</w:t></w:r><w:sdt><w:sdtPr/><w:sdtContent><w:r><w:t>CD</w:t></w:r></w:sdtContent></w:sdt><w:ins w:id="4" w:author="Ada"><w:r><w:t>EF</w:t></w:r></w:ins><w:del w:id="5" w:author="Ada"><w:r><w:delText>GH</w:delText></w:r></w:del><w:fldSimple w:instr=" PAGE "><w:r><w:t>IJ</w:t></w:r></w:fldSimple><w:r><w:t>Version</w:t></w:r></w:p><w:p><w:r><w:t>Version other</w:t></w:r></w:p>"#;
+    for (old, new, count) in [
+        ("BC", "X", 0),
+        ("DE", "X", 0),
+        ("GH", "X", 0),
+        ("EF", "Y", 1),
+        ("IJ", "Y", 1),
+        ("Version", "Version plus", 1),
+        ("AB", "AB", 1),
+    ] {
+        let mut document = fx187_from_body(body);
+        let location = document.paragraph_story_location(0).unwrap().unwrap();
+        let before = document.to_bytes().unwrap();
+        assert_eq!(
+            document
+                .try_replace_text_at(&location, old, new, Some(count))
+                .unwrap()
+                .unwrap(),
+            count
+        );
+        if count == 0 {
+            assert_eq!(document.to_bytes().unwrap(), before);
+        }
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(reopened.paragraphs()[1].text(), "Version other");
+    }
+    let mut document = fx187_from_body(body);
+    let story = f254_story(&document, StoryKind::Body);
+    let field = document
+        .story_items(&story)
+        .unwrap()
+        .into_iter()
+        .find(|i| i.kind() == StoryItemKind::Field)
+        .unwrap()
+        .location()
+        .clone();
+    let before = document.to_bytes().unwrap();
+    assert!(
+        document
+            .try_replace_text_at(&field, "IJ", "Y", None)
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    assert!(
+        document
+            .try_replace_text_at(&location, "missing", "\u{1}", None)
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let stale = location.clone();
+    document
+        .try_replace_text_at(&location, "AB", "XY", Some(1))
+        .unwrap()
+        .unwrap();
+    let before = document.to_bytes().unwrap();
+    assert!(
+        document
+            .try_replace_text_at(&stale, "XY", "Z", None)
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn scoped_replacement_accepts_selected_and_unrelated_producer_normalization() {
+    for alias_field in [false, true] {
+        let field = if alias_field {
+            r#"<q:fldSimple q:instr=" PAGE "><q:r><q:t>7</q:t></q:r></q:fldSimple>"#
+        } else {
+            ""
+        };
+        let selected = format!(
+            r#"<q:p><q:pPr><q:keepNext q:val="1"/><q:jc q:val="center"/></q:pPr><q:r><q:rPr><q:b q:val="true"/></q:rPr><q:t>Version</q:t></q:r>{field}</q:p>"#
+        );
+        let untouched =
+            r#"<q:p><q:pPr><q:keepNext q:val="1"/></q:pPr><q:r><q:t>Version</q:t></q:r></q:p>"#
+                .to_owned();
+        let mut seed = Document::new();
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+                .unwrap();
+        let xml = wrap_word_body(&format!("{selected}{untouched}")).replacen(
+            "<w:document ",
+            &format!(r#"<w:document xmlns:q="{W_NS}" "#),
+            1,
+        );
+        package.set_part("/word/document.xml", xml.into_bytes());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+        let before = document.to_bytes().unwrap();
+        let source = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(before)).unwrap();
+        let original_xml =
+            std::str::from_utf8(source.get_part("/word/document.xml").unwrap()).unwrap();
+        assert!(original_xml.contains(&untouched));
+        let location = document.paragraph_story_location(0).unwrap().unwrap();
+        assert_eq!(
+            document
+                .try_replace_text_at(&location, "Version", "Release", Some(1))
+                .unwrap()
+                .unwrap(),
+            1,
+            "alias field {alias_field}"
+        );
+        let bytes = document.to_bytes().unwrap();
+        let output = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+        let xml = std::str::from_utf8(output.get_part("/word/document.xml").unwrap()).unwrap();
+        assert!(xml.contains(&untouched), "{xml}");
+        assert!(!xml.contains("rdocxScopedPositionProof"));
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        assert!(reopened.paragraphs()[0].text().starts_with("Release"));
+        assert_eq!(reopened.paragraphs()[1].text(), "Version");
+        for (part, data) in &source.parts {
+            if part != "/word/document.xml" {
+                assert_eq!(output.get_part(part), Some(data.as_slice()), "{part}");
+            }
+        }
+    }
+}
+
+#[test]
+fn scoped_replacement_refuses_namespace_owner_reinterpretation_without_publication() {
+    let body = format!(
+        r#"<w:p xmlns:q="{W_NS}"><w:r><w:t>Version</w:t></w:r><w:r><w:pict><v:shape xmlns:v="urn:schemas-microsoft-com:vml"><v:textbox><q:txbxContent><q:p><q:r><q:t>Version</q:t></q:r></q:p></q:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p><w:p><w:r><w:t>Version</w:t></w:r></w:p>"#
+    );
+    let mut document = fx187_from_body(&body);
+    let before = document.to_bytes().unwrap();
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    assert!(
+        document
+            .try_replace_text_at(&location, "Version", "Release", Some(1))
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let body = r#"<w:p><w:r><w:t>Version</w:t></w:r><w:r><w:object xmlns:w="urn:foreign"><w:txbxContent><w:p><w:r><w:t>Version</w:t></w:r></w:p></w:txbxContent></w:object></w:r></w:p><w:p><w:r><w:t>Version</w:t></w:r></w:p>"#.to_owned();
+    let mut document = fx187_from_body(&body);
+    let before = document.to_bytes().unwrap();
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    assert_eq!(
+        document
+            .try_replace_text_at(&location, "Version", "Release", Some(1))
+            .unwrap()
+            .unwrap(),
+        1
+    );
+    let xml = document_xml(&mut document);
+    assert!(xml.contains(r#"<w:object xmlns:w="urn:foreign"><w:txbxContent><w:p><w:r><w:t>Version</w:t></w:r></w:p></w:txbxContent></w:object>"#),"{xml}");
+    assert!(xml.contains("Release"));
+    assert_ne!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn scoped_replacement_preserves_selected_and_nested_container_attributes() {
+    let body = r#"<w:p w:rsidR="12345678" x:producer="paragraph"><w:r x:producer="run"><w:t>Version outside</w:t></w:r></w:p><w:tbl x:producer="table"><w:tr x:producer="row"><w:tc x:producer="cell"><w:p x:producer="cell-paragraph"><w:r><w:t>Version cell</w:t></w:r></w:p><w:tbl x:producer="nested-table"><w:tr x:producer="nested-row"><w:tc x:producer="nested-cell"><w:p x:producer="untouched-paragraph"><w:r><w:t>untouched</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:tc><w:tc x:producer="neighbor-cell"><w:p><w:r><w:t>Version neighbor</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#;
+    for scope in ["paragraph", "cell", "table"] {
+        let mut document = fx187_from_body(body);
+        let before = document.to_bytes().unwrap();
+        match scope {
+            "paragraph" => {
+                let location = document.paragraph_story_location(0).unwrap().unwrap();
+                document
+                    .try_replace_text_at(&location, "Version", "Release", Some(1))
+                    .unwrap()
+                    .unwrap();
+            }
+            "cell" => {
+                document
+                    .try_replace_text_in_cell((0, 0, 0), None, "Version", "Release", Some(1))
+                    .unwrap()
+                    .unwrap();
+            }
+            _ => {
+                let story = f254_story(&document, StoryKind::Body);
+                let location = document
+                    .story_items(&story)
+                    .unwrap()
+                    .into_iter()
+                    .find(|i| i.kind() == StoryItemKind::Table)
+                    .unwrap()
+                    .location()
+                    .clone();
+                document
+                    .try_replace_text_at(&location, "Version", "Release", Some(2))
+                    .unwrap()
+                    .unwrap();
+            }
+        }
+        let xml = document_xml(&mut document);
+        for value in [
+            "paragraph",
+            "run",
+            "table",
+            "row",
+            "cell",
+            "cell-paragraph",
+            "nested-table",
+            "nested-row",
+            "nested-cell",
+            "untouched-paragraph",
+            "neighbor-cell",
+        ] {
+            assert!(
+                xml.contains(&format!(r#"x:producer="{value}""#)),
+                "{scope} lost {value}: {xml}"
+            );
+        }
+        assert!(xml.contains(r#"w:rsidR="12345678""#));
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(
+            reopened.paragraphs()[0].text(),
+            if scope == "paragraph" {
+                "Release outside"
+            } else {
+                "Version outside"
+            }
+        );
+        assert_ne!(document.to_bytes().unwrap(), before);
+    }
+}
+
+#[test]
+fn scoped_control_paragraph_handles_use_direct_owner_ordinals() {
+    let mut document = fx187_from_body(
+        r#"<w:sdt><w:sdtPr/><w:sdtContent><w:sdt><w:sdtPr/><w:sdtContent><w:p><w:r><w:t>Version nested</w:t></w:r></w:p></w:sdtContent></w:sdt><w:p><w:r><w:t>Version A</w:t></w:r></w:p><w:p><w:r><w:t>Version B</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    );
+    let nested_unsupported = document.paragraph_story_location(0).unwrap().is_none();
+    let location = document.paragraph_story_location(1).unwrap().unwrap();
+    let count = document
+        .try_replace_text_at(&location, "Version", "Release", Some(1))
+        .unwrap()
+        .unwrap();
+    let texts: Vec<_> = document.paragraphs().iter().map(|p| p.text()).collect();
+    eprintln!(
+        "count={count}, nested_unsupported={nested_unsupported}, selected_path={:?}, texts={texts:?}",
+        location.index_path()
+    );
+    assert_eq!(count, 1);
+    assert_eq!(texts, ["Version nested", "Release A", "Version B"]);
+    assert!(nested_unsupported);
+}
+
+#[test]
+fn scoped_control_paragraph_ordinals_match_reopened_comment_anchors() {
+    let mut document = fx187_from_body(
+        r#"<w:p><w:r><w:t>Alpha</w:t></w:r></w:p><w:sdt><w:sdtPr/><w:sdtContent><w:p><w:r><w:t>Version p1</w:t></w:r></w:p><w:p/><w:sdt><w:sdtPr/><w:sdtContent><w:p><w:r><w:t>Version nested</w:t></w:r></w:p></w:sdtContent></w:sdt><w:p><w:r><w:t>Version p3</w:t></w:r></w:p><w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>Version cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:t>Version p5</w:t></w:r></w:p></w:sdtContent></w:sdt><w:p><w:r><w:t>Beta</w:t></w:r></w:p>"#,
+    );
+    let expected = [true, true, true, false, true, false, true, true];
+    assert_eq!(document.paragraphs().len(), expected.len());
+    for (index, reachable) in expected.into_iter().enumerate() {
+        assert_eq!(
+            document.paragraph_story_location(index).unwrap().is_some(),
+            reachable,
+            "paragraph {index}"
+        );
+    }
+    let location = document.paragraph_story_location(4).unwrap().unwrap();
+    assert_eq!(location.index_path().last(), Some(&2));
+    let id = document
+        .add_story_comment(
+            StoryRunRange {
+                start: StoryRunPosition {
+                    location: location.clone(),
+                    run_index: 0,
+                },
+                end: StoryRunPosition {
+                    location,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "exact p3",
+        )
+        .unwrap();
+    let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(
+        reopened.comment_anchor_text(id).unwrap().as_deref(),
+        Some("Version p3")
+    );
+    let location = reopened.paragraph_story_location(4).unwrap().unwrap();
+    assert_eq!(
+        reopened
+            .try_replace_text_at(&location, "Version", "Release", Some(1))
+            .unwrap()
+            .unwrap(),
+        1
+    );
+    let reopened = Document::from_bytes(&reopened.to_bytes().unwrap()).unwrap();
+    assert_eq!(
+        reopened.comment_anchor_text(id).unwrap().as_deref(),
+        Some("Release p3")
+    );
+    assert_eq!(reopened.paragraphs()[6].text(), "Version p5");
+    assert_eq!(reopened.paragraphs()[3].text(), "Version nested");
+    assert_eq!(reopened.paragraphs()[5].text(), "Version cell");
+}

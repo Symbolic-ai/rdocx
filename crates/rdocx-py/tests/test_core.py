@@ -3833,3 +3833,102 @@ def test_comment_moves_refuse_unknown_reply_and_invalid_ranges_atomically():
     reopened = rdocx.Document.from_bytes(before)
     assert reopened.comments == metadata
     assert reopened.comments[0].anchor_text == "TARGET"
+
+
+def test_scoped_replacement_count_guards_are_atomic():
+    import pickle
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("Ver").add_run("sion head")
+    document.add_paragraph("Version head")
+    held = document.paragraphs[0]
+    run = held.runs[0]
+    before = document.to_bytes()
+    for old, new, expect in [("absent", "x", 0), ("", "x", 0)]:
+        assert held.replace_text(old, new, expect=expect) == 0
+        assert held.text == "Version head"
+        assert run.text == "Ver"
+        assert document.to_bytes() == before
+    with pytest.raises(rdocx.ReplacementCountError) as raised:
+        held.replace_text("Version", "Release", expect=2)
+    error = raised.value
+    assert (error.index, error.expected, error.found) == (None, 2, 1)
+    copied = pickle.loads(pickle.dumps(error))
+    assert (copied.index, copied.expected, copied.found) == (None, 2, 1)
+    assert document.to_bytes() == before
+    assert held.text == "Version head"
+    with pytest.raises(rdocx.RdocxError):
+        held.replace_text("absent", "\x01")
+    assert document.to_bytes() == before
+    assert held.replace_text(old="Version", new="Release", expect=1) == 1
+    for stale in (held, run):
+        with pytest.raises(rdocx.StaleElementError):
+            stale.text
+    assert [p.text for p in document.paragraphs] == ["Release head", "Version head"]
+    with pytest.raises(rdocx.StaleElementError):
+        held.replace_text("Release", "Again")
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert [p.text for p in reopened.paragraphs] == ["Release head", "Version head"]
+
+
+def test_scoped_cell_and_story_item_replacements_have_local_counts():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("Version outside")
+    table = document.add_table(1, 2)
+    table.cell(0, 0).text = "Version cell"
+    document.tables[0].cell(0, 1).text = "Version neighbor"
+    cell = document.tables[0].cell(0, 0)
+    cell.add_paragraph("Version second")
+    cell = document.tables[0].cell(0, 0)
+    paragraph = cell.paragraphs[1]
+    before = document.to_bytes()
+    assert cell.replace_text("absent", "x", expect=0) == 0
+    assert cell.text == "Version cell\nVersion second"
+    with pytest.raises(rdocx.ReplacementCountError) as raised:
+        cell.replace_text("Version", "Release", expect=1)
+    assert (raised.value.index, raised.value.found) == (None, 2)
+    assert document.to_bytes() == before
+    assert paragraph.replace_text("Version", "Release", expect=1) == 1
+    assert document.tables[0].cell(0, 0).text == "Version cell\nRelease second"
+    cell = document.tables[0].cell(0, 0)
+    assert cell.replace_text("Version", "Release", expect=1) == 1
+    assert document.tables[0].cell(0, 1).text == "Version neighbor"
+    assert document.paragraphs[0].text == "Version outside"
+    document.set_header("Version header")
+    item = next(item for item in document.story_items if item.story.kind == "header" and item.kind == "paragraph")
+    held = document.paragraphs[0]
+    before = document.to_bytes()
+    assert document.replace_text_at(item, "absent", "x", expect=0) == 0
+    assert document.to_bytes() == before
+    assert held.text == "Version outside"
+    assert document.replace_text_at(item, "Version", "Release", expect=1) == 1
+    with pytest.raises(rdocx.StaleElementError):
+        document.replace_text_at(item, "Release", "Again")
+    assert _story_paragraph_texts(document, "header") == ["Release header"]
+    assert document.paragraphs[0].text == "Version outside"
+
+
+def test_scoped_control_paragraph_handles_use_direct_owner_ordinals():
+    import rdocx
+
+    body = '<w:sdt><w:sdtPr/><w:sdtContent><w:sdt><w:sdtPr/><w:sdtContent><w:p><w:r><w:t>Version nested</w:t></w:r></w:p></w:sdtContent></w:sdt><w:p><w:r><w:t>Version A</w:t></w:r></w:p><w:p><w:r><w:t>Version B</w:t></w:r></w:p></w:sdtContent></w:sdt>'
+    document = _replace_document_body(rdocx.Document(), body)
+    nested = rdocx.Document.from_bytes(document.to_bytes())
+    nested_before = nested.to_bytes()
+    held_nested = nested.paragraphs[0]
+    nested_unsupported = False
+    try:
+        nested.paragraphs[0].replace_text("Version", "Release", expect=1)
+    except IndexError:
+        nested_unsupported = True
+    count = document.paragraphs[1].replace_text("Version", "Release", expect=1)
+    texts = [paragraph.text for paragraph in document.paragraphs]
+    print(f"count={count}, nested_unsupported={nested_unsupported}, texts={texts!r}")
+    assert count == 1
+    assert texts == ["Version nested", "Release A", "Version B"]
+    assert nested_unsupported
+    assert nested.to_bytes() == nested_before
+    assert held_nested.text == "Version nested"
