@@ -577,6 +577,8 @@ defended.
 
 | F-X184 | S90 | L | 5 | 1 | 2026-10-08 | Safe complete-thread removal and atomic partial-cut refusal for hadim Issue282, clean ALL review, native1750 and final rebuilt Python85+2, hash49 unchanged |
 
+| F-X185 | S90 | M | 2 | 1 | 2026-10-08 | Checked typed comment anchors and nested paragraph snapshots for hadim Issues283/289, clean ALL, native1761/XML629/CLI64 and current rebuilt Python93, hash49 unchanged |
+
 ## Velocity
 
 Recalculated at each sprint close. The backlog assumes about 2 stories per week

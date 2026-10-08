@@ -17910,3 +17910,92 @@ start. Keep work/f-x184-codex through sprint close and remove only its clean
 integrated worktree. Issue264 remains excluded. GitHub reconciliation and
 contributor thanks wait for verified `/close-sprint`. No push, main merge,
 tag or GitHub closure occurred.
+
+
+### F-X185, Expose comment anchor text and story location
+
+**Sprint.** S90
+**Completed.** 2026-10-08
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Checked Document and CommentRef APIs expose accepted-view
+comment span text and reusable StoryRunRange coordinates. Python Comment
+records add frozen owned typed anchors and CLI JSON adds complete normalized
+story, owner, path, item and run coordinates. Nested block-control paragraph
+snapshots carry accepted text and namespace-closed XML through both comment
+endpoints and the public Python paragraph constructor. This implements
+[Issue283](https://github.com/tensorbee/rdocx/issues/283) and
+[Issue289](https://github.com/tensorbee/rdocx/issues/289), reported by Hadrien
+Mary (`hadim`). Compatible PR287 projection and test ideas were assessed and
+adapted with complete checked ownership, without accepting that PR as a whole.
+
+**Non-obvious choices.** Qualified source projection reuses accepted paragraph
+parsing and checks exact display and endpoint fidelity after private re-anchor.
+Unknown and malformed sources error. Orphans, reference-only points and replies
+remain distinct. Proven zero-run unrepresentable intervals refuse explicitly.
+Batch discovery shares one owned graph proof and bounded owner/candidate
+indexes. Readers tolerate only raw-proven undefined markers without inventing
+records, while existing destructive and CLI validation remain strict. Python
+keeps original seven-field constructor defaults and metadata equality. Checked
+endpoint snapshots retain revision identity. Existing multi-paragraph comment
+insertion stages both endpoints before publication, retaining stale guards.
+Empty control paragraphs retain their required newline and source index.
+
+**Deviations from the design plan.** None. Approved concrete helper signatures,
+legacy equality and the measured unsupported-axis boundary are recorded in the
+completed plan. Issue289 strengthens the existing checked snapshot contract
+without broadening ordinary story enumeration.
+
+**Spec sections touched.** Exactly HLD03 facade conventions, HLD10 binding
+snapshots and HLD12 regression strategy. Archive rows and affected README
+inventories match the reviewed measurements.
+
+**Tests.** The named comment_anchor_snapshots_match_accepted_story_spans gate
+passes again during prepare, one executed and900 filtered. Genuine compiled
+Base failures cover accepted text and CLI output, and an actual built Base
+Python fails the absent anchor attribute. The old-helper text discriminator is
+qualified separately from the new API gate. Issue289's exact existing two
+constructor cases fail before repair, then pass with populated XML and text,
+reported path1,0, body index1, both endpoints, reopened bytes and stale refusal.
+Focused native11 and CLI7 controls pass. Full facade501 unit,364 integration,
+894 regression and two doctests pass, with21 existing ignores. XML628 tests
+and one doctest, CLI3 units and61 integrations pass. Affected all-target checks,
+all-feature denied-warning Clippy, denied-warning docs and both WASM checks pass.
+
+Current rebuilt Python core93 passes in16.50s with strict mypy2.3.0, stubtest
+and actual Issue289 runtime proof. Earlier parity35 passes in459.99s with one
+upstream style warning and pinned PDF/concurrency2 passes precede only the
+bounded Python constructor repair. No post-repair parity rerun is claimed.
+Native source and tests remain unchanged across that repair. Current retained
+extension SHA0927e5f9f901b2afde90d2a2350547029fc92fa6e6fcc9bffb851553c182a03b
+binds the actual rebuilt source. Three deciding receipts contain13,9and8
+successful steps. Workflow140 passes with two existing skips in87.951s,
+README27/inventory22 with root4 and XML1 compiled examples, prose0, adapters26
+and fmt pass. Earlier lint failures are retained and superseded by three
+localized approved-signature annotations.
+
+Recorded archives are XML443671/2763759/32, CLI72087/321234/8 and
+facade1543654/8549973/36 for compressed bytes, normalized bytes and members.
+Actual verified locally patched publication dry runs retain443672,72087 and
+1543655 compressed bytes, respectively. Normalized tuples and all archived
+source/test members are exact, compression differences satisfy existing64-byte
+policy and every archive is below10MiB. No upload occurred. Root and reviewer
+independently authenticated all six retained archives. Independent ALL pass1
+reports zero defects, smells and nitpicks, final review719960e0. Finalfreeze
+a35874ba binds18 tracked files and78 artifacts, exact diffd3350241. The
+review's unsupported historical README failure wording was corrected before
+prepare without changing its verdict or implementation.
+
+**Hash harness.** All49 worker entries unchanged. Integrated source and
+baseline match the reviewed prefix byte for byte. Final integrated full
+verification and sprint review remain due after the remaining waves.
+
+**Notes for future sessions.** CodeHeadb8fb0326 precedes handoff-only47f5ddcf.
+Integration6418a2ef consumes validated handoffb2195b1f. All19 integrated paths
+exactly match the worker code, with no source reconciliation. This scoped
+dependency checkpoint permits F-X186 to start. Keep work/f-x185-codex through
+sprint close, removing only its clean integrated worktree. Issue288 belongs to
+approved F-X188 wave15. Full-catalogue F-282 remains preserved and paused.
+Issue264 remains excluded. No push, main merge, tag, publication or GitHub
+closure occurred. Complete issue and PR reconciliation waits for verified
+sprint close, with release under its separate reviewed-SHA approval.
