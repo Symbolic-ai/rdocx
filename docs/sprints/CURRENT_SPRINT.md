@@ -32,6 +32,8 @@ the full pinned Word bibliography source, style and locale catalogue.
 | F-X179 | Correct multi-paragraph comment threads from PR 271 | S | done | - |
 | F-X180 | Correct cell nil and none border precedence | S | in-progress | codex |
 | F-X181 | Ignore page and column breaks inside table cells | S | in-progress | codex |
+| F-X182 | Honor direct table alignment | M | pending | - |
+| F-X183 | Position legacy tables using cell margins | M | pending | - |
 
 ## Sequencing note
 
@@ -56,6 +58,13 @@ F-282 before F-283. Source and Cargo ownership never overlap. Reconcile both
 approved contracts at integration and check table geometry and bibliography
 output. Issue 264 remains excluded.
 
+
+Newly opened Issues 277 and 276 add F-X182 and F-X183. Run direct alignment
+before legacy positioning, with F-X182 completed at a scoped dependency
+checkpoint before F-X183 starts. Keep F-282 paused through these exclusive
+source and hash-baseline waves, then resume it before F-283. Each rendering
+delta is separately declared and reviewed. Issue 264 remains excluded.
+
 ## Definition of done for this sprint
 
 - Simple, complex and nested fields reopen with identical instruction semantics and ordered cached content.
@@ -67,3 +76,5 @@ output. Issue 264 remains excluded.
 - The integrated full verification and sprint review pass, including the source-built document's field caches, page targets and numbering checks. Any intentional hash delta is declared and reviewed.
 
 - Cell border precedence and table-cell break handling satisfy Issues 272 and 273 against the pinned Word oracle.
+
+- Direct table alignment and compatibility-mode positioning satisfy Issues 277 and 276 against pinned Word controls.

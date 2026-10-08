@@ -6530,6 +6530,32 @@ fontdb/memmap` fails on the claimed base and passes after the fix. Default,
 no-default and no-default plus memmap checks and font tests pass, with all
 49 hash entries unchanged. Record the contributor disposition for sprint close.
 
+### F-X182, Honor direct table alignment (M)
+
+Resolve every reported variant of [Issue 277](https://github.com/tensorbee/rdocx/issues/277), reported by `hadim`.
+Direct table jc overrides table-style alignment, including left, center,
+right, start and end. Retain authored indentation rules and preserve source
+XML. Nested and bidi controls distinguish existing placement semantics.
+**Depends on**: none.
+**Test gate**: regression. Source-built reported variants match fresh pinned
+Word relative positions and survive unrelated edits and reopen. Prove the
+failure before implementation. Deterministic PNG/PDF hash deltas are declared,
+separately attributed and independently reviewed, with unchanged source XML.
+Record reporter provenance and full acceptance for sprint close.
+
+### F-X183, Position legacy tables using cell margins (M)
+
+Resolve every reported variant of [Issue 276](https://github.com/tensorbee/rdocx/issues/276), reported by `hadim`.
+Pre-15 and absent compatibility modes position eligible top-level tables
+using resolved first-cell left or last-cell right margins. Preserve modern,
+centered and nested placement, and distinguish bidi and floating contexts.
+**Depends on**: F-X182.
+**Test gate**: regression. Source-built reported variants match fresh pinned
+Word relative positions and survive unrelated edits and reopen. Prove the
+failure before implementation. Deterministic PNG/PDF hash deltas are declared,
+separately attributed and independently reviewed, with unchanged source XML.
+Record reporter provenance and full acceptance for sprint close.
+
 ### F-X180, Correct cell nil and none border precedence (S)
 
 Adopt [PR 274](https://github.com/tensorbee/rdocx/pull/274) from `hadim`,

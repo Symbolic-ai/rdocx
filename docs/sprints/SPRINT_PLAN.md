@@ -1998,6 +1998,8 @@ citations, and numbering-aware navigation.
 | F-X179 | Correct multi-paragraph comment threads from PR 271 | S |
 | F-X180 | Correct cell nil and none border precedence | S |
 | F-X181 | Ignore page and column breaks inside table cells | S |
+| F-X182 | Honor direct table alignment | M |
+| F-X183 | Position legacy tables using cell margins | M |
 
 F-278 is the field substrate. F-279 uses the S89 note policy, and F-280 uses
 S89 range markers. F-281 follows the field, pagination, and caption work.
@@ -2018,6 +2020,13 @@ saved checkpoint, run these independent fixes in separate waves, then resume
 F-282 before F-283. Source and Cargo ownership never overlap. Reconcile both
 approved contracts at integration and check table geometry and bibliography
 output. Issue 264 remains excluded.
+
+
+Newly opened Issues 277 and 276 add F-X182 and F-X183. Run direct alignment
+before legacy positioning, with F-X182 completed at a scoped dependency
+checkpoint before F-X183 starts. Keep F-282 paused through these exclusive
+source and hash-baseline waves, then resume it before F-283. Each rendering
+delta is separately declared and reviewed. Issue 264 remains excluded.
 
 #### Sprint S91, Templates, controls, and forms
 
