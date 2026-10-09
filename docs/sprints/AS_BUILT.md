@@ -18446,3 +18446,71 @@ clean worktree was removed and its branch remains through sprint close.
 Do not repeat broad native capture or reinterpret narrow measurements as
 full Word behavior. This delivery checkpoint adds no code or baseline change.
 GitHub disposition and separate publication approval remain ahead.
+
+### F-X190, Preserve cached complex-field story snapshots
+
+**Sprint.** S90
+**Completed.** 2026-10-09
+**Size.** M, estimated 2 days, actual effort not recorded.
+
+**What was built.** Existing bulk story snapshots and Python StoryItem.text
+now expose cached complex-field text across sibling runs and nested fields.
+The shared text and hyperlink projection uses one inherited namespace envelope
+and checked physical offsets. This addresses Hadrien Mary (`hadim`)'s
+[Issue291](https://github.com/tensorbee/rdocx/issues/291), selectively adapting
+[PR287](https://github.com/tensorbee/rdocx/pull/287)'s semantic contribution
+65365c4b from head39945370. PR290 inherits that stack and is not double counted.
+Source XML, locations, fingerprints, direct-body coordinates, ordering and
+read revisions remain unchanged.
+
+**Non-obvious choices.** The wrapper is private reader state and is never
+saved. External ancestor offsets gate discovery but have no local position.
+The existing public admission boundary for a hyperlink wrapper inside a
+complex field remains opaque. Actual private qualified-link endpoints and
+supported public surrounding links prove translation without relaxing that
+boundary. Noncomplex enclosing hyperlinks retain established literal7yes,
+while the outer and nested fields remain yes and7. ALL pass1 found a local
+namespace lifetime defect. The corrected batch collector takes inherited
+context before the first element's declarations, retaining ancestor bindings
+and each original element's local declarations. Every existing batch consumer
+was reviewed, including rich-comment replay and single-root closure.
+
+**Deviations from the design plan.** The approved admission clarification
+separates opaque public discovery from private link mechanism proof. No new
+public API, production file, module or dependency. Total effort was not measured.
+
+**Spec sections touched.** Exactly HLD03, HLD04, HLD10 and HLD12. All nine
+nonplan frozen feature inputs equal CodeHead and the integrated result.
+
+**Tests.** Two compiled exact-Base controls prove the original failures:
+sibling-run bulk text empty versus direct7, and four actual admitted nested
+excerpt paths panicking on ancestor subtraction. D1 has separate later-current
+native and rebuilt Python before failures across four alias/default shadow
+directions. Fresh after controls restore direct/bulk agreement and preserve
+source bytes, locations, held handles and revisions. Compilation-only failures
+and the unsupported discovery fixture are not behavior-failure evidence.
+
+Final2 scoped receipt d8de3bfb records all13 successful stages in471.61s.
+Native512unit,364integration,944regression and2doctests pass,1822 total with22
+existing ignored. Rebuilt Python105, strict mypy7files and stubtest6modules
+pass. Both WASM targets, denied-warning Clippy/docs, all-target checks, fmt,
+README examples,140workflow tests with two skips, prose0 and adapters26 pass.
+Root authenticated all10 live frozen inputs,15 records and42 logs against
+binder22621621. Actual and retained runtime extension f3468179 authenticate
+at86748104bytes. Actual and retained verified publication archives04388020
+contain all25 current source/test members, normalized1582342/8802989/36,
+below10MiB. The recorded1582341 compressed size differs by one byte within
+the existing64-byte tolerance. All22 local dependency patches remain present.
+ALL pass2 has zero defects, smells and nitpicks. The actual prepare named gate
+passes again,1test0.07s after4.51s compilation, retained log04648b03.
+
+**Hash harness.** All49 worker entries unchanged. No baseline movement.
+Final integrated full verification and sprint review remain due.
+
+**Notes for future sessions.** Claim Base2cea3992, CodeHead49f84796 and
+handoff-only tip7bf20632 retain exact provenance. Validated handoff94ddc0ff
+was consumed by integration126255dc. All12 integrated feature files equal
+CodeHead, with no conflict or semantic reconciliation. Keep the worker branch
+through sprint close. Resume F-282 only against this integrated prefix and
+preserve both text.rs and field.rs changes. Issue281 remains open and Issue264
+excluded. No GitHub closure, push, release tag or publication occurred.

@@ -848,3 +848,5 @@ or changing the reviewed release boundary. Keep Issue281 open for F-184.
 | F-X180 | S90 | S | 1 | not recorded | 2026-10-09 | All7 Issue272 nil/none topologies, ALL pass2 clean, durable final scoped attestation, hash49 unchanged and declared separate dense-form segment delta |
 | F-X181 | S90 | S | 1 | not recorded | 2026-10-09 | Full Issue273 cell/field/break controls, ALL pass1 clean,19 retained logs rehashed, hash49 unchanged |
 | F-X183 | S90 | M | 2 | not recorded | 2026-10-09 | Issues276/278 bounded legacy/default policies,600cases and accepted-empty-row proof, ALL pass2 plus three DELTA reviews,14 changed keys, qualified combined regression receipts |
+
+| F-X190 | S90 | M | 2 | not recorded | 2026-10-09 | Issue291 existing snapshot repair, ALL pass2 clean after measured namespace lifetime correction, native1822/Python105, hash49 unchanged |
