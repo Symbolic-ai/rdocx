@@ -2107,6 +2107,11 @@ packages published before their new Word consumers. This is a user-approved
 release preparation boundary, not completion of M24 or a1.0 decision.
 Issue264 remains excluded and Issue281 remains open for F-184.
 
+S90 contribution intake is frozen by the user at PR293. Do not search for
+or add later issues or pull requests to this sprint. Finish the existing
+full-catalogue, navigation, numbering reader and release preparation scope.
+Issues264 and281 remain open.
+
 PR [293](https://github.com/tensorbee/rdocx/pull/293), contributed by Pedro
 Assumpcao (`pedroassumpcao`) at head
 `fd112a7ac3333709f62746b7065c5cc1b4be0eed`, adds F-X191. The user approved

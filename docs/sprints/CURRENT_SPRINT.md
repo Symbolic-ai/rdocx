@@ -163,6 +163,11 @@ through F-X190 in exclusive wave16 after F-X188 and before resuming F-282. Updat
 stacks require selective acceptance against each issue. Issue264 remains
 excluded. All source, Cargo and shared test execution remains exclusive.
 
+S90 contribution intake is frozen by the user at PR293. Do not search for
+or add later issues or pull requests to this sprint. Finish the existing
+full-catalogue, navigation, numbering reader and release preparation scope.
+Issues264 and281 remain open.
+
 PR [293](https://github.com/tensorbee/rdocx/pull/293), contributed by Pedro
 Assumpcao (`pedroassumpcao`) at head
 `fd112a7ac3333709f62746b7065c5cc1b4be0eed`, adds F-X191. The user approved

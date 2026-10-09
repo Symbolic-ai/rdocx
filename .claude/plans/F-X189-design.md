@@ -49,6 +49,8 @@ the exclusion to Issue281, which remains open for F-184. Issue291 is included
 and its separately verified field snapshot correction must complete before
 release preparation. Issue264 remains excluded. Updated stacked PRs require
 selective acceptance rather than automatic adoption of the complete stack.
+The user froze S90 contribution intake at PR293. Do not add later GitHub
+issues or pull requests to this release preparation scope.
 PR293 is included through F-X191 in exclusive wave17, with independent
 verification required before completion.
 Complete its namespace-only reader correction before preparation and credit
