@@ -178,7 +178,7 @@ Version preparation must not change rendering or replace the baseline.
 ## Implementation checklist
 
 - [x] Confirm old tags/releases and obtain approval for both new versions and workflow records.
-- [ ] Complete every formal prerequisite and claim exclusive wave17.
+- [ ] Complete every formal prerequisite and claim exclusive wave18.
 - [ ] Capture genuine new-version contract failure against the immutable Base.
 - [ ] Update exact carriers, pins, notes, policy, inventories and listed HLD files.
 - [ ] Pass scoped package/binding/typing checks and independent microscope, then prepare and integrate.

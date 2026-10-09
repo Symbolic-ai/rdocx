@@ -50,7 +50,7 @@ Rows are listed in dependency order, not implementation waves. F-278 supplies
 the field substrate. F-279 consumes the completed S89 note policy and F-280
 consumes S89 range markers. Both depend on F-278. F-281 follows F-278 through
 F-280, while F-282 needs only F-278. F-283 follows F-279 through F-282 and the
-completed numbering foundation. Shared source and test files determine which
+completed numbering foundation in S91. Shared source and test files determine which
 otherwise independent stories can run together after design.
 F-X178 remains pending in the backlog and carried in the S90 run state.
 It has no implementation wave in this sprint, honoring the Issue 264 exclusion.
