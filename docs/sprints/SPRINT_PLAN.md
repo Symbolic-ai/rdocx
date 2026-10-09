@@ -2006,6 +2006,7 @@ citations, and numbering-aware navigation.
 | F-X187 | Scoped paragraph and cell text replacement | M |
 | F-X188 | Preserve comment ownership when replacing or removing whole stories | L |
 | F-X190 | Preserve cached text in multi-run complex field story snapshots | M |
+| F-X191 | Ignore namespace declarations in numbering reader completeness | S |
 | F-X189 | Prepare Word 0.16.0 and PowerPoint 0.14.0 families | L |
 
 F-278 is the field substrate. F-279 uses the S89 note policy, and F-280 uses
@@ -2094,9 +2095,9 @@ glossary and shared-reference ownership work. Issue289 is part of F-X185.
 
 The user approved F-X189 for new Word0.16.0 and shared/PowerPoint0.14.0
 release preparation. Existing unified versions are published at S88 and their
-tags remain immutable. Run exclusive wave17 only after all included S90
+tags remain immutable. Run exclusive wave18 only after all included S90
 implementation dependencies complete, including full-catalogue F-282 and
-F-283. Prepare exact carriers, reviewed family notes and authenticated
+F-283 and F-X191. Prepare exact carriers, reviewed family notes and authenticated
 contribution inventories over each complete previous-tag range, including
 S89. Current local package/binding evidence precedes final integrated full
 verification and review. The final reviewed and pushed sprint SHA must pass
@@ -2105,6 +2106,18 @@ through separate final exact-main-SHA approvals for each family, with shared
 packages published before their new Word consumers. This is a user-approved
 release preparation boundary, not completion of M24 or a1.0 decision.
 Issue264 remains excluded and Issue281 remains open for F-184.
+
+PR [293](https://github.com/tensorbee/rdocx/pull/293), contributed by Pedro
+Assumpcao (`pedroassumpcao`) at head
+`fd112a7ac3333709f62746b7065c5cc1b4be0eed`, adds F-X191. The user approved
+its workflow records. Exclusive wave17 corrects the namespace-only numbering
+reader flag while preserving declarations, foreign attributes, opaque children
+and the separate authoring completeness contract. It has no formal dependency,
+but shared source and Cargo ownership remain exclusive. Complete F-X191 before
+F-X189 in wave18. Assess only the reader fix and focused tests, preserving
+current archive policy rather than adopting contributor platform overrides.
+Issue264 remains excluded and Issue281 stays open. PR disposition waits for
+complete integrated acceptance at verified sprint close.
 
 #### Sprint S91, Templates, controls, and forms
 

@@ -3,7 +3,7 @@
 **Status**: approved
 **Sprint**: S90
 **Size**: L
-**Depends on**: F-278, F-279, F-280, F-281, F-282, F-283, F-X179, F-X180, F-X181, F-X182, F-X183, F-X184, F-X185, F-X186, F-X187, F-X188, F-X190
+**Depends on**: F-278, F-279, F-280, F-281, F-282, F-283, F-X179, F-X180, F-X181, F-X182, F-X183, F-X184, F-X185, F-X186, F-X187, F-X188, F-X190, F-X191
 
 ## Problem
 
@@ -32,7 +32,7 @@ This approval does not replace either family's final publication approval.
 Design uses the run-sprint batch route. No unanswered scope question remains,
 but unfinished prerequisites still block implementation. Complete every
 listed dependency through its approved lifecycle before claiming exclusive
-wave17. In particular full-catalogue F-282 and dependent F-283 stay in scope.
+wave18. In particular full-catalogue F-282 and dependent F-283 stay in scope.
 Reviewed X180, X181 and X183 require dependency-prefix delivery reconciliation
 before this consumer starts. Source, Cargo, manifests, README measurements and
 HLD edits remain exclusive. The local preparation is completed before final
@@ -49,6 +49,11 @@ the exclusion to Issue281, which remains open for F-184. Issue291 is included
 and its separately verified field snapshot correction must complete before
 release preparation. Issue264 remains excluded. Updated stacked PRs require
 selective acceptance rather than automatic adoption of the complete stack.
+PR293 is included through F-X191 in exclusive wave17, with independent
+verification required before completion.
+Complete its namespace-only reader correction before preparation and credit
+Pedro Assumpcao (`pedroassumpcao`) in the authenticated inventory. Preserve
+current archive policy without contributor platform overrides.
 Refresh the inventory and exact previous family tags before writing claims.
 Issue264/F-X178 remain excluded, including release notifications. Preserve
 historical changelog credit without treating it as new S90 work. Issue281

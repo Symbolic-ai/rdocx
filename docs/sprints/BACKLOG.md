@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 23 | 1 | 30 |
-| X, Cross-cutting | 200 | 194 | 0 | 2 |
-| **Total** | **525** | **467** | **1** | **53** |
+| X, Cross-cutting | 201 | 194 | 0 | 3 |
+| **Total** | **526** | **467** | **1** | **54** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -743,5 +743,6 @@ regenerated, never hand-edited.
 | F-X187 | Scoped paragraph and cell text replacement | S90 | M | done |
 | F-X188 | Preserve comment ownership when replacing or removing whole stories | S90 | L | done |
 | F-X190 | Preserve cached text in multi-run complex field story snapshots | S90 | M | done |
+| F-X191 | Ignore namespace declarations in numbering reader completeness | S90 | S | pending |
 | F-X189 | Prepare Word 0.16.0 and PowerPoint 0.14.0 families | S90 | L | pending |
 <!-- AUTOGEN:backlog-MX END -->

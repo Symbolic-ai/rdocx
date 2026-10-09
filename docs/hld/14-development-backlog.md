@@ -6623,6 +6623,29 @@ links, aliases, namespace shadows and retained source bytes. All49 hash
 entries remain unchanged. Record contributor provenance and full acceptance
 before sprint close.
 
+### F-X191, Ignore namespace declarations in numbering reader completeness (S)
+
+Resolve the native reader false positive contributed by Pedro Assumpcao
+(`pedroassumpcao`) through [PR293](https://github.com/tensorbee/rdocx/pull/293)
+at head `fd112a7ac3333709f62746b7065c5cc1b4be0eed`. A namespace declaration
+alone on a numbering instance, abstract definition or level does not make
+`Document::numbering_level().has_unmodeled_properties` true. Retain all
+namespace declarations and producer XML, while actual unknown attributes and
+extra children remain flagged. Preserve the existing narrower reader fact
+and richer numbering authoring completeness contracts. Adopt only the native
+reader correction and focused tests, not contributor archive sizes or the
+archive-platform override. Run in an exclusive implementation wave before
+F-X189 release preparation. Issue264 remains excluded and Issue281 remains
+open roadmap work.
+**Depends on**: none.
+**Test gate**: regression.
+`numbering_level_namespace_declarations_do_not_report_unmodeled_properties`
+fails through the existing native API on the exact claimed Base, then passes
+all twelve owner/declaration combinations, retained namespace and producer
+payload checks, real foreign attributes, rebound aliases, raw children and
+save/reopen controls. All49 hash entries remain unchanged. Record actual
+current package evidence and contributor provenance before completion.
+
 ### F-X189, Prepare Word 0.16.0 and PowerPoint 0.14.0 families (L)
 
 Prepare the exact seven-package Word family and Python distribution at 0.16.0,
@@ -6638,7 +6661,7 @@ open roadmap disposition. Require current local package and binding evidence,
 then the final reviewed sprint's hosted build-only rehearsal before close.
 Publication follows sprint close through separate exact-SHA approvals under
 `/release`, shared family first where the Word dependency graph requires it.
-**Depends on**: F-278, F-279, F-280, F-281, F-282, F-283, F-X179, F-X180, F-X181, F-X182, F-X183, F-X184, F-X185, F-X186, F-X187, F-X188, F-X190.
+**Depends on**: F-278, F-279, F-280, F-281, F-282, F-283, F-X179, F-X180, F-X181, F-X182, F-X183, F-X184, F-X185, F-X186, F-X187, F-X188, F-X190, F-X191.
 **Test gate**: release regression. `s90_release_families_match_reviewed_versions`
 in the existing workflow test module checks both exact family allowlists,
 version carriers and rendered notes. Actual22-package patched publication dry

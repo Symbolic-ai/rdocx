@@ -40,6 +40,7 @@ the full pinned Word bibliography source, style and locale catalogue.
 | F-X187 | Scoped paragraph and cell text replacement | M | done | - |
 | F-X188 | Preserve comment ownership when replacing or removing whole stories | L | done | - |
 | F-X190 | Preserve cached text in multi-run complex field story snapshots | M | done | - |
+| F-X191 | Ignore namespace declarations in numbering reader completeness | S | pending | - |
 | F-X189 | Prepare Word 0.16.0 and PowerPoint 0.14.0 families | L | pending | - |
 
 ## Sequencing note
@@ -144,7 +145,7 @@ retaining completed F-X184 protections. Issue289 is part of F-X185 acceptance.
 
 The user approved F-X189 to prepare Word0.16.0 and shared/PowerPoint0.14.0
 after every included implementation story completes. Both prior unified
-versions are already published at S88. Exclusive wave17 prepares exact
+versions are already published at S88. Exclusive wave18 prepares exact
 carriers, reviewed family notes, contributor credit and fresh package/binding
 evidence. The final reviewed sprint SHA must pass the hosted build-only
 rehearsal before close. Publication follows close through separate final
@@ -161,6 +162,18 @@ is included. Plan and verify its multi-run complex-field snapshot correction
 through F-X190 in exclusive wave16 after F-X188 and before resuming F-282. Updated PR287 and PR290
 stacks require selective acceptance against each issue. Issue264 remains
 excluded. All source, Cargo and shared test execution remains exclusive.
+
+PR [293](https://github.com/tensorbee/rdocx/pull/293), contributed by Pedro
+Assumpcao (`pedroassumpcao`) at head
+`fd112a7ac3333709f62746b7065c5cc1b4be0eed`, adds F-X191. The user approved
+its workflow records. Exclusive wave17 corrects the namespace-only numbering
+reader flag while preserving declarations, foreign attributes, opaque children
+and the separate authoring completeness contract. It has no formal dependency,
+but shared source and Cargo ownership remain exclusive. Complete F-X191 before
+F-X189 in wave18. Assess only the reader fix and focused tests, preserving
+current archive policy rather than adopting contributor platform overrides.
+Issue264 remains excluded and Issue281 stays open. PR disposition waits for
+complete integrated acceptance at verified sprint close.
 
 ## Definition of done for this sprint
 
@@ -185,3 +198,5 @@ excluded. All source, Cargo and shared test execution remains exclusive.
 - Issue292 satisfies documented building-block comment isolation without unanchored main comments. Issue291 bulk field snapshots match direct field text across supported owners and namespace contexts. Issues264 and281 remain open.
 
 - Both approved new release families have exact versions, reviewed notes and contributor inventories, verified packages and installed Python evidence, plus a current reviewed-SHA hosted build-only rehearsal before close. Publication remains separately approved after close.
+
+- PR293 namespace-only numbering inspection reports modeled levels correctly while preserving real unmodeled content and saved XML.
