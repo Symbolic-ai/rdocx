@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 23 | 1 | 30 |
-| X, Cross-cutting | 201 | 194 | 1 | 2 |
-| **Total** | **526** | **467** | **2** | **53** |
+| X, Cross-cutting | 202 | 194 | 1 | 3 |
+| **Total** | **527** | **467** | **2** | **54** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -507,7 +507,7 @@ regenerated, never hand-edited.
 | F-280 | Captions, sequences, and complete cross-references | S90 | M | done |
 | F-281 | Indexes and tables of figures and authorities | S90 | L | done |
 | F-282 | Citations and bibliography authoring | S90 | L | in-progress |
-| F-283 | Complete numbering-aware navigation fields | S90 | L | pending |
+| F-283 | Complete numbering-aware navigation fields | S91 | L | pending |
 | F-284 | Stable container-wide template grammar | S91 | L | pending |
 | F-285 | Content control creation and lifecycle | S91 | L | pending |
 | F-286 | Rich, repeating, and typed content controls | S91 | L | pending |
@@ -743,6 +743,7 @@ regenerated, never hand-edited.
 | F-X187 | Scoped paragraph and cell text replacement | S90 | M | done |
 | F-X188 | Preserve comment ownership when replacing or removing whole stories | S90 | L | done |
 | F-X190 | Preserve cached text in multi-run complex field story snapshots | S90 | M | done |
+| F-X192 | Complete the remaining Word bibliography catalogue | S91 | L | pending |
 | F-X191 | Ignore namespace declarations in numbering reader completeness | S90 | S | in-progress |
 | F-X189 | Prepare Word 0.16.0 and PowerPoint 0.14.0 families | S90 | L | pending |
 <!-- AUTOGEN:backlog-MX END -->

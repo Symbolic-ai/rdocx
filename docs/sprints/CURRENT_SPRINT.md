@@ -4,10 +4,11 @@
 
 **Goal**: provide a complete field construction surface and deterministic
 field results across stories, then compose captions, cross-references, indexes,
-citations, and numbering-aware navigation. Build on S89's note and range
+bounded native citations and bibliography results. Build on S89's note and range
 contracts while preserving producer XML and saved field caches.
 Issue264 is excluded and Issue281 remains open. F-X178 is carried for separate work. F-282 covers
-the full pinned Word bibliography source, style and locale catalogue.
+the measured native source-authoring and formatter subset. F-X192 owns the
+remaining full catalogue work in S91. F-283 is carried to S91.
 
 ## Spec references
 
@@ -139,8 +140,8 @@ an existing fix. Exact integrated evidence and full issue acceptance remain
 required. The seven observed PR heads remain unchanged. Issue264 remains
 excluded.
 
-F-X188 owns exclusive wave15 after F-X187 and before full-catalogue F-282
-resumes. It completes every Issue288 criterion with the approved new design,
+F-X188 owns exclusive wave15 after F-X187 and before F-282
+resumes under its revised measured-subset contract. It completes every Issue288 criterion with the approved new design,
 retaining completed F-X184 protections. Issue289 is part of F-X185 acceptance.
 
 The user approved F-X189 to prepare Word0.16.0 and shared/PowerPoint0.14.0
@@ -165,7 +166,8 @@ excluded. All source, Cargo and shared test execution remains exclusive.
 
 S90 contribution intake is frozen by the user at PR293. Do not search for
 or add later issues or pull requests to this sprint. Finish the existing
-full-catalogue, navigation, numbering reader and release preparation scope.
+measured bibliography, numbering reader and release preparation scope.
+Remaining catalogue work and unfinished navigation move to S91.
 Issues264 and281 remain open.
 
 PR [293](https://github.com/tensorbee/rdocx/pull/293), contributed by Pedro
@@ -180,15 +182,22 @@ current archive policy rather than adopting contributor platform overrides.
 Issue264 remains excluded and Issue281 stays open. PR disposition waits for
 complete integrated acceptance at verified sprint close.
 
+The user moved remaining bibliography work to F-X192 in S91 and explicitly
+carried F-283 to S91 to publish completed S90 work. F-282 must satisfy its
+revised measured-subset design, actual admission and atomic refusal contracts,
+independent review and scoped gates. Its current 210-of-223 dense APA checkpoint
+is not full catalogue parity. F-X189 depends on completed revised F-282 and
+F-X191, not the carried S91 stories. Final integrated verification, sprint
+review, package checks and exact-SHA publication approval remain required.
+
 ## Definition of done for this sprint
 
 - Simple, complex and nested fields reopen with identical instruction semantics and ordered cached content.
 - Pagination field caches across body, headers, footers, notes and text boxes match the pinned Word page and section values.
 - Captions and cross-references match Word before and after insertion and renumbering.
 - Index, figure and authority tables retain the ordered entries and page targets produced by a pinned Word update.
-- Citation and bibliography identifiers, ordering, display text and package round trips match the pinned Word oracle.
-- One source-built multilevel numbered document stays consistent across visible markers, navigation, references and saved caches.
-- The integrated full verification and sprint review pass, including the source-built document's field caches, page targets and numbering checks. Any intentional hash delta is declared and reviewed.
+- Admitted citation and bibliography controls match pinned Word identifiers, ordering, rich display and package round trips. Unfinished standard refresh errors are atomic, while noncatalogue retention reports preserve caches. Full catalogue parity is deferred to F-X192.
+- The integrated full verification and sprint review pass over delivered scope, including source-built field caches and page targets. Any intentional hash delta is declared and reviewed.
 
 - Cell border precedence and table-cell break handling satisfy Issues 272 and 273 against the pinned Word oracle.
 

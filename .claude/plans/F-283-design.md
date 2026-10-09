@@ -1,9 +1,16 @@
 # F-283, Complete numbering-aware navigation fields
 
 **Status**: approved
-**Sprint**: S90
+**Sprint**: S91
 **Size**: L
 **Depends on**: F-248, F-279 through F-282
+
+## Scheduling
+
+The user explicitly carried this unfinished story from S90 to S91 so completed
+S90 work can release. No implementation is delivered by that scheduling change.
+Reuse the existing approved design and saved evidence after its prerequisites
+complete, with fresh evidence for the final source.
 
 ## Problem
 

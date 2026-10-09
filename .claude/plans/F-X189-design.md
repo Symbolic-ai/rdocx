@@ -3,7 +3,7 @@
 **Status**: approved
 **Sprint**: S90
 **Size**: L
-**Depends on**: F-278, F-279, F-280, F-281, F-282, F-283, F-X179, F-X180, F-X181, F-X182, F-X183, F-X184, F-X185, F-X186, F-X187, F-X188, F-X190, F-X191
+**Depends on**: F-278, F-279, F-280, F-281, F-282, F-X179, F-X180, F-X181, F-X182, F-X183, F-X184, F-X185, F-X186, F-X187, F-X188, F-X190, F-X191
 
 ## Problem
 
@@ -32,7 +32,9 @@ This approval does not replace either family's final publication approval.
 Design uses the run-sprint batch route. No unanswered scope question remains,
 but unfinished prerequisites still block implementation. Complete every
 listed dependency through its approved lifecycle before claiming exclusive
-wave18. In particular full-catalogue F-282 and dependent F-283 stay in scope.
+wave18. The user moved remaining bibliography catalogue work to F-X192 and
+carried F-283 to S91. F-282 must complete its revised measured-subset contract
+before preparation, without a full catalogue claim.
 Reviewed X180, X181 and X183 require dependency-prefix delivery reconciliation
 before this consumer starts. Source, Cargo, manifests, README measurements and
 HLD edits remain exclusive. The local preparation is completed before final
@@ -95,7 +97,8 @@ merged unchanged, count stacked work twice, attribute independently authored
 features to reporters, or claim spreadsheet implementation. Describe actual
 compatibility changes, including required public layout fields and reviewed
 rendering deltas, without asserting universal Word pixel parity. Final
-bibliography claims require the complete approved catalogue gate.
+bibliography claims state the reviewed F-282 admission boundaries. Remaining
+full catalogue parity belongs to F-X192 and navigation to carried F-283.
 
 Build current local Python wheels and source distributions, inspect exact
 metadata and install them into clean Python3.9 and3.12 environments. Run each

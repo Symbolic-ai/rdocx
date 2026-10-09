@@ -1984,7 +1984,7 @@ dependency order.
 
 **Goal**: provide a complete field construction surface and deterministic
 field results across stories, then compose captions, cross-references, indexes,
-citations, and numbering-aware navigation.
+bounded native citations and bibliography results.
 
 | F-ID | Title | Size |
 |------|-------|------|
@@ -1993,7 +1993,6 @@ citations, and numbering-aware navigation.
 | F-280 | Captions, sequences, and complete cross-references | M |
 | F-281 | Indexes and tables of figures and authorities | L |
 | F-282 | Citations and bibliography authoring | L |
-| F-283 | Complete numbering-aware navigation fields | L |
 | F-X178 | Clearable direct run formatting setters | S |
 | F-X179 | Correct multi-paragraph comment threads from PR 271 | S |
 | F-X180 | Correct cell nil and none border precedence | S |
@@ -2011,12 +2010,13 @@ citations, and numbering-aware navigation.
 
 F-278 is the field substrate. F-279 uses the S89 note policy, and F-280 uses
 S89 range markers. F-281 follows the field, pagination, and caption work.
-F-282 can proceed after F-278. F-283 closes the composed numbering and
-navigation result. The sprint gate checks one source-built document's field
-caches, page targets, and numbering against the pinned Word oracle.
+F-282 follows F-278 and delivers its revised measured-subset contract.
+F-283 carries the composed numbering and navigation result to S91. The S90
+gate checks delivered field caches and page targets against pinned Word controls.
 F-X178 is carried out of the S90 execution at the user's instruction to leave
 Issue 264 alone. Its backlog row remains pending for separate work. F-282
-covers the full pinned Word bibliography source, style and locale catalogue.
+covers the measured native source-authoring and formatter subset. F-X192 owns the
+remaining full catalogue work in S91. F-283 is carried to S91.
 
 F-X179 integrates PR 271 only after every Issue 270 criterion passes. It has
 no dependency and preserves Issue 264 and F-X178 for separate work.
@@ -2089,15 +2089,15 @@ snapshot correction runs in exclusive wave16 after F-X188 and before F-282 resum
 excluded. Assess updated stacked contributions selectively against complete
 issue acceptance before merging or closing any record.
 
-F-X188 owns exclusive wave15 after F-X187 and before full-catalogue F-282
-resumes. Its approved Issue288 contract completes the remaining replacement,
+F-X188 owns exclusive wave15 after F-X187 and before F-282
+resumes under its revised measured-subset contract. Its approved Issue288 contract completes the remaining replacement,
 glossary and shared-reference ownership work. Issue289 is part of F-X185.
 
 The user approved F-X189 for new Word0.16.0 and shared/PowerPoint0.14.0
 release preparation. Existing unified versions are published at S88 and their
 tags remain immutable. Run exclusive wave18 only after all included S90
-implementation dependencies complete, including full-catalogue F-282 and
-F-283 and F-X191. Prepare exact carriers, reviewed family notes and authenticated
+implementation dependencies complete, including the revised F-282 measured
+subset and F-X191. Prepare exact carriers, reviewed family notes and authenticated
 contribution inventories over each complete previous-tag range, including
 S89. Current local package/binding evidence precedes final integrated full
 verification and review. The final reviewed and pushed sprint SHA must pass
@@ -2109,7 +2109,8 @@ Issue264 remains excluded and Issue281 remains open for F-184.
 
 S90 contribution intake is frozen by the user at PR293. Do not search for
 or add later issues or pull requests to this sprint. Finish the existing
-full-catalogue, navigation, numbering reader and release preparation scope.
+measured bibliography, numbering reader and release preparation scope.
+Remaining catalogue work and unfinished navigation move to S91.
 Issues264 and281 remain open.
 
 PR [293](https://github.com/tensorbee/rdocx/pull/293), contributed by Pedro
@@ -2124,6 +2125,14 @@ current archive policy rather than adopting contributor platform overrides.
 Issue264 remains excluded and Issue281 stays open. PR disposition waits for
 complete integrated acceptance at verified sprint close.
 
+The user moved remaining bibliography work to F-X192 in S91 and explicitly
+carried F-283 to S91 to publish completed S90 work. F-282 must satisfy its
+revised measured-subset design, actual admission and atomic refusal contracts,
+independent review and scoped gates. Its current 210-of-223 dense APA checkpoint
+is not full catalogue parity. F-X189 depends on completed revised F-282 and
+F-X191, not the carried S91 stories. Final integrated verification, sprint
+review, package checks and exact-SHA publication approval remain required.
+
 #### Sprint S91, Templates, controls, and forms
 
 **Goal**: freeze the container-wide template grammar, create and bind content
@@ -2132,6 +2141,8 @@ state through public APIs.
 
 | F-ID | Title | Size |
 |------|-------|------|
+| F-X192 | Complete the remaining Word bibliography catalogue | L |
+| F-283 | Complete numbering-aware navigation fields | L |
 | F-284 | Stable container-wide template grammar | L |
 | F-285 | Content control creation and lifecycle | L |
 | F-286 | Rich, repeating, and typed content controls | L |
@@ -2139,6 +2150,12 @@ state through public APIs.
 | F-288 | Legacy form field creation | M |
 | F-289 | Modern Word form authoring | L |
 | F-290 | Mail-merge package and data-source authoring | M |
+
+F-X192 completes the bibliography catalogue deferred from S90 after the
+reviewed F-282 native foundation. F-283 carries unfinished numbering-aware
+navigation under its existing approved contract. Complete their actual
+prerequisites before claim. These additions do not imply S90 delivered full
+bibliography or navigation parity.
 
 F-284 builds on S89 fragment transactions. F-285 establishes the control
 lifecycle before F-286 and F-287 add typed values and bindings. F-288 uses the

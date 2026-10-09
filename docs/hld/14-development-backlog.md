@@ -2990,11 +2990,21 @@ cached entries, page ranges, leaders, links, and preserved formatting.
 and page targets as the pinned Word update.
 
 ### F-282, Citations and bibliography authoring (L)
-Create bibliography sources, citation fields, source styles, and bibliography
-results while preserving unsupported producer metadata and locale data.
+Create the native bibliography source and field-authoring foundation and the
+measured citation and bibliography formatter subset, preserving producer
+metadata, locale data and unavailable result caches with diagnostics. The user
+moved the remaining full Word catalogue work to F-X192 in S91 before S90
+publication. Document exact admitted inputs and verified output coverage,
+including the 210-of-223 dense APA development checkpoint, without claiming
+full catalogue parity. New formatting expansion belongs to F-X192.
 **Depends on**: F-278.
-**Test gate**: differential. A source-built citation set and bibliography match
-the pinned Word identifiers, ordering, display text, and round-trip package.
+**Test gate**: differential. Public source-built admitted citation and
+bibliography controls match pinned Word identifiers, ordering, rich display
+and package round trips. Outside the measured materialization boundary,
+inspection and authoring retain source data. Unfinished recognized standard
+branches fail the whole update atomically with an explicit error. Noncatalogue
+branches retain caches with report diagnostics. Atomicity and XML preservation
+gates remain mandatory.
 
 ### F-283, Complete numbering-aware navigation fields (L)
 Close all numbering interactions across TOC, STYLEREF, REF, PAGEREF, captions,
@@ -6623,6 +6633,54 @@ links, aliases, namespace shadows and retained source bytes. All49 hash
 entries remain unchanged. Record contributor provenance and full acceptance
 before sprint close.
 
+### F-X192, Complete the remaining Word bibliography catalogue (L)
+
+Complete the Word bibliography work explicitly deferred from S90 to S91 by the
+user. F-282 delivers the native source-authoring foundation and its measured
+formatter subset. This story owns the full pinned Word catalogue result
+contract, without claiming the existing subset establishes complete parity.
+
+Cover all seventeen schema source kinds, all twelve installed styles and all
+223 documented ordinary bibliography locale selectors, plus any independently
+established valid extensions. Retain the pinned style editions rather than
+substituting newer editions. At the S90 development checkpoint, 210 of 223
+dense APA locale grammars pass. Remaining selectors are1054,1105,1107,1108,
+1109,1111,1112,1113,1115,1121,2117,2128 and2145. Existing captures are supporting
+evidence. Completed own2117 and2145 controls and prepared Thai/Tibetan controls
+do not count as implemented consumers.
+
+Finish the remaining dense APA consumers, broader formatting across the other
+eleven styles, sparse and repeated source properties, personal and corporate
+contributors, multiple authors, missing author/date values and mixed scripts.
+Complete multiple-source and empty-selection bibliography behavior, grouped
+citations, locators, suppression, prefix/suffix, author/year disambiguation,
+source and field locale precedence, application-default context and filtering.
+Derive locale-aware sorting, numeric assignment and stable ties from
+independent Word discriminators. Partial ICU or Core Foundation matches do not
+establish the Word comparator. Do not invent an ASCII or en-US approximation.
+A new collation dependency requires an approved design revision and exact
+publication, MSRV, WASM, bundled-data, supply-chain and archive riders.
+
+Keep exact source identities, opaque XML, rich run and paragraph properties,
+IEEE table structure, physical field ownership and cache boundaries. Prove
+source mutation, repeat update, save/reopen and atomic refusal across supported
+stories. Equivalent namespace prefixes produce equal library results while
+preserving imported XML and documenting the measured Word discrepancy.
+Retain historical interrupted-update captures as cache-preservation evidence,
+and use actual completed update and normal reopen captures for output claims.
+Never generalize font coverage from a finite measured grapheme.
+
+**Depends on**: F-282.
+**Test gate**: differential. `full_bibliography_catalogue_matches_pinned_word`
+checks exact source identities, instructions, selection, ordering, readable
+text, rich properties and reopened packages across the complete independently
+observed catalogue. No catalogue row is skipped, mapped by assumed language
+alias or accepted from a cache fallback. All remaining branch and context
+controls pass. Unsupported producer extensions still preserve caches and
+metadata with diagnostics. Scoped verification, independent zero-finding
+review, unchanged or explicitly reviewed harness output and all earned risk
+riders are required before completion.
+
 ### F-X191, Ignore namespace declarations in numbering reader completeness (S)
 
 Resolve the native reader false positive contributed by Pedro Assumpcao
@@ -6661,7 +6719,7 @@ open roadmap disposition. Require current local package and binding evidence,
 then the final reviewed sprint's hosted build-only rehearsal before close.
 Publication follows sprint close through separate exact-SHA approvals under
 `/release`, shared family first where the Word dependency graph requires it.
-**Depends on**: F-278, F-279, F-280, F-281, F-282, F-283, F-X179, F-X180, F-X181, F-X182, F-X183, F-X184, F-X185, F-X186, F-X187, F-X188, F-X190, F-X191.
+**Depends on**: F-278, F-279, F-280, F-281, F-282, F-X179, F-X180, F-X181, F-X182, F-X183, F-X184, F-X185, F-X186, F-X187, F-X188, F-X190, F-X191.
 **Test gate**: release regression. `s90_release_families_match_reviewed_versions`
 in the existing workflow test module checks both exact family allowlists,
 version carriers and rendered notes. Actual22-package patched publication dry
