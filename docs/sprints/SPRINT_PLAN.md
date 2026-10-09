@@ -1993,7 +1993,6 @@ bounded native citations and bibliography results.
 | F-280 | Captions, sequences, and complete cross-references | M |
 | F-281 | Indexes and tables of figures and authorities | L |
 | F-282 | Citations and bibliography authoring | L |
-| F-X178 | Clearable direct run formatting setters | S |
 | F-X179 | Correct multi-paragraph comment threads from PR 271 | S |
 | F-X180 | Correct cell nil and none border precedence | S |
 | F-X181 | Ignore page and column breaks inside table cells | S |
@@ -2141,6 +2140,7 @@ state through public APIs.
 
 | F-ID | Title | Size |
 |------|-------|------|
+| F-X178 | Clearable direct run formatting setters | S |
 | F-X192 | Complete the remaining Word bibliography catalogue | L |
 | F-283 | Complete numbering-aware navigation fields | L |
 | F-284 | Stable container-wide template grammar | L |
@@ -2150,6 +2150,10 @@ state through public APIs.
 | F-288 | Legacy form field creation | M |
 | F-289 | Modern Word form authoring | L |
 | F-290 | Mail-merge package and data-source authoring | M |
+
+F-X178 is the explicit S90 carry for the user-excluded Issue264. Its next
+eligible planning target is S91. It remains pending and requires a separate
+scope decision before implementation, preserving the exclusion in S90.
 
 F-X192 completes the bibliography catalogue deferred from S90 after the
 reviewed F-282 native foundation. F-283 carries unfinished numbering-aware

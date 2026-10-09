@@ -731,7 +731,7 @@ regenerated, never hand-edited.
 | F-X175 | Refresh CLI archive evidence after release hardening | S87 | S | done |
 | F-X176 | Repair unified release inventory and respin PowerPoint | S88 | M | done |
 | F-X177 | Accept unified fontdb source features | S89 | S | done |
-| F-X178 | Clearable direct run formatting setters | S90 | S | pending |
+| F-X178 | Clearable direct run formatting setters | S91 | S | pending |
 | F-X179 | Correct multi-paragraph comment threads from PR 271 | S90 | S | done |
 | F-X180 | Correct cell nil and none border precedence | S90 | S | done |
 | F-X181 | Ignore page and column breaks inside table cells | S90 | S | done |
