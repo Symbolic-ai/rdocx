@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 24 | 0 | 30 |
-| X, Cross-cutting | 202 | 195 | 1 | 2 |
-| **Total** | **527** | **469** | **1** | **53** |
+| X, Cross-cutting | 202 | 196 | 0 | 2 |
+| **Total** | **527** | **470** | **0** | **53** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -745,5 +745,5 @@ regenerated, never hand-edited.
 | F-X190 | Preserve cached text in multi-run complex field story snapshots | S90 | M | done |
 | F-X192 | Complete the remaining Word bibliography catalogue | S91 | L | pending |
 | F-X191 | Ignore namespace declarations in numbering reader completeness | S90 | S | done |
-| F-X189 | Prepare Word 0.16.0 and PowerPoint 0.14.0 families | S90 | L | in-progress |
+| F-X189 | Prepare Word 0.16.0 and PowerPoint 0.14.0 families | S90 | L | done |
 <!-- AUTOGEN:backlog-MX END -->

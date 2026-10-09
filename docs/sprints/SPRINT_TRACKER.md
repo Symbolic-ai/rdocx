@@ -854,3 +854,5 @@ or changing the reviewed release boundary. Keep Issue281 open for F-184.
 | F-X191 | S90 | S | 1 | not recorded | 2026-10-09 | PR293 namespace-only numbering reader correction, ALL pass1 clean, native1825, all12 scoped stages passed, hash49 unchanged |
 
 | F-282 | S90 | L | 4 | not recorded | 2026-10-09 | Revised measured native bibliography contract, ALL pass4 clean, qualified native4160/all1340 APA and current layout320/Python178/CLI66, verified22 packages, hash49 unchanged. Full catalogue F-X192 and navigation F-283 in S91 |
+
+| F-X189 | S90 | L | 4 | not recorded | 2026-10-09 | Word0.16.0 and shared/PowerPoint0.14.0 local preparation, ALL pass3 clean, actual22crate archives, full native5708 and installed Word178/PPT77 per interpreter, WASM/npm/size and golden7 passed, hash49 match. Final HEAD review, hosted rehearsal, close and publication remain separate |

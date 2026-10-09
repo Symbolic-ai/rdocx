@@ -18645,3 +18645,75 @@ and unchanged source. Validated handoff9c9d8025 was consumed by integration
 sprint close, remove only its clean completed worktree. F-X189 is now unblocked.
 Issue264 is excluded and Issue281 remains open. No push, main merge, tag,
 GitHub closure or publication occurred.
+
+
+### F-X189, Prepare Word 0.16.0 and PowerPoint 0.14.0 families
+
+**Sprint.** S90
+**Completed.** 2026-10-09
+**Size.** L, estimated 4 days, actual not recorded
+
+**What was built.** Prepared the exact seven Word crates and Python distribution
+at 0.16.0 and fifteen shared OOXML/PowerPoint crates and Python distribution
+at 0.14.0. Internal pins, lockfile, current release assertions, README archive
+measurements, authenticated contributor inventory and both family release
+notes agree. Current Python wheels were built from retained source distributions
+and installed in isolated Python 3.9 and 3.12 environments. The existing
+rpptx-wasm npm 0.12.1 boundary is preserved.
+
+**Non-obvious choices.** Shared-family publication precedes Word because of
+its internal dependency pins. Preparation grants no tag or upload authority.
+Full bibliography catalogue work is F-X192 in S91, and F-283 is carried.
+The notes describe measured native formatting admission rather than full
+catalogue parity. Intake stops at PR293, Issue264 is excluded and Issue281
+remains open.
+
+**Deviations from the design plan.** Actual default-size executions exposed
+inherited test-only optimizer argument and official version identity omissions.
+The amended plan and independent ALL passes 2 and 3 review those bounded
+corrections. Production pipeline flags, pinned tools, wrappers and size limits
+are unchanged. Source-distribution lock pruning is authenticated against
+canonical identities and checksums, without canonical dependency changes.
+Preserved cache-path and missing offline consumer-source failures were recovered
+without source changes and are not reported as passes.
+
+**Spec sections touched.** HLD10 Packaging and CI, HLD14 F-X189, and HLD15
+Packaging, Publishing, Release process and CI job matrix.
+
+**Tests.** The named s90_release_families_match_reviewed_versions regression
+has genuine immutable-Base failure and current success. Independent ALL pass3
+reports zero defects and smells. Worker CodeHead400b3f1f and handoff tipf0fb4f7f
+were authenticated before integration769202b0. The actual integrated generic
+full gate passed at769202b0, with formatting and strict lint in oz2q3i3z and
+remaining commands in hmo1bqu5. Native suites have5708passes and58existing
+ignores, including all1340 APA prefix controls. Workflow tests have139passes
+and2existing registry skips. Rustdoc, README examples, no-default layout,
+dual WASM, policy checks and supply-chain checks passed.
+
+The actual locally patched22-package publication dry run passed without
+allow-dirty or upload. Final archive receipt0b7de36f binds324members and258
+current-source files, exact versions, clean769202 VCS metadata and matching
+verification-registry copies. All archives satisfy unchanged inventory policies
+and the10MiB limit. Installed Word runtime has178passes on each interpreter,
+strict mypy7files and stubtest6modules. PowerPoint has75normal plus2exact
+Cargo-oracle passes on each interpreter, strict mypy10files and stubtest9modules.
+Final receipts9df89453, de0636df and eaa2808e bind these actual integrated runs.
+WASM receipt63ec6acb has11successful stages, WordNode2tests, PPTNode1test,
+actual default-size1test at684723gzip bytes, both bundler builds and byte-equal
+local npm installs/imports. Golden receipt2304d0fb proves7page-one decoded
+pixel buffers match with pinned Poppler26.01.0 at150DPI.
+
+**Hash harness.** All49entries match. Preparation changes no output relative
+to its claimed integrated Base. Earlier separately labelled X182 and X183
+changes account for19events on14unique keys, with35untouched keys against
+sprint Base20888b7a. Golden and whole-source/member provenance were reauthenticated.
+
+**Notes for future sessions.** These are local preparation and integrated
+verification results, not publication. Ledger and review commits require a
+fresh final-HEAD full gate. Clean sprint review and the exact pushed-SHA
+build-only rehearsal, with12wheels and2sdists, remain before close. Manual
+rehearsal provides run/artifact provenance, not tag-only signed attestations or
+CLI assets. Close-sprint owns main and the sprint tag. Each release requires
+read-only closed-main preflight and its own immediate final approval. Retain
+work/f-x189-codex through close. Its consumed handoff and recorded integration
+allowed clean worktree removal without force. No release tag or upload occurred.
