@@ -35990,6 +35990,95 @@ mod tests {
     }
 
     #[test]
+    fn numbering_level_unknown_attributes_and_xml_remain_unmodeled_after_reopen() {
+        for owner in ["abstractNum", "lvl", "num"] {
+            for attribute in [
+                r#" producer:flag="kept""#,
+                r#" producer:xmlns="kept""#,
+                r#" xmlnsLike="kept""#,
+            ] {
+                let mut source = Document::new();
+                let num_id = source.add_list_definition(&[ListLevel::bullet()]);
+                let definition_id = source.numbering.as_ref().unwrap().nums[0].abstract_num_id;
+                let xml = format!(
+                    r#"<w:numbering xmlns:w="{WORD_NAMESPACE}"><w:abstractNum w:abstractNumId="{definition_id}" xmlns:producer="urn:producer"{}><w:lvl w:ilvl="0" xmlns:producer="urn:producer"{}><w:numFmt w:val="bullet"/><producer:fact producer:flag="kept"/></w:lvl></w:abstractNum><w:num w:numId="{num_id}" xmlns:producer="urn:producer"{}><w:abstractNumId w:val="{definition_id}"/></w:num></w:numbering>"#,
+                    if owner == "abstractNum" {
+                        attribute
+                    } else {
+                        ""
+                    },
+                    if owner == "lvl" { attribute } else { "" },
+                    if owner == "num" { attribute } else { "" },
+                );
+                let bytes = replace_numbering_xml(&mut source, xml.into_bytes());
+                let mut imported = Document::from_bytes(&bytes).unwrap();
+                // Check the attribute independently of the retained child.
+                let raw_children = std::mem::take(
+                    &mut imported.numbering.as_mut().unwrap().abstract_nums[0].levels[0].extra_xml,
+                );
+                assert!(
+                    imported
+                        .numbering_level(num_id, 0)
+                        .unwrap()
+                        .has_unmodeled_properties
+                );
+                imported.numbering.as_mut().unwrap().abstract_nums[0].levels[0].extra_xml =
+                    raw_children.clone();
+                let saved = imported.to_bytes().unwrap();
+                let reopened = Document::from_bytes(&saved).unwrap();
+                assert!(
+                    reopened
+                        .numbering_level(num_id, 0)
+                        .unwrap()
+                        .has_unmodeled_properties
+                );
+                let before = imported.numbering.as_ref().unwrap();
+                let after = reopened.numbering.as_ref().unwrap();
+                assert_eq!(
+                    before.abstract_nums[0].extra_attributes,
+                    after.abstract_nums[0].extra_attributes
+                );
+                assert_eq!(
+                    before.abstract_nums[0].levels[0].extra_attributes,
+                    after.abstract_nums[0].levels[0].extra_attributes
+                );
+                assert_eq!(
+                    before.nums[0].extra_attributes,
+                    after.nums[0].extra_attributes
+                );
+                assert_eq!(raw_children, after.abstract_nums[0].levels[0].extra_xml);
+            }
+        }
+
+        let mut source = Document::new();
+        let num_id = source.add_list_definition(&[ListLevel::bullet()]);
+        let definition_id = source.numbering.as_ref().unwrap().nums[0].abstract_num_id;
+        let xml = format!(
+            r#"<w:numbering xmlns:w="{WORD_NAMESPACE}" xmlns:q="{WORD_NAMESPACE}"><w:abstractNum w:abstractNumId="{definition_id}"><w:lvl w:ilvl="0" xmlns:q="urn:foreign" q:ilvl="7"><w:numFmt w:val="bullet"/></w:lvl></w:abstractNum><w:num w:numId="{num_id}"><w:abstractNumId w:val="{definition_id}"/></w:num></w:numbering>"#
+        );
+        let bytes = replace_numbering_xml(&mut source, xml.into_bytes());
+        let mut imported = Document::from_bytes(&bytes).unwrap();
+        assert!(
+            imported
+                .numbering_level(num_id, 0)
+                .unwrap()
+                .has_unmodeled_properties
+        );
+        let saved = imported.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&saved).unwrap();
+        assert!(
+            reopened
+                .numbering_level(num_id, 0)
+                .unwrap()
+                .has_unmodeled_properties
+        );
+        assert_eq!(
+            imported.numbering.as_ref().unwrap().abstract_nums[0].levels[0].extra_attributes,
+            reopened.numbering.as_ref().unwrap().abstract_nums[0].levels[0].extra_attributes,
+        );
+    }
+
+    #[test]
     fn numbering_level_unmodeled_fact_contract_is_limited_to_extras() {
         let mut doc = Document::new();
         let modeled_and_raw_overlay_id = doc.add_list_definition(&[ListLevel::decimal()]);
