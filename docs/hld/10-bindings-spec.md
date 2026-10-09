@@ -116,7 +116,9 @@ merge state, and unmodelled-content flags. `NumberingFormat`,
 `ListLevelSuffix`, `NumberingLevel`, `DrawingKind`,
 `DrawingRelationshipKind`, `FieldKind`, and `FieldDisplaySegmentRef` are
 concrete native Rust values. Python, WASM, and CLI surfaces do not gain these
-reader methods.
+reader methods. The native numbering level reader reports actual extra
+attributes and children on its instance, definition and level. Retained XML
+namespace declarations alone do not signal unmodeled numbering semantics.
 
 At the public low-level Rust boundary, `CT_RPr` includes the complete language
 attribute set and its retained foreign attributes, while `LayoutInput` includes
@@ -839,7 +841,12 @@ one exact style, `numId`, and level tuple. Python binds definition and instance
 creation and the style link, as described for the Python `Document`. WASM and
 CLI bindings gain no numbering graph authoring surface.
 `ListNumberFormat::from_name` reads a `w:numFmt` name, and a name outside the
-standard set is `Other`.
+standard set is `Other`. `Document::numbering_level` retains namespace
+declarations without counting them in `has_unmodeled_properties`. Real extra
+attributes and children remain reported. Modeled producer metadata and raw
+property or typed-leaf preservation overlays keep their existing reader
+behavior. The richer numbering authoring completeness checks retain their
+separate admission contract.
 
 F-248 also adds public fields to the pre-1.0 native Rust projections.
 `ResolvedNumbering` exposes `number_current`, `number_level`,

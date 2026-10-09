@@ -1,6 +1,6 @@
 # F-X191, Ignore namespace declarations in numbering reader completeness
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S90
 **Size**: S
 **Depends on**: none
@@ -136,12 +136,16 @@ Any unexplained delta blocks completion. No baseline write is planned.
 
 - [x] Register exact SizeS/no-dependency/regression story and approve the design.
 - [x] Add F-X191 as a formal F-X189 prerequisite in wave17 before wave18 preparation.
-- [ ] Record exact claimed Base and genuine compiled twelve-case before failure.
-- [ ] Adopt only the local reader predicate/docs and focused existing-entrypoint tests with contributor provenance.
-- [ ] Verify all namespace, foreign attribute, rebound alias, raw child and compatibility controls.
-- [ ] Reconcile current archive evidence without upstream platform override or stale values.
-- [ ] Complete HLD10 current intent, scoped/risk gates and independent zero-ALL microscope.
-- [ ] Prepare and integrate through the normal lifecycle before release preparation.
+- [x] Record exact claimed Base and genuine compiled twelve-case before failure.
+- [x] Adopt only the local reader predicate/docs and focused existing-entrypoint tests with contributor provenance.
+- [x] Verify all namespace, foreign attribute, rebound alias, raw child and compatibility controls.
+- [x] Reconcile current archive evidence without upstream platform override or stale values.
+- [x] Complete HLD10 current intent, scoped/risk gates and independent zero-ALL microscope.
+- [x] Prepare the normal worker handoff for integration before release preparation.
+
+Integration and shared delivery totals remain owned by the integrator. The
+worker completion state records the reviewed source, passed scoped gates and
+validated handoff, without claiming that integration has happened.
 
 ## Open questions
 
