@@ -852,3 +852,5 @@ or changing the reviewed release boundary. Keep Issue281 open for F-184.
 | F-X190 | S90 | M | 2 | not recorded | 2026-10-09 | Issue291 existing snapshot repair, ALL pass2 clean after measured namespace lifetime correction, native1822/Python105, hash49 unchanged |
 
 | F-X191 | S90 | S | 1 | not recorded | 2026-10-09 | PR293 namespace-only numbering reader correction, ALL pass1 clean, native1825, all12 scoped stages passed, hash49 unchanged |
+
+| F-282 | S90 | L | 4 | not recorded | 2026-10-09 | Revised measured native bibliography contract, ALL pass4 clean, qualified native4160/all1340 APA and current layout320/Python178/CLI66, verified22 packages, hash49 unchanged. Full catalogue F-X192 and navigation F-283 in S91 |

@@ -18571,3 +18571,77 @@ completed worktree. F-X191 completes the release prerequisite, while revised
 F-282 is still in progress. Remaining bibliography is F-X192 in S91 and
 F-283 is carried. Issue264 is excluded and Issue281 remains open. No GitHub
 closure, push, release tag or publication occurred.
+
+
+### F-282, Citations and bibliography authoring
+
+**Sprint.** S90
+**Completed.** 2026-10-09
+**Size.** L, estimated 4 days, actual effort not recorded.
+
+**What was built.** Native Rust source inspection and checked CRUD, document
+style/options, citation and bibliography insertion, and staged cache updates.
+Metadata retains seventeen source kinds, sixteen contributor roles and twelve
+styles. Formatting is explicitly partial:210 of223 measured dense APA locale
+configurations, with separate earned sparse and rich controls, and lean
+numeric1033 Book inputs for the eleven other bibliography styles. Citation
+admissions remain separate. Dedicated bibliography Python/WASM APIs are absent.
+
+**Non-obvious choices.** Recognized unfinished standard formatting aborts the
+whole refresh atomically. Noncatalogue paths retain complete caches with report
+diagnostics. Source LCID precedes field selectors and an actual caller-supplied
+default, with no guessed en-US fallback. Non-ASCII collection sorting refuses.
+Producer XML, qualified source identities and physical paragraph/table cache
+ownership remain preserved. Unknown Word attributes refuse destructive property
+replacement, and legal closing QName whitespace survives source edits. The
+existing concrete layout font resolver is shared without algorithm changes.
+
+**Deviations from the design plan.** The user deferred remaining full catalogue
+work to F-X192 in S91 and carried F-283 there. The revised approved measured
+contract is complete, without a full catalogue claim or weakened oracle tests.
+Total effort was not measured.
+
+**Spec sections touched.** Exactly HLD02,03,04,10,12,14 and15. All integrated
+feature files equal the prepared worker. The independent canonical F-X189 plan
+was retained. Integration had no conflict or semantic reconciliation.
+
+**Tests.** The actual named1094 full-seventeen-kind differential has a genuine
+earlier compiled formatter-refusal control, retained GGO receipt3bd0f8be. It is
+an API-capable formatter checkpoint, not a missing-API failure against original
+claim Base. D1/D2 have compiled original-production failures and repaired passes.
+The mixed eligible/unfinished transaction proves complete package, cache, source
+and held-location rollback. Its corrected original-production pass is existing
+behavior proof, not a new production defect. Independent ALL pass4 is clean,
+with earlier source/OOXML and post-rustdoc passes retained.
+
+Root authenticated green binder34c3da14,27 retained current files,65 evidence
+bindings and21 successful gate rows. Pinned native4160 passes with21 existing
+ignores include all1340 unique APA controls without ignores. This execution
+precedes the two-bracket rustdoc-only correction and retains that source
+qualification. Current layout319 plus its doctest and actual1094 pass. Strict
+affected lint, fmt, workspace rustdoc, no-default shared layout and dualWASM
+pass. README27/22, full workflow140 with two existing skips, fresh Python178,
+strict mypy six files and recursive stubtest six modules pass. Inherited CLI/Py
+strict lint and CLI3 unit/63 integration pass. Stale-target, host-Poppler,
+rustdoc, workflow expectation and duplicate stub discovery failures remain
+qualified in retained records. No test or assertion was removed for acceptance.
+
+Actual verified22-package dry run passed with all local dependency patches.
+Root independently authenticated324 archive members and258 current source
+bindings. Word archive892855f9 is3524406 compressed bytes,50763043 normalized
+member bytes and37 members. Layoutc59c3d80 is311021/1681790/15. OXML4b673322 is
+451818/2806194/32, within the unchanged64-byte compression policy. Every archive
+is below10MiB. The actual rebuilt extension693e9914 at86849128 bytes is retained
+verbatim outside the removable worktree. No upload occurred.
+
+**Hash harness.** All49 scoped entries unchanged. No baseline movement. Final
+integrated full verification and sprint review remain due.
+
+**Notes for future sessions.** Immutable claim Base70e0b11f, reconciled prefix
+5a442f1f, CodeHeada8d85dfb and handoff-only tipb7d51e36 retain exact provenance.
+Prepare receiptc838fd10 authenticates status/checklist-only completion metadata
+and unchanged source. Validated handoff9c9d8025 was consumed by integration
+5de50f6a. No crates change followed CodeHead. Keep the worker branch through
+sprint close, remove only its clean completed worktree. F-X189 is now unblocked.
+Issue264 is excluded and Issue281 remains open. No push, main merge, tag,
+GitHub closure or publication occurred.
