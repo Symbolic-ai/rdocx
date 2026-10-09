@@ -18514,3 +18514,60 @@ CodeHead, with no conflict or semantic reconciliation. Keep the worker branch
 through sprint close. Resume F-282 only against this integrated prefix and
 preserve both text.rs and field.rs changes. Issue281 remains open and Issue264
 excluded. No GitHub closure, push, release tag or publication occurred.
+
+### F-X191, Ignore namespace declarations in numbering reader completeness
+
+**Sprint.** S90
+**Completed.** 2026-10-09
+**Size.** S, estimated 1 day, actual effort not recorded.
+
+**What was built.** The native numbering level reader retains XML namespace
+declarations without counting them as unmodeled numbering semantics. Actual
+extra attributes and children on instances, definitions and levels remain
+flagged. This adapts Pedro Assumpcao (`pedroassumpcao`)'s
+[PR293](https://github.com/tensorbee/rdocx/pull/293) at upstream headfd112a7a.
+No parser, serialization, richer authoring admission or binding API changes.
+
+**Non-obvious choices.** Only exact xmlns and xmlns: lexical declaration
+names are excluded. Producer lookalikes and Word-looking aliases rebound to
+foreign namespaces remain flagged. Existing extra XML predicates remain
+unchanged. Contributor archive platform overrides and stale measurements were
+excluded. The actual local archive was measured through existing policy.
+
+**Deviations from the design plan.** None. Total effort was not measured.
+
+**Spec sections touched.** Exactly HLD10, supporting decisions and native
+Word facade stability. All four integrated scoped inputs exactly match the
+reviewed worker. Integration had no conflicts or semantic reconciliation.
+
+**Tests.** Exact claim Base production plus the named regression compiled
+and failed across twelve declaration and owner combinations, collecting both
+imported and reopened results. Seven focused controls pass after repair,
+including actual producer attributes, foreign rebound aliases, opaque children
+on all three owners and existing completeness contracts. Independent ALL pass1
+has zero defects, smells and nitpicks.
+
+Final scoped receipt abbd3219 records all12 successful stages in1813 seconds.
+Native515unit,364integration,944regression and2doctests pass,1825 total with22
+existing ignored. Affected denied-warning Clippy, all-target checks, fmt,
+workspace rustdoc, README examples and inventory, locally patched22-package
+publication dry run, workflow140 with two existing skips, prose0 and26
+adapters pass. Root authenticated all4 current source bindings and12 logs,
+then final binder0d9a05ad with8 source/completion records,21 evidence records
+and their retained copies. The retained actual dry-run archive29720f3a has
+1583631 compressed bytes,8813125 normalized member bytes and36members.
+All25 archived source/test members match current reviewed source. The one-byte
+compressed difference is within the unchanged64-byte tolerance. All22
+publishable archives are below10MiB. No upload occurred.
+
+**Hash harness.** All49 entries unchanged in the worker. No baseline movement.
+Final full integrated sprint verification and sprint review remain due.
+
+**Notes for future sessions.** Claim Base49249290, CodeHeade5a4d72e,
+handoff-only tipe24746e6 and integration97c5ae65 retain exact provenance.
+Validated handoffd0b6d028 was consumed. No crates changes followed CodeHead.
+Keep the worker branch through sprint close and remove only its clean
+completed worktree. F-X191 completes the release prerequisite, while revised
+F-282 is still in progress. Remaining bibliography is F-X192 in S91 and
+F-283 is carried. Issue264 is excluded and Issue281 remains open. No GitHub
+closure, push, release tag or publication occurred.

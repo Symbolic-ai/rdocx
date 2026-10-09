@@ -850,3 +850,5 @@ or changing the reviewed release boundary. Keep Issue281 open for F-184.
 | F-X183 | S90 | M | 2 | not recorded | 2026-10-09 | Issues276/278 bounded legacy/default policies,600cases and accepted-empty-row proof, ALL pass2 plus three DELTA reviews,14 changed keys, qualified combined regression receipts |
 
 | F-X190 | S90 | M | 2 | not recorded | 2026-10-09 | Issue291 existing snapshot repair, ALL pass2 clean after measured namespace lifetime correction, native1822/Python105, hash49 unchanged |
+
+| F-X191 | S90 | S | 1 | not recorded | 2026-10-09 | PR293 namespace-only numbering reader correction, ALL pass1 clean, native1825, all12 scoped stages passed, hash49 unchanged |

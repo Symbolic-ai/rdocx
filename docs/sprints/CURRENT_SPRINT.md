@@ -41,7 +41,7 @@ remaining full catalogue work in S91. F-283 is carried to S91.
 | F-X187 | Scoped paragraph and cell text replacement | M | done | - |
 | F-X188 | Preserve comment ownership when replacing or removing whole stories | L | done | - |
 | F-X190 | Preserve cached text in multi-run complex field story snapshots | M | done | - |
-| F-X191 | Ignore namespace declarations in numbering reader completeness | S | in-progress | codex |
+| F-X191 | Ignore namespace declarations in numbering reader completeness | S | done | - |
 | F-X189 | Prepare Word 0.16.0 and PowerPoint 0.14.0 families | L | pending | - |
 
 ## Sequencing note
