@@ -1,6 +1,6 @@
 # F-282, Citations and bibliography authoring
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S90
 **Size**: L
 **Depends on**: F-278
@@ -106,16 +106,24 @@ trait, generic, wrapper, runtime flag, crate or production file is introduced.
 
 ## Test plan
 
-**Test gate**: differential. Public source-built admitted citation and
-bibliography controls match pinned Word identities, ordering, readable text,
-rich output and source/package round trips. Full catalogue parity is F-X192's
-gate, not a renamed or weakened S90 assertion.
+**Test gate**: differential.
+`bibliography_apa_rich_gurmukhi_gujarati_odia_1094_full_seventeen_kind_owner_matches_word`
+is the named executable gate in the existing regression entrypoint. Public source-built
+admitted citation and bibliography controls match pinned Word identities,
+ordering, readable text, rich output and source/package round trips. All1340
+existing `bibliography_apa_` controls, including
+`bibliography_apa_mixed_seventeen_kind_collection_matches_actual_word`, and the
+admitted non-APA controls remain
+mandatory supporting evidence. Full catalogue parity is F-X192's gate, not a
+renamed or weakened S90 assertion. The historical start-contract smoke test
+`full_bibliography_catalogue_matches_pinned_word` checks source authoring only
+and does not certify formatter catalogue parity or this release boundary.
 
 | Category | Gate | Asserts |
 |---|---|---|
 | differential | current measured APA locale/source controls | All existing 1340 APA tests plus their exact current source-bound oracles, including full17 owners and source scripts. No unilateral skips or ignored obligations |
 | differential | admitted non-APA Book and citation controls | Actual style-specific grammar, selection, numeric assignment, modifiers and rich structure against independently earned outputs |
-| regression | mixed supported and unfinished standard refresh | Whole update errors atomically, preserving every cache, source part, package byte and document revision |
+| regression | `bibliography_unfinished_later_owner_rolls_back_eligible_refresh` | Whole update errors atomically, preserving every cache, source part, package byte and document revision |
 | regression | noncatalogue and protected owner handling | Retained owner/report diagnostics remain distinct from recognized unfinished errors |
 | round-trip | source metadata and physical cache preservation | Qualified XML, unmodeled data, IDs, relationships, first/interior boundaries, historical raw cache domains and no-op source replacement |
 | integration | native public source and field transactions | Create/read/replace/remove/options/insertion/update across supported physical stories, explicit defaults, dangling references and atomic refusal |
@@ -130,6 +138,13 @@ No PDF or full renderer parity is inferred from cache text/properties.
 Stable development receipt is
 `/private/tmp/S90-F282-resume-20261009/rich-gurmukhi-gujarati-odia-checkpoint-receipt.json`,
 SHA2563bd0f8be5be9c81c959c1fdefeae5e35a4d940b193cfeb57490b8569e58929a3.
+The named1094 gate genuinely fails in that receipt's compiled before log
+against retained formatter source e821236591d914fa149034de5b65ef2d1e6ccfe5ba90d792870d2131da481ee4
+and retained compiled test source257f28b1c14e932ce9694875c36d2bd95fa161d853596102f7240d7af6847e04.
+That qualified earlier formatter checkpoint already exposes the native APIs,
+so this is a runtime grammar refusal, not a missing-API compilation failure
+or a claimed test of immutable claim Base. The current1340 suite includes the
+same exact named gate and must pass on the reconciled delivery prefix.
 Its 46 bindings and the authored-source backup manifest
 c5bcdb8c341a460bad86264eed393f057948ff56b55549cfed8456e4d9a871a8 were
 independently checked. These are development receipts, not the final scoped or
@@ -243,12 +258,12 @@ or updates. All49 entries must match. No baseline movement is allocated.
 
 - [x] Complete F-278 foundation and preserve the current authored checkpoint.
 - [x] Record explicit user deferral to F-X192 and carry F-283 to S91.
-- [ ] Reconcile the F-X191 integrated prefix and revised plan into the worker.
-- [ ] Review actual admissions and document the precise bounded public behavior.
-- [ ] Remediate only review/gate defects under this contract, retaining existing assertions.
-- [ ] Update all seven named HLD targets to current intent.
-- [ ] Pass current scoped/differential/compatibility/package/hash riders.
-- [ ] Earn independent zero-finding ALL microscope and validated handoff.
+- [x] Reconcile the F-X191 integrated prefix and revised plan into the worker.
+- [x] Review actual admissions and document the precise bounded public behavior.
+- [x] Remediate only review/gate defects under this contract, retaining existing assertions.
+- [x] Update all seven named HLD targets to current intent.
+- [x] Pass current scoped/differential/compatibility/package/hash riders.
+- [x] Earn independent zero-finding ALL microscope and validated handoff.
 
 ## Open questions
 

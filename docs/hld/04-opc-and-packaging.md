@@ -3,6 +3,24 @@
 Owner: `oxml-opc`, with media naming in `oxml-media`.
 
 ## The package
+Bibliography source transactions resolve the qualified source collection
+through the document-owned custom XML graph. Source identity, GUID, relationship
+owner and schema particle checks precede publication. Unmodeled members,
+namespace scopes, repeated producer values, raw LCID and RefOrder occurrences
+and unrelated package parts remain preserved. Duplicate or ambiguous identities,
+malformed graphs, referenced deletion and stale paths refuse atomically.
+No-op source replacement retains identical source bytes.
+
+Citation and bibliography cache updates use a staged package and only publish
+after every eligible owner succeeds. One recognized unfinished standard branch
+aborts the whole update, including earlier candidate edits. Noncatalogue paths
+retain their complete cache with report diagnostics. Locked fields and protected
+producer topologies keep their own retained or refusal boundary. Simple fields
+expand only when their qualified owner and producer attributes are proved.
+Structured results preserve physical begin/separate/end spans, outside content,
+first/interior paragraph context and IEEE label/cell/grid ownership.
+Ordinary save does not refresh these caches or rewrite source metadata.
+
 
 Generated-table edits stage source targets and provisional cache paragraphs
 in one candidate. Only the owned separator-to-end cache span is replaced.

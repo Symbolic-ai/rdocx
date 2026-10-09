@@ -7820,8 +7820,11 @@ Pedro Assumpcao and the rdocx maintainers.
                 # F-281 completes generated indexes, figures and authorities.
                 # Unmeasured collation owners retain their complete caches.
                 281,
+                # F-282 delivers the bounded native foundation in S90.
+                # F-X192 owns the remaining DOCX-049 catalogue in S91.
+                282,
             }
-        }
+        } | {"F-X192"}
         self.assertEqual(
             {row["Owner"] for row in rows if row["Owner"] != "-"},
             expected_owners,
@@ -7831,7 +7834,7 @@ Pedro Assumpcao and the rdocx maintainers.
             owner = row["Owner"]
             with self.subTest(capability=capability_id):
                 if row["Classification"] in incomplete:
-                    self.assertRegex(owner, r"^F-\d{3}$")
+                    self.assertRegex(owner, r"^F-(?:X)?\d{3}$")
                     self.assertIn(owner, status_rows)
                     self.assertIn(status_rows[owner], {"pending", "in-progress"})
                     if row["Evidence"].startswith("boundary:F-"):
@@ -8054,6 +8057,7 @@ Pedro Assumpcao and the rdocx maintainers.
         self.assertLessEqual(set(oxml_family.values()), matrix_families)
 
         facade_family = {
+            "bibliography": "fields",
             "building_block": "stories",
             "comments": "collaboration",
             "comparison": "collaboration",

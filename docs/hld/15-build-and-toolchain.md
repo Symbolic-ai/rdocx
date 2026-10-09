@@ -257,6 +257,23 @@ versions pass the repository license and advisory policy, compile for the WASM
 target graph, and do not add a format-family dependency edge.
 
 ## Packaging
+The native bibliography module is ordinary `rdocx` source and belongs in its
+published source archive. Bound Word inputs, UI receipts, native output graphs
+and other external oracle artifacts stay in ignored storage, outside crate
+archives. Bibliography introduces no collation dependency or data bundle.
+Future dependency additions belong to the separately approved F-X192 contract.
+The public layout font resolver retains its existing concrete algorithm and
+requires already-cascaded properties, with both layout and bibliography
+consumers covered by their scoped checks.
+
+Current source archives must pass verified package dry runs, archived source
+and test membership checks, README footprint checks and the crates.io10MiB
+limit. The shared Rust diff retains MSRV, WASM, hash and existing Python
+runtime/typing compatibility gates. These checks do not claim dedicated
+bibliography Python or WASM APIs. Feature preparation is not publication.
+Release family verification and the separate approval at the reviewed SHA
+remain required through the release workflow.
+
 
 `oxml-layout` packages its source and bundled font assets through an explicit
 manifest inventory:

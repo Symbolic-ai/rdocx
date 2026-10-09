@@ -3007,7 +3007,8 @@ branches retain caches with report diagnostics. Atomicity and XML preservation
 gates remain mandatory.
 
 ### F-283, Complete numbering-aware navigation fields (L)
-Close all numbering interactions across TOC, STYLEREF, REF, PAGEREF, captions,
+Schedule this unfinished story in S91. Close all numbering interactions across
+TOC, STYLEREF, REF, PAGEREF, captions,
 and document outline results, including table-cell headings and suppressed
 paragraphs.
 **Depends on**: F-248, F-279 through F-282.

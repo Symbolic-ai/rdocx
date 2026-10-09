@@ -413,6 +413,32 @@ PowerPoint edge. The all-target tree admits this test-only edge and retains the
 rule that no `oxml-*` crate depends on either facade family.
 
 ## What stays put
+Bibliography source authoring and formatting stay in the native
+`rdocx::bibliography` module. It owns qualified custom XML source inspection,
+checked source CRUD, document style/options and concrete measured citation and
+bibliography consumers. `rdocx::field` owns physical field discovery, recursive
+instruction spans, result replacement and structured paragraph/table cache
+boundaries. The facade stages a complete document and publishes only after
+source graph and output preparation succeed. An unfinished standard formatter
+aborts that transaction. Noncatalogue paths retain the owner with diagnostics.
+Normal save preserves caches and does not invoke this materializer.
+
+Source kind, contributor role and style metadata do not imply formatter parity.
+APA has 210 earned ordinary dense locale configurations with separately measured
+sparse, source-script and rich operations. Other bibliography styles retain
+lean numeric1033 Book admissions. Citation consumers remain separate. Actual
+source LCID, field locale and explicit application default select existing
+consumers without an en-US fallback. Multi-source non-ASCII sort keys refuse.
+The remaining catalogue and Word comparator are F-X192 backlog work, with no
+new collation dependency in this boundary.
+
+The bibliography table-width caller shares `rdocx_layout::engine::resolve_font_family`
+with the existing layout callers. Its public inputs must already contain the
+effective cascaded run properties. Font-slot and theme resolution retain the
+same concrete algorithm and deterministic font manager. Rich bibliography
+runs carry the measured font, language, script, italic and direction facts.
+They do not introduce a general Unicode font-coverage classifier.
+
 
 Generated-table source discovery and rebuilding stay in `rdocx::field`.
 Concrete XE and TA markers, INDEX, caption-selected TOC and numbered TOA options

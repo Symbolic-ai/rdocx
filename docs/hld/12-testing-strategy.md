@@ -1934,6 +1934,36 @@ Required-corpus mode fails closed on missing artifacts, hashes, provenance,
 sample identity, dimensions, normalization provenance, or case coverage.
 
 ## The Word corpus
+The measured bibliography gate uses source-built controls against Microsoft
+Word for Mac16.113.2 build16.113.26092012. Its current APA acceptance set retains
+all 1340 earned tests without skipped or ignored obligations. The 210-of-223
+dense locale count is a grammar coverage measure, not arbitrary input parity.
+Non-APA lean Book and citation controls assert their own admitted boundaries.
+Source CRUD, options, insertion and staged updates preserve qualified source
+XML, unrelated parts, exact instructions and source identities. Mixed eligible
+and unfinished standard fields must prove whole-operation atomic error behavior,
+including caches, package bytes and revisions. Noncatalogue retention reports,
+locks and protected physical owners remain separate controls.
+
+Rich result assertions retain exact run properties, paragraph context, IEEE
+table structure and physical separator/end boundaries. Actual completed F9 and
+normal no-F9 reopen owners are the formatting authority. Interrupted recovered
+caches remain separate no-update preservation evidence. The exact seventeen
+original pagination comparison registry pairs and the individually proved
+1125 and1093 BookSection pairs may join only their bound adjacent equal-property
+runs after raw marker, attributes, child shapes, text, spaces and offsets pass.
+Immutable raw expectations and unprojected paragraph properties remain beside
+those finite comparisons. No general coalescing, font stripping, synthetic
+pagination marker or renderer parity follows from this projection.
+
+Shared scanner tests preserve accepted/raw comment and PI behavior, selected
+fragment/comment ownership and namespace-lifetime complex-field snapshots.
+Hash output remains unchanged for all49 entries. Scoped native, package,
+Python runtime/typing compatibility and WASM checks cover the actual diff
+without implying dedicated bibliography bindings. Remaining catalogue rows,
+contexts and comparator behavior are F-X192 acceptance work, not a fallback
+cache or a weakened version of its full catalogue gate.
+
 
 The cross-story range gate source-builds all eight supported story owners and
 block content controls inside related owners. It adds bookmark, comment,

@@ -21,6 +21,7 @@
 
 #![allow(clippy::too_many_arguments)]
 
+mod bibliography;
 mod building_block;
 mod comments;
 mod comparison;
@@ -44,6 +45,12 @@ mod svg;
 pub mod table;
 mod template;
 
+pub use bibliography::{
+    BibliographyAuthor, BibliographyContributor, BibliographyContributorRole, BibliographyOptions,
+    BibliographyPerson, BibliographyProperty, BibliographySource, BibliographySourceField,
+    BibliographySourceInfo, BibliographySourceKind, BibliographyStyle, BibliographyStyleInfo,
+    BibliographyUpdateReport, CitationOptions, CitationSourceOptions,
+};
 pub use building_block::{BuildingBlock, BuildingBlockInfo, BuildingBlockKind};
 pub use comments::{
     BookmarkRef, CommentRef, RunPosition, RunRange, StoryRangeKind, StoryRangeRef,

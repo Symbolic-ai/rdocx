@@ -796,6 +796,35 @@ native validation failure publishes no candidate and leaves existing handles
 valid.
 
 ## Native Word facade stability
+Native Rust exposes `BibliographySourceKind`, `BibliographyContributorRole`,
+`BibliographySourceField`, `BibliographyStyle`, source/person/contributor/property
+records, source/style inspection records, `CitationOptions`,
+`CitationSourceOptions`, `BibliographyOptions` and `BibliographyUpdateReport`.
+`Document::bibliography_sources`, `add_bibliography_source`,
+`replace_bibliography_source` and `remove_bibliography_source` inspect and mutate
+qualified source records. `bibliography_style`, `set_bibliography_options`,
+`insert_citation` and `insert_bibliography` provide checked native authoring.
+`update_bibliography` and `update_bibliography_with_default_locale` explicitly
+materialize admitted caches through one staged transaction.
+
+Metadata models all seventeen source kinds, sixteen roles and twelve style
+identities. Formatting coverage is separate. APA's 210 measured ordinary dense
+locale configurations do not promise arbitrary sparse, plural, corporate or
+Unicode input. The eleven other bibliography branches currently require
+numeric1033, Book, Author-only contributors, a small property set, one person
+and nonempty ASCII Last/First/Title/Year/City/Publisher values. Citation locale,
+kind and modifier admissions have their own contract. A recognized unfinished
+standard branch returns an explicit error and preserves the whole document.
+Noncatalogue paths retain caches and return diagnostics in the update report.
+Locked and protected owner boundaries remain distinct. Source LCID and field
+selectors precede a caller-supplied actual default locale, with no ambient or
+guessed en-US fallback. Non-ASCII collection sort keys refuse.
+
+These additive pre-1.0 APIs are native Rust only. Python, WASM and CLI expose no
+dedicated bibliography source or update API. Their existing document and field
+compatibility checks remain required over the shared Rust changes. The remaining
+full catalogue belongs to F-X192, rather than an implied wrapper capability.
+
 
 Native Rust adds `IndexEntry`, `AuthorityEntry`, `IndexOptions`,
 `TableOfFiguresOptions`, `TableOfAuthoritiesOptions` and

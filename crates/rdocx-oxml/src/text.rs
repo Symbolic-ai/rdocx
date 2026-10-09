@@ -1436,6 +1436,7 @@ fn validate_raw_field_instruction(value: &str) -> Result<()> {
     let Some(InstructionToken {
         argument: FieldArgument::Text(name),
         quoted: false,
+        ..
     }) = tokens.first()
     else {
         return Err(OxmlError::InvalidValue(
@@ -12957,6 +12958,8 @@ enum InstructionPart {
 struct InstructionToken {
     argument: FieldArgument,
     quoted: bool,
+    source_span: Option<std::ops::Range<usize>>,
+    well_formed: bool,
 }
 
 fn parse_field_instruction_parts(parts: Vec<InstructionPart>) -> FieldInstruction {
@@ -12981,6 +12984,8 @@ fn parse_field_instruction_parts_with_order(
                 tokens.push(InstructionToken {
                     argument: FieldArgument::Nested(Box::new(field)),
                     quoted: false,
+                    source_span: None,
+                    well_formed: true,
                 });
             }
         }
@@ -13001,6 +13006,7 @@ fn parse_field_instruction_parts_with_order(
         let InstructionToken {
             argument: FieldArgument::Text(value),
             quoted,
+            ..
         } = &remaining[index]
         else {
             if matches!(&remaining[index].argument, FieldArgument::Nested(_)) {
@@ -13068,6 +13074,7 @@ fn switch_is_known_flag(field_name: &str, switch_name: &str) -> bool {
         "TOA" => &["b", "h", "p"],
         "INDEX" => &["r"],
         "XE" | "TA" => &["b", "i"],
+        "CITATION" => &["n", "y", "t"],
         "INCLUDETEXT" => &["!"],
         "FILENAME" => &["p"],
         "MERGEFIELD" => &["m", "v"],
@@ -13087,6 +13094,9 @@ fn switch_takes_argument(field_name: &str, switch_name: &str) -> bool {
     ) || field_name == "INCLUDETEXT" && switch_name == "c"
         || field_name == "TOC" && matches!(switch_name.as_str(), "o" | "n" | "t" | "p")
         || field_name == "TC" && switch_name == "l"
+        || field_name == "CITATION"
+            && matches!(switch_name.as_str(), "l" | "m" | "p" | "v" | "f" | "s")
+        || field_name == "BIBLIOGRAPHY" && matches!(switch_name.as_str(), "l" | "m" | "f")
         || field_name == "INDEX"
             && matches!(
                 switch_name.as_str(),
@@ -13103,46 +13113,161 @@ fn switch_takes_argument(field_name: &str, switch_name: &str) -> bool {
 fn lex_field_text(input: &str) -> Vec<InstructionToken> {
     let mut tokens = Vec::new();
     let mut current = String::new();
-    let mut characters = input.chars().peekable();
+    let mut characters = input.char_indices().peekable();
     let mut quoted = false;
     let mut token_was_quoted = false;
-    let push_token =
-        |tokens: &mut Vec<InstructionToken>, current: &mut String, quoted: &mut bool| {
-            if !current.is_empty() || *quoted {
+    let mut token_start = None;
+    let mut quote_closed = false;
+    let mut well_formed = true;
+    while let Some((offset, character)) = characters.next() {
+        if !quoted && character.is_whitespace() {
+            if !current.is_empty() || token_was_quoted {
                 tokens.push(InstructionToken {
-                    argument: FieldArgument::Text(std::mem::take(current)),
-                    quoted: *quoted,
+                    argument: FieldArgument::Text(std::mem::take(&mut current)),
+                    quoted: token_was_quoted,
+                    source_span: token_start.map(|start| start..offset),
+                    well_formed,
                 });
-                *quoted = false;
             }
-        };
-    while let Some(character) = characters.next() {
+            token_start = None;
+            token_was_quoted = false;
+            quote_closed = false;
+            well_formed = true;
+            continue;
+        }
+        token_start.get_or_insert(offset);
         if quoted {
             match character {
-                '"' => quoted = false,
+                '"' => {
+                    quoted = false;
+                    quote_closed = true;
+                }
                 '\\' if characters
                     .peek()
-                    .is_some_and(|next| matches!(next, '"' | '\\')) =>
+                    .is_some_and(|(_, next)| matches!(next, '"' | '\\')) =>
                 {
-                    current.push(characters.next().expect("peeked character exists"));
+                    current.push(characters.next().expect("peeked character exists").1);
                 }
                 _ => current.push(character),
             }
         } else {
+            if quote_closed {
+                well_formed = false;
+            }
             match character {
                 '"' => {
+                    if !current.is_empty() {
+                        well_formed = false;
+                    }
                     quoted = true;
                     token_was_quoted = true;
-                }
-                character if character.is_whitespace() => {
-                    push_token(&mut tokens, &mut current, &mut token_was_quoted);
                 }
                 _ => current.push(character),
             }
         }
     }
-    push_token(&mut tokens, &mut current, &mut token_was_quoted);
+    if !current.is_empty() || token_was_quoted {
+        tokens.push(InstructionToken {
+            argument: FieldArgument::Text(current),
+            quoted: token_was_quoted,
+            source_span: token_start.map(|start| start..input.len()),
+            well_formed: well_formed && !quoted,
+        });
+    }
     tokens
+}
+
+/// Replace only bibliography l, f and m token spans, retaining other raw spelling.
+///
+/// This checked edit uses the shared field lexer. Ambiguous source boundaries
+/// return an error before a caller can publish any instruction changes.
+#[doc(hidden)]
+pub fn bibliography_option_switch_edits(
+    raw: &str,
+    replacement: &[FieldSwitch],
+) -> Result<Vec<(std::ops::Range<usize>, String)>> {
+    let tokens = lex_field_text(raw);
+    if tokens.iter().any(|token| !token.well_formed) {
+        return Err(OxmlError::InvalidValue(
+            "ambiguous bibliography token boundary".into(),
+        ));
+    }
+    let instruction = parse_field_instruction(raw);
+    if instruction.name != "BIBLIOGRAPHY" || !instruction.arguments.is_empty() {
+        return Err(OxmlError::InvalidValue(
+            "invalid bibliography instruction shape".into(),
+        ));
+    }
+    if replacement.iter().any(|switch| {
+        !matches!(switch.name.as_str(), "l" | "f" | "m")
+            || !matches!(switch.argument, Some(FieldArgument::Text(_)))
+    }) {
+        return Err(OxmlError::InvalidValue(
+            "invalid owned bibliography replacement switch".into(),
+        ));
+    }
+    let authored = FieldInstruction::new("BIBLIOGRAPHY", Vec::new(), replacement.to_vec())?;
+    let mut ranges = Vec::new();
+    let mut index = 1;
+    while index < tokens.len() {
+        let FieldArgument::Text(value) = &tokens[index].argument else {
+            return Err(OxmlError::InvalidValue("nested bibliography token".into()));
+        };
+        let Some(name) = (!tokens[index].quoted)
+            .then(|| value.strip_prefix('\\'))
+            .flatten()
+        else {
+            return Err(OxmlError::InvalidValue(
+                "unowned bibliography argument".into(),
+            ));
+        };
+        let name = name.to_ascii_lowercase();
+        let takes_argument = switch_takes_argument("BIBLIOGRAPHY", &name)
+            || !switch_is_known_flag("BIBLIOGRAPHY", &name)
+                && tokens.get(index + 1).is_some_and(|token| token.quoted);
+        let has_argument = takes_argument && tokens.get(index + 1).is_some_and(|token| {
+            token.quoted
+                || !matches!(&token.argument, FieldArgument::Text(value) if value.starts_with('\\'))
+        });
+        let start = tokens[index]
+            .source_span
+            .as_ref()
+            .ok_or_else(|| OxmlError::InvalidValue("missing bibliography token span".into()))?
+            .start;
+        let end_index = index + usize::from(has_argument);
+        if matches!(name.as_str(), "l" | "m") && !has_argument {
+            return Err(OxmlError::InvalidValue(
+                "missing bibliography option operand".into(),
+            ));
+        }
+        if matches!(name.as_str(), "l" | "f" | "m") {
+            let end = tokens[end_index]
+                .source_span
+                .as_ref()
+                .ok_or_else(|| OxmlError::InvalidValue("missing bibliography operand span".into()))?
+                .end;
+            ranges.push(start..end);
+        }
+        index = end_index + 1;
+    }
+    let owned = instruction
+        .switches
+        .iter()
+        .filter(|switch| matches!(switch.name.as_str(), "l" | "f" | "m"))
+        .cloned()
+        .collect::<Vec<_>>();
+    if owned == replacement {
+        return Ok(Vec::new());
+    }
+    let mut edits = ranges
+        .into_iter()
+        .map(|range| (range, String::new()))
+        .collect::<Vec<_>>();
+    let appended = &authored.raw["BIBLIOGRAPHY".len()..];
+    if !appended.is_empty() {
+        edits.push((raw.len()..raw.len(), appended.to_owned()));
+    }
+    Ok(edits)
 }
 
 impl Default for CT_P {
@@ -13201,6 +13326,93 @@ mod tests {
             buf.clear();
         }
         CT_P::from_xml(&mut reader).unwrap()
+    }
+
+    #[test]
+    fn bibliography_owned_token_edits_preserve_unowned_source_spelling() {
+        let raw = "  bIbLiOgRaPhY\t\\L 1033  \\M \"a \\\"b\\\" \\\\ c\"\n\\Q \"keep \\\"exact\\\"\"  \\* MERGEFORMAT \\f 1036 \\m bare  ";
+        let mut output = raw.to_owned();
+        let edits = bibliography_option_switch_edits(
+            raw,
+            &[
+                FieldSwitch {
+                    name: "l".into(),
+                    argument: Some(FieldArgument::Text("1031".into())),
+                },
+                FieldSwitch {
+                    name: "m".into(),
+                    argument: Some(FieldArgument::Text("new source".into())),
+                },
+            ],
+        )
+        .unwrap();
+        for (range, replacement) in edits.into_iter().rev() {
+            output.replace_range(range, &replacement);
+        }
+        assert_eq!(
+            output,
+            "  bIbLiOgRaPhY\t  \n\\Q \"keep \\\"exact\\\"\"  \\* MERGEFORMAT     \\l 1031 \\m \"new source\""
+        );
+        let parsed = parse_field_instruction(&output);
+        assert!(parsed.arguments.is_empty());
+        assert_eq!(
+            parsed.switches.last().unwrap().argument,
+            Some(FieldArgument::Text("new source".into()))
+        );
+        let raw = "BIBLIOGRAPHY \\f \\* MERGEFORMAT";
+        let mut output = raw.to_owned();
+        for (range, replacement) in bibliography_option_switch_edits(raw, &[])
+            .unwrap()
+            .into_iter()
+            .rev()
+        {
+            output.replace_range(range, &replacement);
+        }
+        assert_eq!(output, "BIBLIOGRAPHY  \\* MERGEFORMAT");
+    }
+
+    #[test]
+    fn bibliography_owned_token_edits_reject_ambiguous_boundaries() {
+        for raw in [
+            r#"BIBLIOGRAPHY \l "1033"adjacent"#,
+            r#"BIBLIOGRAPHY \m "unterminated"#,
+            r#"BIBLIOGRAPHY \m \l 1033"#,
+            r#"BIBLIOGRAPHY \Q bare \l 1033"#,
+            r#"BIBLIOGRAPHY unexpected"#,
+        ] {
+            assert!(bibliography_option_switch_edits(raw, &[]).is_err(), "{raw}");
+        }
+    }
+
+    #[test]
+    fn citation_and_bibliography_bare_operands_keep_opcode_specific_association() {
+        let instruction = parse_field_instruction(
+            r#"CITATION first \l 1033 \p 17 \v 3 \n \m second \f "before " \y \s " after" \t \l 1036"#,
+        );
+        assert_eq!(instruction.arguments, [FieldArgument::Text("first".into())]);
+        assert_eq!(
+            instruction
+                .switches
+                .iter()
+                .map(|switch| switch.name.as_str())
+                .collect::<Vec<_>>(),
+            ["l", "p", "v", "n", "m", "f", "y", "s", "t", "l"]
+        );
+        assert!(
+            instruction
+                .switches
+                .iter()
+                .filter(|switch| matches!(switch.name.as_str(), "n" | "y" | "t"))
+                .all(|switch| switch.argument.is_none())
+        );
+        let bibliography =
+            parse_field_instruction(r#"BIBLIOGRAPHY \l 1033 \m first \m "second tag" \f"#);
+        assert!(bibliography.arguments.is_empty());
+        assert_eq!(bibliography.switches.len(), 4);
+        assert!(bibliography.switches[3].argument.is_none());
+        let unrelated = parse_field_instruction(r#"UNKNOWN first \l 1033"#);
+        assert_eq!(unrelated.arguments.len(), 2);
+        assert!(unrelated.switches[0].argument.is_none());
     }
 
     #[test]

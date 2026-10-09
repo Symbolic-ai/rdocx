@@ -186,6 +186,20 @@ VBA, ActiveX, embedded applications, proprietary cloud services, or unknown
 future producer extensions.
 
 ## Modern DOCX capability matrix
+Citations and bibliography have a partial native Rust authoring and update
+surface. Source metadata covers seventeen kinds, sixteen contributor roles
+and twelve style identities. Formatting is narrower. The measured APA grammar
+covers 210 of 223 ordinary dense locale configurations without claiming every
+sparse, plural, corporate or source-script combination. The other eleven
+bibliography styles admit lean numeric1033 Book inputs with Author-only
+contributors, a small property set, one person and nonempty ASCII values.
+Citation formatting has separate locale, kind and modifier boundaries.
+Recognized unfinished branches refuse the whole cache refresh atomically.
+Noncatalogue paths retain caches with diagnostics. Non-ASCII collection ordering
+refuses rather than approximates Word. The remaining full catalogue contract
+belongs to F-X192 in S91. Dedicated Python and WASM bibliography APIs are not
+part of this native boundary.
+
 
 This is the closed authoring contract for M23 and M24. Each row is one public
 capability or property family. `Y` means the operation is complete today. `P`
@@ -253,7 +267,7 @@ bytes remain in the ZIP package.
 | DOCX-046 | fields | page and section field materialization across modeled stories | Y | Y | Y | Y | Y | all | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/field.rs:905`,test:`crates/rdocx/tests/regression_test.rs:48489`,test:`crates/rdocx/tests/regression_test.rs:49967`,policy:opaque/unplaced/locked source caches retained,policy:H/F PAGE/NUMPAGES literal caches preserved | - |
 | DOCX-047 | fields | captions, sequences, and complete cross-references | Y | Y | Y | Y | Y | all | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/field.rs`,implementation:`crates/rdocx-layout/src/engine.rs`,test:`crates/rdocx/tests/regression_test.rs`,boundary:accepted physical source ownership and captured context policy with ambiguous or unsupported graphs retained diagnostically | - |
 | DOCX-048 | fields | indexes, tables of figures, and authorities | Y | Y | Y | Y | Y | all | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/field.rs`,test:`crates/rdocx/tests/regression_test.rs`,boundary:captured en-US ASCII collation and supported source grammar with other locales and sort keys retained diagnostically,policy:one post-insertion deterministic target snapshot and atomic publication | - |
-| DOCX-049 | fields | citations and bibliography | N | P | N | N | PV | all | P | P | N | P | B | B | B | unsupported | boundary:F-282 | F-282 |
+| DOCX-049 | fields | citations and bibliography | P | P | P | P | P | all | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/bibliography.rs`,test:`crates/rdocx/tests/regression_test.rs`,boundary:native Rust source authoring and measured formatting admissions with 210-of-223 dense APA configurations and lean en-US Book branches for other styles,policy:unfinished standard updates refuse atomically and noncatalogue caches retain diagnostics | F-X192 |
 | DOCX-050 | fields | numbering-aware navigation fields | P | P | P | P | P | all | P | P | P | P | B | B | B | partial | boundary:F-283 | F-283 |
 | DOCX-051 | stories | stable container-wide template grammar | P | NA | P | NA | P | body | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:4837` | F-284 |
 | DOCX-052 | forms | content control creation and lifecycle | N | Y | P | P | P | body | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/content_control.rs:27` | F-285 |

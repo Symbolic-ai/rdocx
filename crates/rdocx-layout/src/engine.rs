@@ -11954,13 +11954,17 @@ fn vml_color(value: &str) -> Option<Color> {
 ///
 /// `rdocx::RunFontSlot` is the same four slots on the authoring side, but
 /// `rdocx-layout` sits below `rdocx` and cannot name it. The shape here
-/// deliberately mirrors [`WordLanguageSlot`] next to it, so a reader meets one
+/// deliberately mirrors `WordLanguageSlot` next to it, so a reader meets one
 /// pattern rather than two.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum WordFontSlot {
+pub enum WordFontSlot {
+    /// ASCII characters using the `w:ascii` slot.
     Ascii,
+    /// Other Latin characters using the `w:hAnsi` slot.
     HighAnsi,
+    /// East Asian characters using the `w:eastAsia` slot.
     EastAsia,
+    /// Complex-script characters using the `w:cs` slot.
     ComplexScript,
 }
 
@@ -12163,7 +12167,11 @@ fn word_font_for_slot(
     .map(str::to_owned)
 }
 
-/// Resolve the effective font family for a run, considering theme fonts.
+/// Resolve a font family from already effective, cascaded run properties.
+///
+/// Callers must apply document defaults, style inheritance and direct run
+/// properties before calling this function. It resolves font slots and theme
+/// references only and does not perform that cascade itself.
 ///
 /// Five steps, in order. The slot's explicit family, the slot's theme font,
 /// then the same two for the `w:ascii` slot, then the Latin typeface for a
@@ -12181,7 +12189,7 @@ fn word_font_for_slot(
 /// entirely. Declining inside the slot and answering outside it is what makes
 /// the Latin face reachable without ever letting it outrank a family the
 /// author named.
-fn resolve_font_family(
+pub fn resolve_font_family(
     rpr: &rdocx_oxml::properties::CT_RPr,
     theme: Option<&rdocx_oxml::theme::Theme>,
     slot: WordFontSlot,
