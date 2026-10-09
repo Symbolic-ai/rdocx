@@ -18566,6 +18566,8 @@ impl Document {
     /// `has_unmodeled_properties` reports extra XML or attributes attached to
     /// this numbering instance, definition, or level. Modeled producer metadata
     /// and raw preservation overlays for level properties are not reported.
+    /// Namespace declarations are retained for serialization, but are not
+    /// unmodeled numbering properties.
     pub fn numbering_level(&self, num_id: u32, level: u32) -> Option<NumberingLevel<'_>> {
         if num_id == 0 {
             return None;
@@ -18611,11 +18613,14 @@ impl Document {
             template_code: level.template_code.as_deref(),
             tentative: level.tentative,
             has_unmodeled_properties: !instance.extra_xml.is_empty()
-                || !instance.extra_attributes.is_empty()
                 || !definition.extra_xml.is_empty()
-                || !definition.extra_attributes.is_empty()
                 || !level.extra_xml.is_empty()
-                || !level.extra_attributes.is_empty(),
+                || instance
+                    .extra_attributes
+                    .iter()
+                    .chain(&definition.extra_attributes)
+                    .chain(&level.extra_attributes)
+                    .any(|(name, _)| name != "xmlns" && !name.starts_with("xmlns:")),
             has_paragraph_presentation: level.ppr.as_ref().is_some_and(|properties| {
                 Self::has_list_paragraph_presentation(level.ilvl, properties)
             }),
@@ -37220,6 +37225,51 @@ mod tests {
                 .format,
             NumberingFormat::None
         );
+    }
+
+    #[test]
+    fn numbering_level_namespace_declarations_do_not_report_unmodeled_properties() {
+        for owner in ["abstractNum", "lvl", "num"] {
+            for (name, value) in [
+                ("xmlns:w", WORD_NAMESPACE),
+                ("xmlns:q", WORD_NAMESPACE),
+                ("xmlns", "urn:producer:default"),
+                ("xmlns:producer", "urn:producer"),
+            ] {
+                let mut source = Document::new();
+                let num_id = source.add_list_definition(&[ListLevel::bullet()]);
+                let definition_id = source.numbering.as_ref().unwrap().nums[0].abstract_num_id;
+                let declaration = format!(r#" {name}="{value}""#);
+                let xml = format!(
+                    r#"<q:numbering xmlns:q="{WORD_NAMESPACE}"><q:abstractNum q:abstractNumId="{definition_id}"{}><q:lvl q:ilvl="0"{}><q:numFmt q:val="bullet"/><q:lvlText q:val="•"/></q:lvl></q:abstractNum><q:num q:numId="{num_id}"{}><q:abstractNumId q:val="{definition_id}"/></q:num></q:numbering>"#,
+                    if owner == "abstractNum" {
+                        &declaration
+                    } else {
+                        ""
+                    },
+                    if owner == "lvl" { &declaration } else { "" },
+                    if owner == "num" { &declaration } else { "" },
+                );
+                let bytes = replace_numbering_xml(&mut source, xml.into_bytes());
+                let mut imported = Document::from_bytes(&bytes).unwrap();
+                let saved = imported.to_bytes().unwrap();
+                let reopened = Document::from_bytes(&saved).unwrap();
+
+                for document in [&imported, &reopened] {
+                    let level = document.numbering_level(num_id, 0).unwrap();
+                    assert_eq!(level.format, NumberingFormat::Bullet, "{owner}: {name}");
+                    assert!(!level.has_unmodeled_properties, "{owner}: {name}");
+                    let numbering = document.numbering.as_ref().unwrap();
+                    let attributes = match owner {
+                        "abstractNum" => &numbering.abstract_nums[0].extra_attributes,
+                        "lvl" => &numbering.abstract_nums[0].levels[0].extra_attributes,
+                        "num" => &numbering.nums[0].extra_attributes,
+                        _ => unreachable!(),
+                    };
+                    assert!(attributes.contains(&(name.to_owned(), value.to_owned())));
+                }
+            }
+        }
     }
 
     #[test]
