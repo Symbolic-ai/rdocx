@@ -3558,6 +3558,7 @@ mod tests {
             assert!(properties.cell_margin.is_none(), "{margins}");
             assert_eq!(properties.extra_xml.len(), 1, "{margins}");
             let raw = std::str::from_utf8(&properties.extra_xml[0].1).unwrap();
+            assert_eq!(raw, margins);
             assert!(table_to_xml(&table).contains(raw), "{margins}");
         }
     }
