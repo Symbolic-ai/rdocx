@@ -126,8 +126,10 @@ the document automatic-hyphenation boolean and the
 `w:doNotUseHTMLParagraphAutoSpacing` compatibility boolean, and the laid-out
 `TableCell` includes the horizontal border bands above and below its content.
 Full struct literals must provide these fields. These are intentional pre-1.0 source breaks for the next stable
-family. Established `TextSegment` construction and layout entrypoints retain
-their existing shapes.
+family. Shared `TextSegment`, `GlyphRun` and `MultilingualGlyphRun` struct
+literals also provide `note_reference_source`. Exhaustive shared `FieldKind`
+matches cover `Section`, `SectionPages`, `SequenceContext` and `SequenceRepeat`.
+The established layout entrypoints retain their call shapes.
 
 The shared native `ChartData` input includes optional category-axis and
 value-axis titles plus a typed `Vec<RgbColor>` palette. `oxml-chart`, `rdocx`,
@@ -2700,6 +2702,16 @@ flag, system codec, subprocess, or binary asset.
 
 ## Packaging
 
+Current source prepares the exact seven-package Word Rust family, `rdocx`
+Python distribution, `rdocx-wasm` and inherited support carriers at0.16.0.
+The exact fifteen-package shared OOXML and PowerPoint family plus `rpptx-py`
+and its Python distribution are prepared at0.14.0. The separate unpublished
+`rpptx-wasm` npm carrier remains0.12.1. Word's current dependency pins require
+shared0.14.0, so the shared family precedes Word publication. Preparation is
+local metadata and artifact verification, without registry publication or tag
+authority. The previous unified v0.15.0 and rpptx-v0.13.1 releases remain
+immutable at reviewed main9d019472f7e6b95ac4ba0770c4dee35dcbc28f0e.
+
 **maturin, mixed Rust and Python layout**, so type stubs and enum shims have a
 home. `python-source = "python"`, `module-name = "rdocx._rdocx"`,
 `features = ["pyo3/extension-module"]`. The rpptx package uses the parallel
@@ -2744,8 +2756,8 @@ the embedded metadata and the required README sections before publication.
 Full-description comparison normalizes platform CRLF to LF and ignores terminal
 newline count. All prose and other metadata remain exact.
 
-The Rust package trains remain separate. The exact 15-package shared OOXML and
-PowerPoint workspace family is published at 0.12.1 from immutable annotated tag
+The historical S73 Rust package trains remain separate. The exact 15-package
+shared OOXML and PowerPoint workspace family was published at 0.12.1 from immutable annotated tag
 `rpptx-v0.12.1` at reviewed SHA
 `58ca5a279277f7cd8de0b8f250fb4650de14371b`. The stable workspace is published
 as the exact seven-package 0.14.0 family from immutable annotated tag `v0.14.0`
@@ -2781,48 +2793,38 @@ version, the immutable v0.11.0 tag, and GitHub release state remain unchanged.
 
 ## CI
 
-`wheels.yml` on **`py-rdocx-v*` and `py-rpptx-v*` tag namespaces**, separate
-from `publish.yml` on `v*` and `rpptx-v*`, so a Rust release does not rebuild
-Python wheels and a binding-only fix does not force a crates.io release.
-Publishing uses PyPI trusted publishing via OIDC, with no long-lived token in
-secrets. Manual dispatch builds `rdocx` and `rpptx` across the six declared
-targets. A tag build runs only the selected distribution cells. Each package
-produces one source distribution and uploads each matrix product independently.
-Every native wheel is
-installed into a fresh environment for its compatible pytest, exact
-`mypy==2.3.0 --strict`, and `stubtest` gates. Each musllinux wheel is installed
-in a fresh Python 3.9 Alpine environment and runs the same package parity suite
-as the native cells.
+`wheels.yml` handles the unified `v*` Word and `rpptx-v*` shared/PowerPoint
+namespaces. A tag selects one exact Rust allowlist, CLI and Python distribution.
+Historical `py-*` tags remain immutable and cannot start new publication.
+Manual dispatch builds both Python projects across six declared targets plus
+one source distribution each. It cannot publish to registries or create a
+GitHub release and does not build the tag-only CLI archives.
 
-The build jobs have only repository read permission. A separate publish job
-depends on all wheel and source-distribution jobs, selects exactly six wheels
-and one source distribution for the tag's project, and receives
-`id-token: write` only for a `py-rdocx-v*` or `py-rpptx-v*` tag event in the
-`pypi` environment. Manual dispatch builds and tests both distributions but
-cannot publish them. Every external action and the maturin tool version are
-pinned to reviewed immutable versions.
+Each freshly built native wheel runs clean installed priority runtime checks.
+The supported floor remains Python3.9. Exact `mypy==2.3.0 --strict` and
+recursive package `stubtest` run under Python3.12, including the native
+extension and handwritten stubs. The current local preparation builds real
+wheels and source distributions and checks their complete metadata and README
+payloads. Compatible oracle exclusions on hosted runners retain their pinned
+native and CI coverage. The musllinux cells use a clean Python3.9 Alpine
+runtime. Build jobs have read-only repository permissions, while selected
+tag-only publication uses OIDC through the `pypi` environment.
 
-Each Python release family contains one distribution at its native crate
-version. After the reviewed SHA is pushed but before either Python tag is
-created, a manual build-only run at that SHA must produce twelve `cp39-abi3`
-wheels and two source distributions across both projects. The selected six
-wheels and one source distribution must name the selected project and version
-in both filenames and embedded metadata. The selected distribution is
-installed under clean Python 3.9 and 3.12 environments for the priority runtime
-gate. Exact `mypy==2.3.0 --strict` and stubtest run under Python 3.12 because
-that mypy version requires Python 3.10 or newer. The tag-only publish job uses
-PyPI trusted publishing. Successful publication is not complete until the
-selected project version, all seven files, authenticated owner or maintainer
-roles, the exact reviewed GitHub release body, and every contribution
-notification are verified.
+After final integrated full verification, clean sprint review and sprint push,
+the SHA-bound build-only rehearsal must produce twelve `cp39-abi3` wheels and
+two source distributions at that reviewed source. Downloaded provenance,
+metadata and clean Python3.9/3.12 installed checks are required before close.
+Local worker artifacts do not substitute for this final hosted evidence.
 
-The current reviewed Python releases are `rdocx 0.13.2` from
-`py-rdocx-v0.13.2` and `rpptx 0.11.0` from `py-rpptx-v0.11.0`, both at SHA
-`2b009243ed39ab66470d7484d490985368e865a8`. Each PyPI release contains the
-exact six platform wheels and one source distribution, exposes its complete
-crate-local README and project metadata, and passes clean Python 3.9 and 3.12
-runtime checks plus Python 3.12 strict typing and stub checks. Their GitHub
-release bodies match the reviewed changelog text byte for byte.
+After sprint close, each family requires its own immediate approval at the
+reviewed main merge SHA. The tagged workflow verifies six CLI archives, six
+wheels, one source distribution and a complete `SHA256SUMS`, then publishes
+only the selected family. Registry state, ownership, attestation, exact release
+body and release-bound contribution notifications are verified afterward.
+Neither local preparation nor build-only dispatch earns publication or hosted
+artifact availability. Historical separately tagged Python releases
+`rdocx0.13.2` and `rpptx0.11.0` at2b009243ed39ab66470d7484d490985368e865a8
+remain available, and the later unified family releases remain immutable.
 
 **A PR-time job that builds the wheel and runs pytest is mandatory.** The
 absence of exactly this job for wasm is why `rdocx-wasm` rotted.

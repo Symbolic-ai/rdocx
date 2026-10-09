@@ -6716,7 +6716,11 @@ README examples and measured archives without altering historical tags or
 release records. Derive separate reviewed family notes and authenticated
 contributor inventories from the complete range since each previous tag,
 including S89 and S90 accepted work. Exclude Issue264 and retain Issue281's
-open roadmap disposition. Require current local package and binding evidence,
+open roadmap disposition. The prepared source preserves unpublished binding and
+WASM carriers, external tool versions and immutable historical release records.
+The local worker completion proves preparation only. Final integrated full
+verification, sprint review and hosted build-only artifacts precede close,
+with separate family publication approvals afterward. Require current local package and binding evidence,
 then the final reviewed sprint's hosted build-only rehearsal before close.
 Publication follows sprint close through separate exact-SHA approvals under
 `/release`, shared family first where the Word dependency graph requires it.

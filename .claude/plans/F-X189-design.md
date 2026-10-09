@@ -1,6 +1,6 @@
 # F-X189, Prepare Word 0.16.0 and PowerPoint 0.14.0 families
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S90
 **Size**: L
 **Depends on**: F-278, F-279, F-280, F-281, F-282, F-X179, F-X180, F-X181, F-X182, F-X183, F-X184, F-X185, F-X186, F-X187, F-X188, F-X190, F-X191
@@ -107,6 +107,21 @@ Retain documented oracle-dependent exclusions only where the approved hosted
 environment lacks those tools, with their pinned native/CI gates retained.
 Check both WASM bindings and the separate rpptx-wasm carrier contract.
 
+The actual default-size rider exposed an inherited test-only omission. The
+rpptx-wasm manifest and HLD already require wasm-opt125 with both bulk-memory
+and nontrapping-float-to-int enabled. Reconcile the existing exact size test's
+expected arguments, actual invocation and normalized path indices with that
+contract. Extend its existing rejection case to refuse omission of the
+nontrapping flag. Preserve the real compiled failures, then run the focused
+negative control, actual ignored size/roundtrip gate and bundler/npm riders.
+No runtime algorithm, manifest, tool version, wrapper or production API changes.
+A separate incremental ALL pass reviews this bounded test reconciliation.
+The next real pipeline execution exposed an abbreviated test-only version
+literal. Match the exact official Binaryen identity already required by CI and
+HLD, `wasm-opt version 125 (version_125)`, in the validator and fixture. Add an
+abbreviated-identity refusal case and reset it before existing gzip checks.
+Preserve that actual failure and obtain a distinct incremental ALL pass.
+
 After the final integrated full gate, clean sprint review and sprint push,
 dispatch wheels.yml at that exact SHA in its existing build-only mode. It
 builds both Python projects and cannot reach registry or GitHub release jobs.
@@ -178,10 +193,10 @@ Version preparation must not change rendering or replace the baseline.
 ## Implementation checklist
 
 - [x] Confirm old tags/releases and obtain approval for both new versions and workflow records.
-- [ ] Complete every formal prerequisite and claim exclusive wave18.
-- [ ] Capture genuine new-version contract failure against the immutable Base.
-- [ ] Update exact carriers, pins, notes, policy, inventories and listed HLD files.
-- [ ] Pass scoped package/binding/typing checks and independent microscope, then prepare and integrate.
+- [x] Complete every formal prerequisite and claim exclusive wave18.
+- [x] Capture genuine new-version contract failure against the immutable Base.
+- [x] Update exact carriers, pins, notes, policy, inventories and listed HLD files.
+- [x] Pass scoped package/binding/typing checks and independent microscope for local preparation.
 
 ## Post-integration gates
 
