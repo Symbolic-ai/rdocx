@@ -14,6 +14,18 @@ exactly one as its test gate.
 | `golden` | Byte or pixel comparison against a recorded baseline | the hash harness |
 | `differential` | Compared against an external oracle | LibreOffice for renders, python-docx and python-pptx for the bindings |
 
+The cached complex-field snapshot regression uses compiled source-built
+packages to compare bulk snapshots with existing direct reads. Coverage spans
+sibling runs, same-run and nested fields, supported body and related story
+owners, namespace aliases and shadows, literal cached text and immutable source
+bytes. A private span test proves real hyperlink source endpoints inside a
+complex excerpt without relaxing public typed admission for an opaque wrapper.
+Public link controls preserve neighboring links and fields enclosed by links.
+The Python runtime uses the current rebuilt extension and verifies frozen text,
+XML and coordinates, stable read revisions and held handle validity. Strict
+typing and stub agreement remain separate checks. No field evaluation or native
+Word session is needed to expose an already stored cache.
+
 The comment ownership regression uses source-built packages and a compiled
 exact-Base failure for whole-thread removal and partial-cut refusal. Existing
 integration gates separately prove row removal, fragment pop and cell text

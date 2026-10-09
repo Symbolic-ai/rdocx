@@ -1022,7 +1022,13 @@ control or a field inside a paragraph.
 location against a staged package and publishes only a serialized and reopened
 candidate. These additions are native Rust APIs on the pre-1.0 `rdocx` crate.
 Python exposes story and story item snapshots, including each item's `xml` as
-bytes. `Document.set_story_text` takes a `StoryItem` snapshot and resolves its
+bytes. Cached complex-field text agrees between owned bulk snapshots and direct
+native reads when the field spans sibling runs or nests inside another field.
+Snapshot reads preserve source locations, XML, direct-body coordinates and the
+document revision, leaving held live handles valid. Nested instruction caches
+remain distinct from their enclosing field's visible result. Story links retain
+physical source ordering and relationship scope through the same bounded excerpt
+projection. `Document.set_story_text` takes a `StoryItem` snapshot and resolves its
 story kind, part name, owner index, item kind, and index path against the same
 document revision. The compatibility constructor accepts omitted or `None`
 XML and materializes it as empty immutable bytes. Cloned fragments omit Word

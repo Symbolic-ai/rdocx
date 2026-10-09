@@ -6559,19 +6559,20 @@ fn story_namespace_scopes_at(
         {
             Event::Start(element) => {
                 let mut scope = scopes.last().cloned().unwrap_or_default();
-                update_story_namespace_scope(&mut scope, &element)?;
+                // Excerpts retain their own declarations on the original elements.
+                // A sibling sequence inherits only the context outside its first element.
                 if requested.contains(&before) {
                     found.insert(before, scope.clone());
                     if found.len() == requested.len() {
                         return Ok(found);
                     }
                 }
+                update_story_namespace_scope(&mut scope, &element)?;
                 scopes.push(scope);
             }
-            Event::Empty(element) => {
+            Event::Empty(_) => {
                 if requested.contains(&before) {
-                    let mut scope = scopes.last().cloned().unwrap_or_default();
-                    update_story_namespace_scope(&mut scope, &element)?;
+                    let scope = scopes.last().cloned().unwrap_or_default();
                     found.insert(before, scope);
                     if found.len() == requested.len() {
                         return Ok(found);
@@ -6643,32 +6644,72 @@ fn scan_story_items_with_scope(
     Ok(items)
 }
 
-fn local_story_item(
+fn scoped_story_item(
+    xml: &[u8],
     item: &StoryItemSpan,
-    source_start: usize,
-    closed_len: usize,
-    added: usize,
-) -> StoryItemSpan {
-    let local = |position: usize| {
-        if position == source_start {
-            0
-        } else {
-            position - source_start + added
+    scope: &BTreeMap<String, String>,
+) -> Result<(Vec<u8>, StoryItemSpan, usize)> {
+    let (closed, added, scan) = if item.complex_field {
+        // A complex field spans sibling runs. Bind their shared context on an
+        // inert envelope, leaving every source byte and local declaration intact.
+        let original = xml.get(item.scan.clone()).ok_or_else(|| {
+            Error::Other("complex story field lies outside its source part".to_owned())
+        })?;
+        let mut closed = b"<rdocx_story_excerpt".to_vec();
+        for (prefix, namespace) in scope {
+            closed.extend_from_slice(b" xmlns");
+            if !prefix.is_empty() {
+                closed.push(b':');
+                closed.extend_from_slice(prefix.as_bytes());
+            }
+            closed.extend_from_slice(b"=\"");
+            closed.extend_from_slice(quick_xml::escape::escape(namespace).as_bytes());
+            closed.push(b'"');
         }
+        closed.push(b'>');
+        let added = closed.len();
+        closed.extend_from_slice(original);
+        let end = closed.len();
+        closed.extend_from_slice(b"</rdocx_story_excerpt>");
+        (closed, added, added..end)
+    } else {
+        let (closed, added) = scoped_story_fragment(xml, item.scan.clone(), scope)?;
+        let end = closed.len();
+        (closed, added, 0..end)
     };
-    StoryItemSpan {
+    let source_len = item
+        .scan
+        .end
+        .checked_sub(item.scan.start)
+        .ok_or_else(|| Error::Other("story item has an inverted scan span".to_owned()))?;
+    let local = |position: usize| -> Result<usize> {
+        if !item.complex_field && position == item.scan.start {
+            return Ok(0);
+        }
+        position
+            .checked_sub(item.scan.start)
+            .filter(|relative| *relative <= source_len)
+            .and_then(|relative| relative.checked_add(added))
+            .ok_or_else(|| Error::Other("story item lies outside its scan span".to_owned()))
+    };
+    let full = local(item.full.start)?..local(item.full.end)?;
+    if full.start > full.end {
+        return Err(Error::Other(
+            "story item has an inverted source span".to_owned(),
+        ));
+    }
+    let local = StoryItemSpan {
         kind: item.kind,
-        full: local(item.full.start)..local(item.full.end),
-        scan: 0..closed_len,
+        full,
+        scan,
         direct_owner_child: item.direct_owner_child,
         complex_field: item.complex_field,
-        complex_ancestors: item
-            .complex_ancestors
-            .iter()
-            .map(|ancestor| local(*ancestor))
-            .collect(),
+        // Ancestors gate typed discovery in scan_story_items. Neither excerpt
+        // scanner consumes them, and an external ancestor has no local offset.
+        complex_ancestors: Vec::new(),
         sdt_context: item.sdt_context,
-    }
+    };
+    Ok((closed, local, added))
 }
 
 fn story_item_text_with_scope(
@@ -6676,8 +6717,7 @@ fn story_item_text_with_scope(
     item: &StoryItemSpan,
     scope: &BTreeMap<String, String>,
 ) -> Result<Option<String>> {
-    let (closed, added) = scoped_story_fragment(xml, item.scan.clone(), scope)?;
-    let local = local_story_item(item, item.scan.start, closed.len(), added);
+    let (closed, local, _) = scoped_story_item(xml, item, scope)?;
     story_item_text(&closed, &local)
 }
 
@@ -6686,24 +6726,34 @@ fn scan_story_item_links_with_scope(
     item: &StoryItemSpan,
     scope: &BTreeMap<String, String>,
 ) -> Result<Vec<StoryLinkSpan>> {
-    let (closed, added) = scoped_story_fragment(xml, item.scan.clone(), scope)?;
-    let local = local_story_item(item, item.scan.start, closed.len(), added);
+    let (closed, local, added) = scoped_story_item(xml, item, scope)?;
     let links = scan_story_item_links(&closed, &local)?;
-    let map = |position: usize| {
-        if position == 0 {
-            item.scan.start
-        } else {
-            item.scan.start + position - added
+    let map = |position: usize| -> Result<usize> {
+        if !item.complex_field && position == 0 {
+            return Ok(item.scan.start);
         }
+        position
+            .checked_sub(added)
+            .and_then(|relative| item.scan.start.checked_add(relative))
+            .filter(|source| item.scan.start <= *source && *source <= item.scan.end)
+            .ok_or_else(|| Error::Other("story hyperlink lies outside its source span".to_owned()))
     };
-    Ok(links
+    links
         .into_iter()
-        .map(|link| StoryLinkSpan {
-            full: map(link.full.start)..map(link.full.end),
-            rel_id: link.rel_id,
-            anchor: link.anchor,
+        .map(|link| {
+            let full = map(link.full.start)?..map(link.full.end)?;
+            if full.start > full.end {
+                return Err(Error::Other(
+                    "story hyperlink has an inverted source span".to_owned(),
+                ));
+            }
+            Ok(StoryLinkSpan {
+                full,
+                rel_id: link.rel_id,
+                anchor: link.anchor,
+            })
         })
-        .collect())
+        .collect()
 }
 
 /// Scan one story's hyperlinks in physical source order, each paired with the
@@ -30979,6 +31029,116 @@ mod tests {
             STORY_SOURCE_BUILDS.set(0);
             assert!(document.story_link_snapshots().unwrap().is_empty());
             assert_eq!(STORY_SOURCE_BUILDS.get(), 1);
+        }
+    }
+
+    #[test]
+    fn story_excerpt_scope_preserves_single_root_local_declarations() {
+        let xml = format!(
+            r#"<q:document xmlns:q="{WORD_NAMESPACE}" xmlns:x="urn:ancestor"><q:body><q:p xmlns:x="{WORD_NAMESPACE}"><x:r><x:t>local</x:t></x:r></q:p><q:p xmlns:x="urn:empty"/></q:body></q:document>"#
+        );
+        let start = xml.find("<q:p ").unwrap();
+        let empty = xml.find(r#"<q:p xmlns:x="urn:empty"/>"#).unwrap();
+        let scopes = story_namespace_scopes_at(xml.as_bytes(), [start, empty]).unwrap();
+        assert_eq!(scopes[&start]["x"], "urn:ancestor");
+        assert_eq!(scopes[&empty]["x"], "urn:ancestor");
+        let end = start + xml[start..].find("</q:p>").unwrap() + "</q:p>".len();
+        let (closed, _) =
+            scoped_story_fragment(xml.as_bytes(), start..end, &scopes[&start]).unwrap();
+        let item = StoryItemSpan {
+            kind: StoryItemKind::Paragraph,
+            full: start..end,
+            scan: start..end,
+            direct_owner_child: true,
+            complex_field: false,
+            complex_ancestors: Vec::new(),
+            sdt_context: None,
+        };
+        assert_eq!(
+            story_item_text_with_scope(xml.as_bytes(), &item, &scopes[&start])
+                .unwrap()
+                .as_deref(),
+            Some("local")
+        );
+        assert!(
+            String::from_utf8(closed)
+                .unwrap()
+                .contains(&format!(r#"xmlns:x="{WORD_NAMESPACE}""#))
+        );
+        assert_eq!(
+            story_namespace_scope_at(xml.as_bytes(), start).unwrap()["x"],
+            WORD_NAMESPACE
+        );
+    }
+
+    #[test]
+    fn complex_field_excerpt_link_offsets_preserve_exact_source_bytes() {
+        // This tests the private projection mechanism. Public typed discovery
+        // deliberately does not admit a hyperlink wrapper inside a field span.
+        let field = concat!(
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+            r#"<w:r><w:instrText> PAGE </w:instrText></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+            r#"<w:hyperlink r:id="rIdActual"><w:r><w:t>7</w:t></w:r></w:hyperlink>"#,
+            r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+        );
+        for (word_prefix, rel_prefix, first_local) in
+            [("w", "r", false), ("q", "rel", false), ("q", "rel", true)]
+        {
+            let mut field = field
+                .replace("w:", &format!("{word_prefix}:"))
+                .replace("r:id", &format!("{rel_prefix}:id"));
+            if first_local {
+                field = field.replacen(
+                    &format!("<{word_prefix}:r>"),
+                    &format!(r#"<{word_prefix}:r xmlns:{rel_prefix}="urn:first-run">"#),
+                    1,
+                );
+            }
+            let xml = format!(
+                r#"<{word_prefix}:document xmlns:{word_prefix}="{WORD_NAMESPACE}" xmlns:{rel_prefix}="{}" xmlns:x="urn:producer&amp;escaped"><{word_prefix}:body><{word_prefix}:p><{word_prefix}:hyperlink {rel_prefix}:id="rIdBefore"><{word_prefix}:r><{word_prefix}:t>before</{word_prefix}:t></{word_prefix}:r></{word_prefix}:hyperlink>{field}<{word_prefix}:hyperlink {word_prefix}:anchor="after"><{word_prefix}:r><{word_prefix}:t>after</{word_prefix}:t></{word_prefix}:r></{word_prefix}:hyperlink></{word_prefix}:p></{word_prefix}:body></{word_prefix}:document>"#,
+                drawing_ns::R
+            );
+            let start = xml.find(&field).unwrap();
+            let end = start + field.len();
+            let item = StoryItemSpan {
+                kind: StoryItemKind::Field,
+                full: start + field.find('>').unwrap() + 1
+                    ..end - format!("</{word_prefix}:r>").len(),
+                scan: start..end,
+                direct_owner_child: false,
+                complex_field: true,
+                complex_ancestors: vec![0],
+                sdt_context: None,
+            };
+            let scope = story_namespace_scopes_at(xml.as_bytes(), [start])
+                .unwrap()
+                .remove(&start)
+                .unwrap();
+            let (closed, local, _) = scoped_story_item(xml.as_bytes(), &item, &scope).unwrap();
+            assert_eq!(&closed[local.scan.clone()], field.as_bytes());
+            assert_eq!(
+                &closed[local.full.clone()],
+                &xml.as_bytes()[item.full.clone()]
+            );
+            assert!(local.complex_ancestors.is_empty());
+            assert_eq!(
+                story_item_text_with_scope(xml.as_bytes(), &item, &scope)
+                    .unwrap()
+                    .as_deref(),
+                Some("7")
+            );
+            let links = scan_story_item_links_with_scope(xml.as_bytes(), &item, &scope).unwrap();
+            assert_eq!(links.len(), 1);
+            let expected = format!(
+                r#"<{word_prefix}:hyperlink {rel_prefix}:id="rIdActual"><{word_prefix}:r><{word_prefix}:t>7</{word_prefix}:t></{word_prefix}:r></{word_prefix}:hyperlink>"#
+            );
+            assert_eq!(&xml.as_bytes()[links[0].full.clone()], expected.as_bytes());
+            assert_eq!(links[0].full.start, xml.find(&expected).unwrap());
+            assert_eq!(links[0].rel_id.as_deref(), Some("rIdActual"));
+            let mut invalid = item.clone();
+            invalid.full.start = start - 1;
+            assert!(scoped_story_item(xml.as_bytes(), &invalid, &scope).is_err());
         }
     }
 

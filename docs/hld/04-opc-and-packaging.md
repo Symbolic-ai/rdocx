@@ -160,6 +160,14 @@ boundary. Unmodelled and rejected subtrees remain opaque and byte-preserved.
 Story-wide hyperlink projection retains the source byte position only while
 building its result, then returns existing locations and link records in that
 physical order. Relationship lookup remains scoped to the owning story part.
+Private complex-field excerpts wrap exact sibling runs in one namespace context,
+including inherited aliases, default bindings and authoritative foreign shadows.
+Local declarations retain their original positions. The wrapper is never saved.
+Text and hyperlink scans preserve the field marker interval inside that excerpt,
+and hyperlink endpoints translate back only within the original source interval.
+A hyperlink wrapper inside a complex field remains subject to the existing typed
+source-equality admission proof rather than becoming an admitted field merely
+because the private scanner can read that shape.
 
 The main Word document reader accepts one namespace-correct `document` root
 and one namespace-correct `body` child, rejects truncation, duplicate roots,

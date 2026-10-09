@@ -1508,7 +1508,14 @@ Owned story-item and story-link snapshots build the package source and owner
 inventory once per accessor. Namespace scopes for all selected owners, items,
 and hyperlink starts are collected in bounded source passes. Item and hyperlink
 text is then projected from namespace-complete fragments without restarting at
-the physical story root for each returned value.
+the physical story root for each returned value. Complex-field text and link
+excerpts share one namespace envelope around the exact sibling-run bytes.
+The envelope inherits the context before the first run. Each original element
+retains its local declarations, which never become sibling context. Single-root
+excerpts likewise keep their own declarations authoritative.
+Enclosing fields establish typed discovery admission but carry no local offsets
+into an isolated excerpt. Checked inverse translation restores hyperlink source
+positions before relationship lookup or smallest-owner deduplication.
 
 The Python projection materializes each story item as a frozen value with its
 exact XML bytes and the binding revision that produced it. Story mutation

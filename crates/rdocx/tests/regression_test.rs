@@ -6835,6 +6835,503 @@ fn unclosed_complex_field_does_not_hide_fields_in_later_paragraphs() {
 }
 
 #[test]
+fn complex_field_story_snapshots_preserve_cached_text() {
+    let cases = [
+        (
+            "sibling runs",
+            concat!(
+                r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+                r#"<w:r><w:instrText> PAGE </w:instrText></w:r>"#,
+                r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+                r#"<w:r><w:t>7</w:t></w:r>"#,
+                r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+            ),
+        ),
+        (
+            "same run",
+            r#"<w:r><w:fldChar w:fldCharType="begin"/><w:instrText> PAGE </w:instrText><w:fldChar w:fldCharType="separate"/><w:t>7</w:t><w:fldChar w:fldCharType="end"/></w:r>"#,
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (label, field) in cases {
+        let xml = format!(
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p>{field}</w:p></w:body></w:document>"#
+        );
+        let mut document = document_with_content_controls(&xml);
+        let before = document.to_bytes().unwrap();
+        let body = f254_story(&document, StoryKind::Body);
+        let items = document.story_items(&body).unwrap();
+        let direct = items
+            .iter()
+            .find(|item| item.kind() == StoryItemKind::Field)
+            .unwrap();
+        assert_eq!(
+            direct.text().unwrap().as_deref(),
+            Some("7"),
+            "{label}: direct"
+        );
+        let snapshots = document.story_item_snapshots().unwrap();
+        let snapshot = snapshots
+            .iter()
+            .find(|item| item.location() == direct.location())
+            .unwrap();
+        assert_eq!(
+            snapshot.xml(),
+            direct.xml().unwrap().as_ref(),
+            "{label}: XML"
+        );
+        assert_eq!(
+            snapshot.direct_body_index(),
+            direct.direct_body_index().unwrap()
+        );
+        assert!(!snapshot.is_direct_child());
+        drop(items);
+        assert_eq!(
+            document.to_bytes().unwrap(),
+            before,
+            "{label}: source bytes"
+        );
+        if snapshot.text() != Some("7") {
+            failures.push(format!(
+                "{label}: bulk cached text {:?}, direct cached text 7",
+                snapshot.text()
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn complex_field_internal_hyperlink_boundary_remains_opaque() {
+    let body = concat!(
+        r#"<w:p><w:hyperlink r:id="rIdShared"><w:r><w:t>before</w:t></w:r></w:hyperlink>"#,
+        r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+        r#"<w:r><w:instrText> REF mark </w:instrText></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+        r#"<w:r><w:t xml:space="preserve">Page </w:t></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+        r#"<w:r><w:instrText> PAGE </w:instrText></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+        r#"<w:hyperlink r:id="rIdOwn"><w:r><w:t>7</w:t></w:r></w:hyperlink>"#,
+        r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+        r#"<w:hyperlink w:anchor="after"><w:r><w:t>after</w:t></w:r></w:hyperlink></w:p>"#,
+        r#"<w:p><w:hyperlink r:id="rIdShared"><w:r><w:t>next</w:t></w:r></w:hyperlink></w:p>"#,
+    );
+    let mut document = hyperlink_story_document(body, None);
+    let before = document.to_bytes().unwrap();
+    let story = f254_story(&document, StoryKind::Body);
+    assert!(
+        document
+            .story_items(&story)
+            .unwrap()
+            .iter()
+            .all(|item| item.kind() != StoryItemKind::Field)
+    );
+    let links = document.story_links(&story).unwrap();
+    assert_eq!(
+        links
+            .iter()
+            .map(|(_, link)| link.text.as_str())
+            .collect::<Vec<_>>(),
+        ["before", "7", "after", "next"]
+    );
+    assert_eq!(links[1].1.url.as_deref(), Some("https://own.example/"));
+    assert_eq!(document.story_link_snapshots().unwrap(), links);
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn complex_field_nested_snapshots_do_not_translate_external_ancestors() {
+    let body = concat!(
+        r#"<w:p><w:hyperlink r:id="rIdShared"><w:r><w:t>before</w:t></w:r></w:hyperlink>"#,
+        r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+        r#"<w:r><w:instrText> REF mark </w:instrText></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+        r#"<w:r><w:t xml:space="preserve">Page </w:t></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+        r#"<w:r><w:instrText> PAGE </w:instrText></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+        r#"<w:r><w:t>7</w:t></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+        r#"<w:hyperlink w:anchor="after"><w:r><w:t>after</w:t></w:r></w:hyperlink></w:p>"#,
+        r#"<w:p><w:hyperlink r:id="rIdShared"><w:r><w:t>next</w:t></w:r></w:hyperlink></w:p>"#,
+    );
+    let mut document = hyperlink_story_document(body, None);
+    let before = document.to_bytes().unwrap();
+    let story = f254_story(&document, StoryKind::Body);
+    let items = document.story_items(&story).unwrap();
+    let fields = items
+        .iter()
+        .filter(|item| item.kind() == StoryItemKind::Field)
+        .collect::<Vec<_>>();
+    assert_eq!(fields.len(), 2);
+    assert_eq!(fields[0].text().unwrap().as_deref(), Some("Page 7"));
+    assert_eq!(fields[1].text().unwrap().as_deref(), Some("7"));
+    let inner_location = fields[1].location().clone();
+    let bulk = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        document.story_item_snapshots()
+    }));
+    let direct_links = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fields[1].links()));
+    let story_links = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        document.story_links(&story)
+    }));
+    let bulk_links = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        document.story_link_snapshots()
+    }));
+    assert!(
+        bulk.is_ok() && direct_links.is_ok() && story_links.is_ok() && bulk_links.is_ok(),
+        "nested excerpt panics: bulk={}, direct links={}, story links={}, bulk links={}",
+        bulk.is_err(),
+        direct_links.is_err(),
+        story_links.is_err(),
+        bulk_links.is_err()
+    );
+    let bulk = bulk.unwrap().unwrap();
+    assert_eq!(
+        bulk.iter()
+            .find(|item| item.location() == &inner_location)
+            .unwrap()
+            .text(),
+        Some("7")
+    );
+    let links = story_links.unwrap().unwrap();
+    assert_eq!(bulk_links.unwrap().unwrap(), links);
+    assert_eq!(
+        links
+            .iter()
+            .map(|(_, link)| link.text.as_str())
+            .collect::<Vec<_>>(),
+        ["before", "after", "next"]
+    );
+    assert!(direct_links.unwrap().unwrap().is_empty());
+    drop(fields);
+    drop(items);
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+fn fx190_assert_cached_field_parity(document: &mut Document, expected: &[&str]) {
+    let before = document.to_bytes().unwrap();
+    let snapshots = document.story_item_snapshots().unwrap();
+    let mut locations = Vec::new();
+    let mut field_text = Vec::new();
+    for story in document.stories().unwrap() {
+        for item in document.story_items(&story).unwrap() {
+            let snapshot = snapshots
+                .iter()
+                .find(|entry| entry.location() == item.location())
+                .unwrap();
+            locations.push(item.location().clone());
+            assert_eq!(
+                snapshot.text(),
+                item.text().unwrap().as_deref(),
+                "{:?}",
+                item.location()
+            );
+            assert_eq!(snapshot.xml(), item.xml().unwrap().as_ref());
+            assert_eq!(
+                snapshot.direct_body_index(),
+                item.direct_body_index().unwrap()
+            );
+            if item.kind() == StoryItemKind::Field {
+                assert!(!snapshot.is_direct_child());
+                field_text.push(snapshot.text().unwrap().to_owned());
+            }
+        }
+    }
+    assert_eq!(field_text, expected);
+    assert_eq!(
+        locations,
+        snapshots
+            .iter()
+            .map(|item| item.location().clone())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(document.story_item_snapshots().unwrap(), snapshots);
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let mut reopened = Document::from_bytes(&before).unwrap();
+    assert_eq!(reopened.story_item_snapshots().unwrap(), snapshots);
+    assert_eq!(reopened.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn complex_field_cached_snapshots_cover_supported_story_owners() {
+    let field = concat!(
+        r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+        r#"<w:r><w:instrText> PAGE </w:instrText></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+        r#"<w:r><w:t>7</w:t></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+    );
+    let mut seed = Document::new();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    let header_id = package.get_or_create_part_rels("/word/document.xml").add(
+        oxml_opc::relationship::rel_types::HEADER,
+        "fx190-header.xml",
+    );
+    let footer_id = package.get_or_create_part_rels("/word/document.xml").add(
+        oxml_opc::relationship::rel_types::FOOTER,
+        "fx190-footer.xml",
+    );
+    for (part, root) in [
+        ("/word/fx190-header.xml", "hdr"),
+        ("/word/fx190-footer.xml", "ftr"),
+    ] {
+        package.set_part(
+            part,
+            format!(r#"<w:{root} xmlns:w="{W_NS}"><w:p>{field}</w:p></w:{root}>"#).into_bytes(),
+        );
+    }
+    package.set_part(
+        "/word/fx190-opaque.bin",
+        b"opaque producer payload\0unchanged".to_vec(),
+    );
+    package.set_part("/word/document.xml", format!(
+        concat!(
+            r#"<w:document xmlns:w="{W_NS}" xmlns:r="{RELATIONSHIPS_NS}" xmlns:v="urn:schemas-microsoft-com:vml"><w:body>"#,
+            r#"<w:p><w:r><w:t>outside before</w:t></w:r>{field}<w:r><w:t>outside after</w:t></w:r></w:p>"#,
+            r#"<w:sdt><w:sdtPr/><w:sdtContent><w:p>{field}</w:p></w:sdtContent></w:sdt>"#,
+            r#"<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:tcPr/><w:p>{field}</w:p></w:tc></w:tr></w:tbl>"#,
+            r#"<w:p><w:r><w:pict><v:shape><v:textbox><w:txbxContent><w:p>{field}</w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p>"#,
+            r#"<w:sectPr><w:headerReference w:type="default" r:id="{header_id}"/><w:footerReference w:type="default" r:id="{footer_id}"/></w:sectPr></w:body></w:document>"#,
+        ), W_NS = W_NS, RELATIONSHIPS_NS = RELATIONSHIPS_NS, field = field, header_id = header_id, footer_id = footer_id).into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+    assert!(
+        document
+            .stories()
+            .unwrap()
+            .iter()
+            .any(|story| story.kind() == StoryKind::TextBox)
+    );
+    assert!(
+        document
+            .stories()
+            .unwrap()
+            .iter()
+            .any(|story| story.kind() == StoryKind::TableCell)
+    );
+    fx190_assert_cached_field_parity(&mut document, &["7", "7", "7", "7", "7", "7"]);
+    let saved =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    for (part, data) in &package.parts {
+        assert_eq!(saved.get_part(part), Some(data.as_slice()), "{part}");
+    }
+}
+
+#[test]
+fn complex_field_cached_snapshot_namespace_and_literal_text_matrix() {
+    let cache_cases = [
+        ("", ""),
+        (
+            r#"<w:r><w:t>A&amp;&lt;</w:t></w:r><w:r><w:t><![CDATA[B>]]></w:t><w:tab/><w:br/><w:cr/><w:t>C</w:t></w:r>"#,
+            "A&<B>C",
+        ),
+        (
+            r#"<w:r><w:t xml:space="preserve"> 7 </w:t></w:r><w:r><w:t>8</w:t></w:r>"#,
+            " 7 8",
+        ),
+    ];
+    for (cache, expected) in cache_cases {
+        let field = format!(
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>{cache}<w:r><w:fldChar w:fldCharType="end"/></w:r>"#
+        );
+        for (declarations, projected) in [
+            (format!(r#"xmlns:w="{W_NS}""#), field.clone()),
+            (
+                format!(r#"xmlns:q="{W_NS}" xmlns:w="urn:producer&amp;foreign""#),
+                field.replace("w:", "q:"),
+            ),
+            (
+                format!(r#"xmlns="{W_NS}" xmlns:q="{W_NS}""#),
+                field
+                    .replace("w:fldChar", "q:fldChar")
+                    .replace("w:fldCharType", "q:fldCharType")
+                    .replace("w:instrText", "instrText")
+                    .replace("w:r", "r")
+                    .replace("w:t", "t")
+                    .replace("w:tab", "tab")
+                    .replace("w:br", "br")
+                    .replace("w:cr", "cr"),
+            ),
+            (
+                String::new(),
+                field.replace("<w:r>", &format!(r#"<w:r xmlns:w="{W_NS}">"#)),
+            ),
+        ] {
+            let prefix = if declarations.starts_with("xmlns:q") {
+                "q:"
+            } else if declarations.starts_with("xmlns=\"") {
+                ""
+            } else {
+                "w:"
+            };
+            let root_declarations = if declarations.is_empty() {
+                format!(r#"xmlns:w="{W_NS}""#)
+            } else {
+                declarations
+            };
+            let header = format!(
+                r#"<{prefix}hdr {root_declarations}><{prefix}p><{prefix}r><{prefix}t>outside</{prefix}t></{prefix}r>{projected}</{prefix}p><x:opaque xmlns:x="urn:producer"><x:child marker="exact"/></x:opaque></{prefix}hdr>"#
+            );
+            let mut document = document_with_header_story(&header);
+            fx190_assert_cached_field_parity(&mut document, &[expected]);
+            assert_eq!(header_story_xml(&mut document), header);
+        }
+    }
+}
+
+#[test]
+fn complex_field_cached_snapshot_nested_instructions_and_hyperlink_ancestors() {
+    let nested = concat!(
+        r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> IF </w:instrText></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>7</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+        r#"<w:r><w:instrText> = 7 yes no </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>yes</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+    );
+    let mut document = hyperlink_story_document(
+        &format!(
+            r#"<w:p><w:hyperlink r:id="rIdOwn">{nested}</w:hyperlink><w:hyperlink w:anchor="neighbor"><w:r><w:t>neighbor</w:t></w:r></w:hyperlink></w:p>"#
+        ),
+        None,
+    );
+    fx190_assert_cached_field_parity(&mut document, &["yes", "7"]);
+    let body = f254_story(&document, StoryKind::Body);
+    let links = document.story_links(&body).unwrap();
+    assert_eq!(document.story_link_snapshots().unwrap(), links);
+    assert_eq!(
+        links
+            .iter()
+            .map(|(_, link)| link.text.as_str())
+            .collect::<Vec<_>>(),
+        ["7yes", "neighbor"]
+    );
+    assert_eq!(links[0].1.url.as_deref(), Some("https://own.example/"));
+}
+
+#[test]
+fn complex_field_cached_snapshots_preserve_sibling_and_revision_visibility() {
+    let siblings = r#"<w:r><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType="separate"/><w:t>7</w:t><w:fldChar w:fldCharType="end"/><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType="separate"/><w:t>8</w:t><w:fldChar w:fldCharType="end"/></w:r>"#;
+    let header = format!(r#"<w:hdr xmlns:w="{W_NS}"><w:p>{siblings}</w:p></w:hdr>"#);
+    fx190_assert_cached_field_parity(&mut document_with_header_story(&header), &["7", "8"]);
+    let field = r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>PAGE</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>7</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#;
+    let header = format!(
+        r#"<w:hdr xmlns:w="{W_NS}"><w:p><w:ins w:id="1" w:author="Ada">{field}</w:ins><w:del w:id="2" w:author="Ada">{field}</w:del></w:p></w:hdr>"#
+    );
+    let mut document = document_with_header_story(&header);
+    fx190_assert_cached_field_parity(&mut document, &["7", "7"]);
+    let story = f254_story(&document, StoryKind::Header);
+    assert_eq!(
+        document.story_items(&story).unwrap()[0]
+            .text()
+            .unwrap()
+            .as_deref(),
+        Some("7")
+    );
+    assert_eq!(header_story_xml(&mut document), header);
+}
+
+#[test]
+fn complex_field_first_run_namespace_lifetimes_do_not_escape() {
+    let cases = [
+        (
+            "alias foreign ancestor",
+            r#"xmlns:x="urn:producer""#.to_owned(),
+            format!(r#"xmlns:x="{W_NS}""#),
+            "x:",
+            "SHADOW",
+            "7",
+        ),
+        (
+            "alias Word ancestor",
+            format!(r#"xmlns:x="{W_NS}""#),
+            r#"xmlns:x="urn:producer""#.to_owned(),
+            "x:",
+            "8",
+            "87",
+        ),
+        (
+            "default foreign ancestor",
+            r#"xmlns="urn:producer""#.to_owned(),
+            format!(r#"xmlns="{W_NS}""#),
+            "",
+            "SHADOW",
+            "7",
+        ),
+        (
+            "default Word ancestor",
+            format!(r#"xmlns="{W_NS}""#),
+            r#"xmlns="urn:producer""#.to_owned(),
+            "",
+            "8",
+            "87",
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (label, inherited, first_local, prefix, content, expected) in cases {
+        let header = format!(
+            r#"<q:hdr xmlns:q="{W_NS}" {inherited}><q:p><q:r {first_local}><q:fldChar q:fldCharType="begin"/></q:r><q:r><q:instrText> PAGE </q:instrText></q:r><q:r><q:fldChar q:fldCharType="separate"/></q:r><q:r><{prefix}t>{content}</{prefix}t><q:t>7</q:t></q:r><q:r><q:fldChar q:fldCharType="end"/></q:r></q:p></q:hdr>"#
+        );
+        let mut document = document_with_header_story(&header);
+        let before = document.to_bytes().unwrap();
+        let story = f254_story(&document, StoryKind::Header);
+        let items = document.story_items(&story).unwrap();
+        let fields = items
+            .iter()
+            .filter(|item| item.kind() == StoryItemKind::Field)
+            .collect::<Vec<_>>();
+        assert_eq!(fields.len(), 1, "{label}: admitted field");
+        assert_eq!(
+            fields[0].text().unwrap().as_deref(),
+            Some(expected),
+            "{label}: direct source"
+        );
+        let snapshots = document.story_item_snapshots().unwrap();
+        let snapshot = snapshots
+            .iter()
+            .find(|item| item.location() == fields[0].location())
+            .unwrap();
+        assert_eq!(
+            snapshot.xml(),
+            fields[0].xml().unwrap().as_ref(),
+            "{label}: field XML"
+        );
+        assert_eq!(
+            snapshot.direct_body_index(),
+            fields[0].direct_body_index().unwrap()
+        );
+        if snapshot.text() != Some(expected) {
+            failures.push(format!(
+                "{label}: bulk {:?}, direct {expected}",
+                snapshot.text()
+            ));
+        }
+        drop(fields);
+        drop(items);
+        assert_eq!(
+            document.to_bytes().unwrap(),
+            before,
+            "{label}: source bytes"
+        );
+        assert_eq!(
+            header_story_xml(&mut document),
+            header,
+            "{label}: exact producer source"
+        );
+        let reopened = Document::from_bytes(&before).unwrap();
+        assert_eq!(
+            reopened.story_item_snapshots().unwrap(),
+            snapshots,
+            "{label}: locations/fingerprints"
+        );
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
 fn complex_story_field_xml_is_one_well_formed_projection() {
     let field = r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>1</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#;
     let xml = format!(

@@ -1,6 +1,6 @@
 # F-X190, Preserve cached text in multi-run complex field story snapshots
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S90
 **Size**: M
 **Depends on**: none
@@ -55,6 +55,16 @@ bounded namespace envelope machinery. Translate full and scan positions into
 that envelope exactly. Enclosing ancestors outside the excerpt have no local
 offset and must not underflow or redirect nested field/link reads. Establish
 their discovery-only role before omitting them from an isolated projection.
+
+Public field discovery retains its existing typed-admission boundary. A raw
+hyperlink wrapper contained inside a complex cached-result span is not admitted
+as a public field by the current source-equality proof. Keep that shape as an
+opaque discovery and exact-byte preservation control. Real link span translation
+inside a complex excerpt is proved in the existing private unit module with
+qualified source bytes and distinct neighboring links. Public controls cover
+surrounding links, fields contained in hyperlinks and non-complex links. The
+admitted run-only nested fields independently prove actual ancestor behavior.
+This clarification does not relax typed discovery or introduce a public API.
 
 Keep the single-root path unchanged. Preserve nested instruction versus
 result visibility, same-run and sibling fields, accepted and deleted text,
@@ -128,12 +138,17 @@ unexpected output delta blocks completion until explained and reviewed.
 ## Implementation checklist
 
 - [x] Read issue, contribution provenance, current source and risk references, and approve design with existing workflow-record permission.
-- [ ] Claim exclusive wave16 from the integrated prefix after F-X188 releases source and Cargo.
-- [ ] Capture genuine compiled exact-Base regression using existing APIs.
-- [ ] Repair complex-field namespace scope and nested local coordinate mapping without changing the global scanner or public surface.
-- [ ] Pass native, current Python, source-preservation and scoped risk controls.
-- [ ] Update exactly the HLD impact list and obtain an independent zero-finding microscope.
-- [ ] Prepare and validate handoff, integrate and record full acceptance before release preparation.
+- [x] Claim exclusive wave16 from the integrated prefix after F-X188 releases source and Cargo.
+- [x] Capture genuine compiled exact-Base regression using existing APIs.
+- [x] Repair complex-field namespace scope and nested local coordinate mapping without changing the global scanner or public surface.
+- [x] Pass native, current Python, source-preservation and scoped risk controls.
+- [x] Update exactly the HLD impact list and obtain an independent zero-finding microscope.
+- [x] Prepare feature-local implementation and evidence for integrator handoff.
+
+Worker preparation is complete after independent ALL pass2 reports zero defects,
+smells and nitpicks. The named gate passes again during prepare. Handoff
+validation follows the feature CodeHead commit. Canonical integration and full
+delivery acceptance remain pending integrator work before release preparation.
 
 ## Open questions
 

@@ -2631,6 +2631,148 @@ def test_hyperlinks_are_added_to_paragraphs_and_stories():
     assert reopened.paragraphs[0].runs[1].font.bold is True
 
 
+def test_complex_field_story_snapshots_preserve_cached_text_and_revision():
+    import rdocx
+
+    field = (
+        '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+        '<w:r><w:instrText> PAGE </w:instrText></w:r>'
+        '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+        '<w:r><w:t>7</w:t></w:r>'
+        '<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+    )
+    seed = rdocx.Document()
+    seed.set_header("header")
+    seed.set_footer("footer")
+    section_xml = "<w:sectPr" + _document_xml(seed).decode().split("<w:sectPr", 1)[1].split("</w:body>", 1)[0]
+    document = _replace_document_body(
+        seed, f'<w:p>{field}</w:p><w:sdt><w:sdtPr/><w:sdtContent>'
+        f'<w:p>{field}</w:p></w:sdtContent></w:sdt>'
+        + section_xml,
+    )
+    related = {story.part_name.lstrip("/"): story.kind for story in document.stories
+               if story.kind in ("header", "footer")}
+    result = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(document.to_bytes())) as source, zipfile.ZipFile(result, "w") as output:
+        for info in source.infolist():
+            data = source.read(info.filename)
+            if info.filename in related:
+                root = "hdr" if related[info.filename] == "header" else "ftr"
+                data = (f'<w:{root} xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                        f'<w:p>{field}</w:p></w:{root}>').encode()
+            output.writestr(info, data)
+    document = rdocx.Document.from_bytes(result.getvalue())
+    before = document.to_bytes()
+    held = document.paragraphs[0]
+    snapshots = document.story_items
+    fields = [item for item in snapshots if item.kind == "field"]
+    assert [(item.story.kind, item.text) for item in fields] == [
+        ("body", "7"), ("body", "7"), ("header", "7"), ("footer", "7")]
+    assert [item.direct_body_index for item in fields] == [0, 1, None, None]
+    assert all(field.encode() in item.xml for item in fields)
+    assert len({item.revision for item in snapshots}) == 1
+    assert document.story_items == snapshots
+    assert document.to_bytes() == before
+    assert held.text == "7"
+    with zipfile.ZipFile(io.BytesIO(before)) as original:
+        expected_parts = {name: original.read(name) for name in original.namelist()}
+    reopened = rdocx.Document.from_bytes(before)
+    assert [(item.story.kind, item.index_path, item.text, item.xml, item.direct_body_index)
+            for item in reopened.story_items] == [
+        (item.story.kind, item.index_path, item.text, item.xml, item.direct_body_index)
+        for item in snapshots]
+    with zipfile.ZipFile(io.BytesIO(reopened.to_bytes())) as saved:
+        assert {name: saved.read(name) for name in saved.namelist()} == expected_parts
+
+
+def test_complex_field_nested_snapshots_keep_links_and_read_handles():
+    import rdocx
+
+    nested = (
+        '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+        '<w:r><w:instrText> IF </w:instrText></w:r>'
+        '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+        '<w:r><w:instrText> PAGE </w:instrText></w:r>'
+        '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+        '<w:r><w:t>7</w:t></w:r>'
+        '<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+        '<w:r><w:instrText> = 7 yes no </w:instrText></w:r>'
+        '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+        '<w:r><w:t>yes</w:t></w:r>'
+        '<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+    )
+    seed = rdocx.Document()
+    paragraph = seed.add_paragraph("")
+    paragraph.add_hyperlink("seed", "https://example.test/field-owner")
+    relationship_id = seed.hyperlinks[0].relationship_id
+    document = _replace_document_body(seed,
+        f'<w:p><w:hyperlink r:id="{relationship_id}">{nested}</w:hyperlink>'
+        '<w:hyperlink w:anchor="neighbor"><w:r><w:t>neighbor</w:t></w:r></w:hyperlink></w:p>')
+    before = document.to_bytes()
+    held = document.paragraphs[0]
+    snapshots = document.story_items
+    fields = [item for item in snapshots if item.kind == "field"]
+    assert [item.text for item in fields] == ["yes", "7"]
+    assert all(item.revision == snapshots[0].revision for item in snapshots)
+    links = document.hyperlinks
+    assert [(link.text, link.url, link.anchor) for link in links] == [
+        ("7yes", "https://example.test/field-owner", None), ("neighbor", None, "neighbor")]
+    assert links[0].relationship_id == relationship_id
+    assert document.hyperlinks == links
+    assert document.story_items == snapshots
+    assert held.text == "yesneighbor"
+    assert document.to_bytes() == before
+    reopened = rdocx.Document.from_bytes(before)
+    assert [(item.index_path, item.text, item.xml) for item in reopened.story_items] == [
+        (item.index_path, item.text, item.xml) for item in snapshots]
+    assert [(link.index_path, link.text, link.url, link.anchor) for link in reopened.hyperlinks] == [
+        (link.index_path, link.text, link.url, link.anchor) for link in links]
+
+
+@pytest.mark.parametrize("default_binding,ancestor_word", [(False, False), (False, True), (True, False), (True, True)])
+def test_complex_field_first_run_namespace_lifetimes_do_not_escape(default_binding, ancestor_word):
+    import rdocx
+
+    word = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    ancestor = word if ancestor_word else "urn:producer"
+    local = "urn:producer" if ancestor_word else word
+    declaration = "xmlns" if default_binding else "xmlns:x"
+    prefix = "" if default_binding else "x:"
+    content = "8" if ancestor_word else "SHADOW"
+    expected = "87" if ancestor_word else "7"
+    header_xml = (f'<q:hdr xmlns:q="{word}" {declaration}="{ancestor}"><q:p>'
+        f'<q:r {declaration}="{local}"><q:fldChar q:fldCharType="begin"/></q:r>'
+        '<q:r><q:instrText> PAGE </q:instrText></q:r>'
+        '<q:r><q:fldChar q:fldCharType="separate"/></q:r>'
+        f'<q:r><{prefix}t>{content}</{prefix}t><q:t>7</q:t></q:r>'
+        '<q:r><q:fldChar q:fldCharType="end"/></q:r></q:p></q:hdr>').encode()
+    seed = rdocx.Document()
+    seed.add_paragraph("held")
+    seed.set_header("source")
+    header = next(story for story in seed.stories if story.kind == "header")
+    result = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(seed.to_bytes())) as source, zipfile.ZipFile(result, "w") as output:
+        for info in source.infolist():
+            data = header_xml if info.filename == header.part_name.lstrip("/") else source.read(info.filename)
+            output.writestr(info, data)
+    document = rdocx.Document.from_bytes(result.getvalue())
+    before = document.to_bytes()
+    held = document.paragraphs[0]
+    snapshots = document.story_items
+    fields = [item for item in snapshots if item.kind == "field" and item.story.kind == "header"]
+    assert len(fields) == 1
+    assert all(item.revision == snapshots[0].revision for item in snapshots)
+    assert document.story_items == snapshots
+    assert held.text == "held"
+    assert document.to_bytes() == before
+    with zipfile.ZipFile(io.BytesIO(before)) as archive:
+        assert archive.read(header.part_name.lstrip("/")) == header_xml
+    reopened = rdocx.Document.from_bytes(before)
+    assert [(item.story.kind, item.index_path, item.xml) for item in reopened.story_items] == [
+        (item.story.kind, item.index_path, item.xml) for item in snapshots]
+    assert fields[0].text == expected
+
+
 def test_story_item_xml_is_a_detached_snapshot():
     import rdocx
 
