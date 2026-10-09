@@ -104,6 +104,7 @@ defended.
 | S87 | X | 1 | 1 | 0 | 1 | 1 | Refreshed both CLI archive measurements after S86 Windows stack hardening and moved the planned M24 wave to S88 by approval. The full gate passed with 49 matching hashes, 139 policy tests, 22 package archives below 10 MiB and clean sprint review pass 1. Hosted CI run 37178559664 passed, including Docs and Release regressions. Build-only run 37178579418 produced all 14 expected artifacts after one targeted Linux x86-64 retry. Issue 266 stays open until both separately approved releases are published, verified and reported to the requester. No stories carried |
 | S88 | X | 1 | 1 | 0 | 3 | 1 | Repaired the unified release inventory and prepared PowerPoint 0.13.1 beside Word 0.15.0 after the immutable failed PowerPoint tag. The full gate passed with 49 matching hashes, 140 policy tests with two expected skips, exact 22-crate dry run and clean sprint review pass 1. Hosted CI run 37192110554 passed all jobs, including Docs, Release regressions and fidelity. Build-only run 37192115737 passed all 14 wheel and source distribution jobs, and both exact seven-file artifact contracts passed. Issue 266 remains open until both separately approved releases are published and verified. No stories carried |
 | S89 | M24, X | 5 | 5 | 0 | 21 | 2 | Completed note policy, cross-story ranges, deterministic fragment remapping and public glossary lifecycle, plus Changjoon's PR 269 fontdb feature-unification fix. Full verification passed with 49 unchanged hashes, 140 policy tests with two expected skips, 22 verified packages below 10 MiB and clean sprint review pass 1. M24 continues through S94. No stories carried |
+| S90 | M24, X | 20 | 18 | 2 | 55 | 3 | Completed 18 stories. The reconstructed 55-day estimate comprises 50 estimated days recorded for completed features plus F-X178 at 1 day and the chosen 4-day lower bound for F-283. Actual days are the three elapsed working dates from 2026-10-07 through 2026-10-09 inclusive, not person-days. F-X178 and F-283 carry to S91. F-X178 needs a separate scope decision and Issue264 remains excluded. New F-X192 owns the remaining bibliography catalogue in S91, and Issue281 remains open. Word0.16.0 and shared/PowerPoint0.14.0 are prepared for separately approved publication after close |
 
 ## Completed features
 
@@ -682,6 +683,11 @@ five working days.
 | S87 | 1 | 1 | 5.00 |
 | S88 | 1 | 1 | 5.00 |
 | S89 | 5 | 2 | 12.50 |
+| S90 | 18 | 3 | 30.00 |
+
+S90 velocity measures calendar throughput for a parallel team. It does not
+measure person effort or establish a sustainable single-developer forecast.
+Later per-feature effort was not recorded, and those actuals remain unchanged.
 
 ## Escalation record
 
@@ -772,6 +778,7 @@ was done about it. Empty is the expected state.
 | 2026-10-04 | Sprint estimate variance exceeded 30 percent | S86 | Record 2 elapsed workdays against 27 estimated for seven completed stories. Isolated workers reused established authoring and release infrastructure while the integrated gate, clean review and hosted build evidence remained explicit. The resulting 17.50 stories per week is a short sprint result, so retain the dependency-defined S87 boundary |
 | 2026-10-04 | Sprint estimate variance exceeded 30 percent | S88 | Record 1 elapsed workday against 3 estimated for the focused release repair. The failed tag had isolated the package inventory cause, and established release checks were reused. The resulting 5.00 stories per week is a short repair result, so retain the dependency-defined S89 boundary |
 | 2026-10-05 | Sprint estimate variance exceeded 30 percent | S89 | Record 2 elapsed workdays against 21 estimated. Dependency waves reused the completed related-story and package foundations, and PR 269 supplied a focused reproducer and fix. The resulting 12.50 stories per week is not a sustainable forecast, so retain the dependency-defined S90 boundary |
+| 2026-10-09 | Sprint estimate variance exceeded 30 percent | S90 | Record 3 elapsed working dates against the reconstructed 55-day planning estimate, including 50 estimated days for completed features. Nominal variance is 94.55 percent against 55 or 94.00 percent against 50. Parallel assistance, contribution reuse and exclusive implementation waves make elapsed time different from person effort. The resulting 30.00 stories per week is calendar throughput, not a sustainable forecast. Retain the S91 navigation and bibliography boundaries and recalibrate with measured effort |
 
 ## S79 contribution reconciliation
 
