@@ -31,7 +31,7 @@ Word editing gains checked field updates, richer note policies, cross-story rang
 
 This pre-1.0 release adds required members to existing public Rust types. Update exhaustive struct literals for Word `LayoutInput` with `sequence_snapshot`, `legacy_table_positioning`, `modern_footnote_layout`, `footnote_layout_like_word8`, `note_defaults`, `story_part_names` and `story_bodies`. Add `text_body` and `source_text_box_owner` to `CT_Shape`, `special_references` to `CT_NoteProperties`, and `draw_marker` to `NoteLayout`. Use default/update construction where the type provides it.
 
-Shared `TextSegment`, `GlyphRun` and `MultilingualGlyphRun` literals now need `note_reference_source`. Exhaustive `FieldKind` matches must handle `Section`, `SectionPages`, `SequenceContext` and `SequenceRepeat`. `FieldSource.index` now counts nested instruction and result fields in preorder.
+Shared `TextSegment`, `GlyphRun` and `MultilingualGlyphRun` literals now need `note_reference_source`. Exhaustive `FieldKind` matches must handle `Section`, `SectionPages`, `SequenceContext` and `SequenceRepeat`. Exhaustive `WordStory` matches must also handle `TextBox`. `FieldSource.index` now counts nested instruction and result fields in preorder.
 
 Native fallible header/footer setters validate staged content before publication. Existing infallible wrappers retain their panic contract and can reject invalid XML text earlier. Python setters propagate failures and revise document state only on success. Zero-result scoped edits preserve existing handles.
 

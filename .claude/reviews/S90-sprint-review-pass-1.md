@@ -82,7 +82,7 @@ hash/golden pairs were independently authenticated. Queue self-snapshot
 advisories remain qualified against matching final primary records.
 
 `docs/sprints/AS_BUILT.md:18438`
-`scripts/hash_manifest.json:1`
+`scripts/hash_baseline.json:1`
 
 X182 five and X183 fourteen labelled events overlap on14unique final keys.
 The remaining35of49keys are untouched. Current49hashes match their reviewed
