@@ -51,6 +51,8 @@ from rdocx import (
 
 def exercise_rdocx_types(path: Path) -> None:
     document = Document(path)
+    # Comment-aware removal keeps the existing bool surface.
+    assert_type(document.remove_content(1000), bool)
     opened: Document = Document.open(path)
     loaded: Document = Document.from_bytes(b"")
     paragraph: Paragraph = document.add_paragraph("typed")
@@ -212,6 +214,8 @@ def exercise_rdocx_types(path: Path) -> None:
     story_position = StoryRunPosition(item=story_items[0], run_index=0)
     handle_position = StoryRunPosition(paragraph=document.paragraphs[0], run_index=0)
     story_range = StoryRunRange(start=story_position, end=handle_position)
+    assert_type(document.move_comment(comment_id, story_range), None)
+    assert_type(document.move_comment_to_text(comment_id, "target", occurrence=0), None)
     story_comment_id: int = document.add_comment(
         story_range, author="Ada", text="story review"
     )
@@ -307,6 +311,8 @@ def exercise_rdocx_types(path: Path) -> None:
         bounds: BoundingBox = fragments[0].bounds
         assert_type(bounds.width, float)
     assert_type(comments[0].date, str | None)
+    assert_type(comments[0].anchor_text, str | None)
+    assert_type(comments[0].anchor, StoryRunRange | None)
     assert_type(sections[0].page_width, int | None)
     assert_type(styles[0].style_type, str)
     assert_type(stories[0].owner_index, int)
@@ -355,3 +361,13 @@ if TYPE_CHECKING:
     TableCollection()  # type: ignore[call-arg]
     Document().compare(Document(), "Ada", "2026-09-14T09:00:00Z", granularity="words")  # type: ignore[arg-type]
     Document().compare(Document(), "Ada", "2026-09-14T09:00:00Z", ignored_stories="header")  # type: ignore[arg-type]
+
+
+def scoped_replacement_signatures_cover_paragraph_cell_and_story_item(document: Document, paragraph: Paragraph, cell: Cell, item: StoryItem) -> None:
+    assert_type(paragraph.replace_text("old", "new", expect=1), int)
+    assert_type(cell.replace_text(old="old", new="new", expect=1), int)
+    assert_type(document.replace_text_at(item, "old", "new", expect=1), int)
+
+def whole_story_setter_signatures(document: Document) -> None:
+    assert_type(document.set_header(text="header"), None)
+    assert_type(document.set_footer(text="footer"), None)

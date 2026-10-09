@@ -137,6 +137,7 @@ mod tests {
     const WASM_OPT_ARGS: &[&str] = &[
         "-Oz",
         "--enable-bulk-memory",
+        "--enable-nontrapping-float-to-int",
         "<bindgen-wasm>",
         "-o",
         "<optimized-wasm>",
@@ -198,6 +199,7 @@ mod tests {
         let wasm_opt_args = vec![
             "-Oz".to_owned(),
             "--enable-bulk-memory".to_owned(),
+            "--enable-nontrapping-float-to-int".to_owned(),
             bindgen_wasm.display().to_string(),
             "-o".to_owned(),
             optimized_wasm.display().to_string(),
@@ -236,7 +238,7 @@ mod tests {
             ),
             wasm_opt_args: normalize_args(
                 wasm_opt_args,
-                &[(2, "<bindgen-wasm>"), (4, "<optimized-wasm>")],
+                &[(3, "<bindgen-wasm>"), (5, "<optimized-wasm>")],
             ),
             gzip_args: normalize_args(gzip_args, &[(3, "<optimized-wasm>")]),
             optimized_wasm: std::fs::read(optimized_wasm).expect("read optimized WASM"),
@@ -267,7 +269,7 @@ mod tests {
         if evidence.wasm_pack_version != "wasm-pack 0.15.0" {
             return Err("wasm-pack must be exactly 0.15.0".to_owned());
         }
-        if evidence.wasm_opt_version != "wasm-opt version 125" {
+        if evidence.wasm_opt_version != "wasm-opt version 125 (version_125)" {
             return Err("wasm-opt must be exactly version 125".to_owned());
         }
         let exact_args = |actual: &[String], expected: &[&str], tool: &str| {
@@ -334,7 +336,7 @@ mod tests {
         ];
         let mut evidence = SizePipelineEvidence {
             wasm_pack_version: "wasm-pack 0.15.0".to_owned(),
-            wasm_opt_version: "wasm-opt version 125".to_owned(),
+            wasm_opt_version: "wasm-opt version 125 (version_125)".to_owned(),
             wasm_pack_args: WASM_PACK_ARGS.iter().map(ToString::to_string).collect(),
             wasm_opt_args: WASM_OPT_ARGS.iter().map(ToString::to_string).collect(),
             gzip_args: GZIP_ARGS.iter().map(ToString::to_string).collect(),
@@ -354,6 +356,20 @@ mod tests {
             "wasm-pack did not use the reviewed pipeline arguments"
         );
         evidence.wasm_pack_args = WASM_PACK_ARGS.iter().map(ToString::to_string).collect();
+        evidence
+            .wasm_opt_args
+            .retain(|arg| arg != "--enable-nontrapping-float-to-int");
+        assert_eq!(
+            validate_size_pipeline(&evidence, "gzip").unwrap_err(),
+            "wasm-opt did not use the reviewed pipeline arguments"
+        );
+        evidence.wasm_opt_args = WASM_OPT_ARGS.iter().map(ToString::to_string).collect();
+        evidence.wasm_opt_version = "wasm-opt version 125".to_owned();
+        assert_eq!(
+            validate_size_pipeline(&evidence, "gzip").unwrap_err(),
+            "wasm-opt must be exactly version 125"
+        );
+        evidence.wasm_opt_version = "wasm-opt version 125 (version_125)".to_owned();
         evidence.gzip_args = ["-n", "-1", "-c", "<optimized-wasm>"]
             .into_iter()
             .map(ToString::to_string)
@@ -465,7 +481,7 @@ mod tests {
         let wasm_manifest = include_str!("../Cargo.toml");
 
         assert!(workspace_manifest.contains(
-            "rpptx = { path = \"crates/rpptx\", version = \"0.13.1\", default-features = false }"
+            "rpptx = { path = \"crates/rpptx\", version = \"0.14.0\", default-features = false }"
         ));
         assert!(
             facade_manifest

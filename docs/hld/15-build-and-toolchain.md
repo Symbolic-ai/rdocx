@@ -257,6 +257,23 @@ versions pass the repository license and advisory policy, compile for the WASM
 target graph, and do not add a format-family dependency edge.
 
 ## Packaging
+The native bibliography module is ordinary `rdocx` source and belongs in its
+published source archive. Bound Word inputs, UI receipts, native output graphs
+and other external oracle artifacts stay in ignored storage, outside crate
+archives. Bibliography introduces no collation dependency or data bundle.
+Future dependency additions belong to the separately approved F-X192 contract.
+The public layout font resolver retains its existing concrete algorithm and
+requires already-cascaded properties, with both layout and bibliography
+consumers covered by their scoped checks.
+
+Current source archives must pass verified package dry runs, archived source
+and test membership checks, README footprint checks and the crates.io10MiB
+limit. The shared Rust diff retains MSRV, WASM, hash and existing Python
+runtime/typing compatibility gates. These checks do not claim dedicated
+bibliography Python or WASM APIs. Feature preparation is not publication.
+Release family verification and the separate approval at the reviewed SHA
+remain required through the release workflow.
+
 
 `oxml-layout` packages its source and bundled font assets through an explicit
 manifest inventory:
@@ -377,8 +394,8 @@ The exact incubating crates.io allowlist now contains 15 implemented shared
 and PowerPoint packages. They are
 `oxml-core`, `oxml-opc`, `oxml-media`, `oxml-layout`, `oxml-drawing`,
 `oxml-pdf`, `oxml-sml`, `oxml-cli-support`, `oxml-chart`, `rpptx-oxml`,
-`rpptx-chart`, `rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. All 15
-are published at 0.12.1 from immutable annotated `rpptx-v0.12.1` tag at
+`rpptx-chart`, `rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. All15
+were published in S73 at0.12.1 from immutable annotated `rpptx-v0.12.1` tag at
 reviewed SHA `58ca5a279277f7cd8de0b8f250fb4650de14371b`. The earlier 0.11.0, 0.10.0,
 0.9.0, 0.8.0, 0.7.0, 0.6.0, 0.5.0,
 and 0.4.0 registry releases remain available, and no existing version or tag
@@ -400,8 +417,8 @@ and posted no contribution notifications. All seven 0.11.1 packages and six
 leave-open notifications are verified. After separate approval, exactly
 `rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0` are yanked. Complete coherent stable
 releases remain live and unyanked. The tag is never moved or deleted, no
-v0.11.0 GitHub release exists, and no other external state changes. Current
-stable source is published as the exact seven-package 0.14.0 family from
+v0.11.0 GitHub release exists, and no other external state changes. Historical S73
+stable source was published as the exact seven-package0.14.0 family from
 immutable annotated `v0.14.0` tag at reviewed SHA
 `58ca5a279277f7cd8de0b8f250fb4650de14371b`. All seven registry entries and
 their sole owner are verified, and the release depends on shared 0.12.1.
@@ -513,11 +530,12 @@ possible and never rewrite README prose by pattern.
 that inherit `[workspace.package].version`, including the unpublished
 `rdocx-wasm`, `rdocx-py`, and `oxml-py-support` packages, use cargo-release's
 effective `workspace` shared-version group and the `v{{version}}` tag template.
-That shared-version group, the `rdocx` Python project, and the rdocx WASM
-contract literals are prepared at 0.15.0, together with the exact
-seven-package stable family and its `v0.15.0` release notes. The prepared
-stable packages require shared OOXML 0.13.1. The latest published stable family
-remains the immutable annotated `v0.14.0` tag at reviewed SHA
+That shared-version group, the `rdocx` Python project, and rdocx WASM
+contract literals are prepared at0.16.0, together with the exact seven-package
+stable family and its `v0.16.0` release notes. The prepared stable packages
+require shared OOXML0.14.0. The previous complete unified stable release is
+immutable `v0.15.0` at9d019472f7e6b95ac4ba0770c4dee35dcbc28f0e. The historical
+S73 family retains its immutable annotated `v0.14.0` tag at reviewed SHA
 `58ca5a279277f7cd8de0b8f250fb4650de14371b`. Its published archives
 require shared 0.12.1. The unpublished 0.13.2 crates.io train is superseded
 rather than backfilled. The Python, binding, and
@@ -529,16 +547,17 @@ The remaining five packages and GitHub release were not published at that
 version. Shared 0.8.0 and stable 0.11.1 form the published recovery sequence.
 After separate immediate approval, the post-recovery cleanup yanked exactly
 `rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0`. Complete coherent stable releases
-remain live and unyanked. The current complete stable family is 0.14.0. Earlier
+remain live and unyanked. The complete S73 stable family is 0.14.0. Earlier
 immutable registry releases, including the complete 0.12.0 family, remain
 available. No binding, WASM, Python, npm, or
 incubating package gained publication authority from the stable release.
 The 15 publishable `oxml-*` and `rpptx*` package manifests and the unpublished
-`rpptx-py` binding crate use explicit version 0.13.1, the named `incubating`
+`rpptx-py` binding crate use explicit version0.14.0, the named `incubating`
 group, and the `rpptx-v{{version}}` template. The unpublished `rpptx-wasm`
 crate remains at 0.12.1 with its separate npm boundary. The crates.io
-allowlist remains exactly 15 packages. The latest published complete family is
-the immutable `rpptx-v0.12.1` release at reviewed SHA
+allowlist remains exactly15 packages. The previous complete unified family is
+immutable `rpptx-v0.13.1` at9d019472f7e6b95ac4ba0770c4dee35dcbc28f0e. The
+historical S73 family retains the immutable `rpptx-v0.12.1` release at reviewed SHA
 `58ca5a279277f7cd8de0b8f250fb4650de14371b`, and earlier registry releases
 remain available. The stable 0.10.1 registry consumer proof remains pinned to
 the immutable `oxml-layout@0.6.0` dependency rather than the current workspace
@@ -549,6 +568,14 @@ dependency requirements, and retain archive verification. Publishing, tag
 creation, and pushing are disabled, and no README replacement is configured.
 Preparation changes release carriers, assertions, and selected-family notes
 without changing runtime behavior.
+Current local verification checks all22 locally patched published archives,
+normalized inventory and exact source payloads below10MiB. Fresh local wheels
+and source distributions for both families run clean Python3.9/3.12 runtime and
+Python3.12 typing checks. Both WASM bindings and current npm carrier contracts
+retain their existing separate authority. Final integrated full verification,
+sprint review and SHA-bound hosted build-only rehearsal remain mandatory before
+close. The shared0.14.0 family publishes before Word0.16.0 where the verified
+internal pins require it, each with its own approval at reviewed main.
 External release actions remain owned by `/release`.
 
 `/release {vX.Y.Z | rpptx-vX.Y.Z}` is the only command allowed to create or

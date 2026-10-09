@@ -17,7 +17,10 @@ use rdocx_oxml::styles::CT_Styles;
 
 use crate::WordStory;
 use crate::block::ParagraphBlock;
-use crate::engine::{SourceRegistry, layout_paragraph_with_source_and_direction};
+use crate::engine::{
+    MainStoryLayoutItem, SourceRegistry, body_layout_items,
+    layout_paragraph_with_source_and_direction, sect_pr_to_geometry,
+};
 use crate::input::{LayoutInput, MediaRegistry};
 use crate::style_resolver::NumberingState;
 use oxml_layout::{
@@ -200,35 +203,87 @@ impl NoteRegistry {
                         NoteStream::Footnote => WordStory::Footnote { id: note.id },
                         NoteStream::Endnote => WordStory::Endnote { id: note.id },
                     };
-                    for (paragraph_index, paragraph) in note.paragraphs.iter().enumerate() {
-                        let source =
-                            sources.and_then(|sources| sources.id(&story, &[paragraph_index]));
-                        let (block, direction) = layout_paragraph_with_source_and_direction(
-                            paragraph,
-                            note_width,
-                            styles,
-                            input,
-                            media,
-                            fm,
-                            num_state,
-                            diagnostics,
-                            source,
-                            // Note text is page furniture at the bottom
-                            // margin, laid out against its own measure, so
-                            // the section grid does not reach it.
-                            None,
-                        )?;
-                        let first = lines.len();
-                        if block.has_visible_revision && !block.lines.is_empty() {
-                            revision_ranges.push(first..first + block.lines.len());
-                        }
-                        lines.extend(block.lines.iter().cloned());
-                        let last = lines.len();
-                        render_paragraphs.push(NoteRenderParagraph {
-                            block,
-                            direction,
-                            lines: first..last,
+                    let items = input
+                        .story_bodies
+                        .get(&story)
+                        .map(body_layout_items)
+                        .unwrap_or_else(|| {
+                            note.paragraphs
+                                .iter()
+                                .enumerate()
+                                .map(|(index, paragraph)| {
+                                    MainStoryLayoutItem::Paragraph(paragraph, vec![index])
+                                })
+                                .collect()
                         });
+                    for item in items {
+                        let laid_out_blocks = match item {
+                            MainStoryLayoutItem::Paragraph(paragraph, path) => {
+                                let source = sources.and_then(|sources| sources.id(&story, &path));
+                                let (mut block, direction) =
+                                    layout_paragraph_with_source_and_direction(
+                                        paragraph,
+                                        note_width,
+                                        styles,
+                                        input,
+                                        media,
+                                        fm,
+                                        num_state,
+                                        diagnostics,
+                                        source,
+                                        None,
+                                    )?;
+                                if let Some(registry) = sources {
+                                    registry.bind_text_boxes(&mut block, source)?;
+                                }
+                                vec![(block, direction)]
+                            }
+                            MainStoryLayoutItem::Table(table, path) => {
+                                let (table, semantics) =
+                                    crate::table::layout_table_with_provenance(
+                                        table,
+                                        note_width,
+                                        styles,
+                                        input,
+                                        media,
+                                        fm,
+                                        num_state,
+                                        diagnostics,
+                                        sources,
+                                        &story,
+                                        &path,
+                                        None,
+                                    )?;
+                                crate::paginator::story_table_rows(
+                                    &table,
+                                    &semantics,
+                                    &input
+                                        .document
+                                        .body
+                                        .sect_pr
+                                        .as_ref()
+                                        .map(sect_pr_to_geometry)
+                                        .unwrap_or_default(),
+                                    media.media(),
+                                )
+                                .into_iter()
+                                .map(|block| (block, TextDirection::Auto))
+                                .collect()
+                            }
+                        };
+                        for (block, direction) in laid_out_blocks {
+                            let first = lines.len();
+                            if block.has_visible_revision && !block.lines.is_empty() {
+                                revision_ranges.push(first..first + block.lines.len());
+                            }
+                            lines.extend(block.lines.iter().cloned());
+                            let last = lines.len();
+                            render_paragraphs.push(NoteRenderParagraph {
+                                block,
+                                direction,
+                                lines: first..last,
+                            });
+                        }
                     }
 
                     let marker_text = if special.is_some() {
@@ -338,6 +393,7 @@ fn shape_marker(text: &str, fm: &mut FontManager) -> Result<Option<TextSegment>>
         field_kind: None,
         field_source: None,
         note: None,
+        note_reference_source: None,
     }))
 }
 
@@ -357,6 +413,7 @@ mod tests {
         );
 
         LayoutInput {
+            sequence_snapshot: None,
             revision_view: crate::input::RevisionView::Accepted,
             automatic_hyphenation: false,
             mirror_margins: false,
@@ -364,11 +421,16 @@ mod tests {
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
+            legacy_table_positioning: false,
+            modern_footnote_layout: false,
+            footnote_layout_like_word8: false,
             math_properties: None,
             note_defaults: [None, None],
             document: rdocx_oxml::document::CT_Document::new(),
             styles: CT_Styles::new_default(),
             numbering: None,
+            story_part_names: Default::default(),
+            story_bodies: Default::default(),
             headers: HashMap::new(),
             footers: HashMap::new(),
             images: HashMap::new(),

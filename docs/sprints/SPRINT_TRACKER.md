@@ -104,6 +104,7 @@ defended.
 | S87 | X | 1 | 1 | 0 | 1 | 1 | Refreshed both CLI archive measurements after S86 Windows stack hardening and moved the planned M24 wave to S88 by approval. The full gate passed with 49 matching hashes, 139 policy tests, 22 package archives below 10 MiB and clean sprint review pass 1. Hosted CI run 37178559664 passed, including Docs and Release regressions. Build-only run 37178579418 produced all 14 expected artifacts after one targeted Linux x86-64 retry. Issue 266 stays open until both separately approved releases are published, verified and reported to the requester. No stories carried |
 | S88 | X | 1 | 1 | 0 | 3 | 1 | Repaired the unified release inventory and prepared PowerPoint 0.13.1 beside Word 0.15.0 after the immutable failed PowerPoint tag. The full gate passed with 49 matching hashes, 140 policy tests with two expected skips, exact 22-crate dry run and clean sprint review pass 1. Hosted CI run 37192110554 passed all jobs, including Docs, Release regressions and fidelity. Build-only run 37192115737 passed all 14 wheel and source distribution jobs, and both exact seven-file artifact contracts passed. Issue 266 remains open until both separately approved releases are published and verified. No stories carried |
 | S89 | M24, X | 5 | 5 | 0 | 21 | 2 | Completed note policy, cross-story ranges, deterministic fragment remapping and public glossary lifecycle, plus Changjoon's PR 269 fontdb feature-unification fix. Full verification passed with 49 unchanged hashes, 140 policy tests with two expected skips, 22 verified packages below 10 MiB and clean sprint review pass 1. M24 continues through S94. No stories carried |
+| S90 | M24, X | 20 | 18 | 2 | 55 | 3 | Completed 18 stories. The reconstructed 55-day estimate comprises 50 estimated days recorded for completed features plus F-X178 at 1 day and the chosen 4-day lower bound for F-283. Actual days are the three elapsed working dates from 2026-10-07 through 2026-10-09 inclusive, not person-days. F-X178 and F-283 carry to S91. F-X178 needs a separate scope decision and Issue264 remains excluded. New F-X192 owns the remaining bibliography catalogue in S91, and Issue281 remains open. Word0.16.0 and shared/PowerPoint0.14.0 are prepared for separately approved publication after close |
 
 ## Completed features
 
@@ -564,6 +565,21 @@ defended.
 | F-X177 | S89 | S | 1 | 1 | 2026-10-05 | Integrated changjoon-park PR 269 fontdb feature-unification fix, with four feature configurations and unchanged hashes |
 | F-277 | S89 | L | 5 | 1 | 2026-10-05 | Added checked glossary creation, updates, insertion, removal and placeholder binding with raw XML preservation and atomic package closure |
 
+| F-X179 | S90 | S | 1 | 1 | 2026-10-07 | Integrated hadim PR 271 against every Issue 270 criterion, fixed nested legacy reply removal and retained all 49 hash entries |
+
+| F-278 | S90 | L | 5 | 1 | 2026-10-07 | Added checked simple and complex fields, recursive operands, ordered caches and locks, with clean microscope and 49 unchanged hashes |
+| F-279 | S90 | L | 5 | 1 | 2026-10-07 | Added five-kind pagination materialization across modeled stories, authenticated Word ownership, clean implementation and integration reviews, 49 unchanged hashes and 22 verified packages |
+
+| F-280 | S90 | M | 2 | 1 | 2026-10-08 | Added atomic caption and cross-reference authoring, shared physical sequences and numbering, bounded note and annotation refresh, clean worker and integration reviews and unchanged49 worker hashes |
+
+| F-281 | S90 | L | 5 | 1 | 2026-10-08 | Added atomic indexes, figures and authority tables, namespace-safe owned caches and one post-insertion snapshot, clean worker and integration reviews and49 unchanged integrated hashes |
+
+| F-X182 | S90 | M | 2 | 1 | 2026-10-08 | Integrated hadim PR279 for Issue277, 480 alignment combinations, clean delta and ALL reviews, five explained hash changes and invoice-only golden delta |
+
+| F-X184 | S90 | L | 5 | 1 | 2026-10-08 | Safe complete-thread removal and atomic partial-cut refusal for hadim Issue282, clean ALL review, native1750 and final rebuilt Python85+2, hash49 unchanged |
+
+| F-X185 | S90 | M | 2 | 1 | 2026-10-08 | Checked typed comment anchors and nested paragraph snapshots for hadim Issues283/289, clean ALL, native1761/XML629/CLI64 and current rebuilt Python93, hash49 unchanged |
+
 ## Velocity
 
 Recalculated at each sprint close. The backlog assumes about 2 stories per week
@@ -667,6 +683,11 @@ five working days.
 | S87 | 1 | 1 | 5.00 |
 | S88 | 1 | 1 | 5.00 |
 | S89 | 5 | 2 | 12.50 |
+| S90 | 18 | 3 | 30.00 |
+
+S90 velocity measures calendar throughput for a parallel team. It does not
+measure person effort or establish a sustainable single-developer forecast.
+Later per-feature effort was not recorded, and those actuals remain unchanged.
 
 ## Escalation record
 
@@ -757,6 +778,7 @@ was done about it. Empty is the expected state.
 | 2026-10-04 | Sprint estimate variance exceeded 30 percent | S86 | Record 2 elapsed workdays against 27 estimated for seven completed stories. Isolated workers reused established authoring and release infrastructure while the integrated gate, clean review and hosted build evidence remained explicit. The resulting 17.50 stories per week is a short sprint result, so retain the dependency-defined S87 boundary |
 | 2026-10-04 | Sprint estimate variance exceeded 30 percent | S88 | Record 1 elapsed workday against 3 estimated for the focused release repair. The failed tag had isolated the package inventory cause, and established release checks were reused. The resulting 5.00 stories per week is a short repair result, so retain the dependency-defined S89 boundary |
 | 2026-10-05 | Sprint estimate variance exceeded 30 percent | S89 | Record 2 elapsed workdays against 21 estimated. Dependency waves reused the completed related-story and package foundations, and PR 269 supplied a focused reproducer and fix. The resulting 12.50 stories per week is not a sustainable forecast, so retain the dependency-defined S90 boundary |
+| 2026-10-09 | Sprint estimate variance exceeded 30 percent | S90 | Record 3 elapsed working dates against the reconstructed 55-day planning estimate, including 50 estimated days for completed features. Nominal variance is 94.55 percent against 55 or 94.00 percent against 50. Parallel assistance, contribution reuse and exclusive implementation waves make elapsed time different from person effort. The resulting 30.00 stories per week is calendar throughput, not a sustainable forecast. Retain the S91 navigation and bibliography boundaries and recalibrate with measured effort |
 
 ## S79 contribution reconciliation
 
@@ -789,3 +811,55 @@ Issues [243](https://github.com/tensorbee/rdocx/issues/243#issuecomment-59595336
 ## S89 contribution reconciliation
 
 PR [269](https://github.com/tensorbee/rdocx/pull/269), contributed by Changjoon (`changjoon-park`), is superseded by the F-X177 integration at `8cced41d`. The original memmap compile reproducer fails before the fix and passes after it. Default, no-default, memmap and no-default plus memmap configurations passed on the integrated tree. Close the PR after pushing the S89 main merge, with an individual thank-you comment linking the integration and the sprint merge. No separate issue was assigned to S89. Issue 264's declarative authoring discussion remains open and outside this sprint's acceptance scope.
+
+## S90 contribution reconciliation
+
+PR [271](https://github.com/tensorbee/rdocx/pull/271), contributed by Hadrien
+Mary (`hadim`), is integrated through F-X179 with an additional reviewed fix
+for nested legacy reply removal. Every [Issue 270](https://github.com/tensorbee/rdocx/issues/270)
+criterion passes, including XML parent and done rows and multiline authoring
+through all existing entry points. Reconcile both records only after the
+verified S90 merge is pushed through `/close-sprint`, with contributor thanks
+and links to the feature integration and main merge. Issue 264 is excluded.
+
+
+Issue [281](https://github.com/tensorbee/rdocx/issues/281), raised by Hadrien
+Mary (`hadim`), is assessed in the existing F-184 decision at S95. The go
+requires a material combined-lifecycle gap and an explicit preserve, edit and
+execute boundary. The roadmap stages reading and loss-aware editing before
+calculation and pivots. Rendering and distribution remain scheduled for S104.
+The request for a unified CLI/Python workflow and an earlier usable package
+adds integration and release tradeoffs to that decision. The existing
+[maintainer response](https://github.com/tensorbee/rdocx/issues/281#issuecomment-6058792996)
+answers those questions and invites concrete workflows and preservation needs.
+Keep the discussion open for F-184 and reconcile this existing response during
+verified S90 sprint close.
+
+The [reporter follow-up](https://github.com/tensorbee/rdocx/issues/281#issuecomment-6063901190)
+adds concrete Google Sheets review requirements: byte-preserve unmodeled
+comment metadata, validation, conditional formatting and names, read typed
+cells and formula caches, edit with styles and atomic output, and keep shared
+formulas intact. Explicit stale-cache handling is required. The first-cut
+alternatives are recalculate-on-load or a bounded basic evaluator. Unified
+installation and API shape, Rust performance and safety, and later rendering
+are the differentiators. Chart authoring is not requested. HLD14 and the S95
+plan retain these inputs without starting conditional spreadsheet work in S90
+or changing the reviewed release boundary. Keep Issue281 open for F-184.
+
+| F-X186 | S90 | M | 2 | 1 | 2026-10-08 | Identity-preserving native/Python/CLI comment movement for hadim Issue284 and adapted PR287, ALL pass4 clean, facade1770/CLI65/Python94, hash49 unchanged |
+
+| F-X187 | S90 | M | 2 | 1 | 2026-10-08 | Owned native and Python scoped replacement for hadim Issue285 and adapted PR286, direct-control correction from PR287, ALL pass2 clean, native2422/Python97/CLI11, hash49 unchanged |
+
+| F-X188 | S90 | L | 4 | not recorded | 2026-10-09 | Issues288/292 whole-story ownership and qualified glossary omission, ALL pass3 clean, native1878/Python99, hash49 unchanged. Actual effort was not measured |
+
+| F-X180 | S90 | S | 1 | not recorded | 2026-10-09 | All7 Issue272 nil/none topologies, ALL pass2 clean, durable final scoped attestation, hash49 unchanged and declared separate dense-form segment delta |
+| F-X181 | S90 | S | 1 | not recorded | 2026-10-09 | Full Issue273 cell/field/break controls, ALL pass1 clean,19 retained logs rehashed, hash49 unchanged |
+| F-X183 | S90 | M | 2 | not recorded | 2026-10-09 | Issues276/278 bounded legacy/default policies,600cases and accepted-empty-row proof, ALL pass2 plus three DELTA reviews,14 changed keys, qualified combined regression receipts |
+
+| F-X190 | S90 | M | 2 | not recorded | 2026-10-09 | Issue291 existing snapshot repair, ALL pass2 clean after measured namespace lifetime correction, native1822/Python105, hash49 unchanged |
+
+| F-X191 | S90 | S | 1 | not recorded | 2026-10-09 | PR293 namespace-only numbering reader correction, ALL pass1 clean, native1825, all12 scoped stages passed, hash49 unchanged |
+
+| F-282 | S90 | L | 4 | not recorded | 2026-10-09 | Revised measured native bibliography contract, ALL pass4 clean, qualified native4160/all1340 APA and current layout320/Python178/CLI66, verified22 packages, hash49 unchanged. Full catalogue F-X192 and navigation F-283 in S91 |
+
+| F-X189 | S90 | L | 4 | not recorded | 2026-10-09 | Word0.16.0 and shared/PowerPoint0.14.0 local preparation, ALL pass3 clean, actual22crate archives, full native5708 and installed Word178/PPT77 per interpreter, WASM/npm/size and golden7 passed, hash49 match. Final HEAD review, hosted rehearsal, close and publication remain separate |

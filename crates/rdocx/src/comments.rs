@@ -346,14 +346,36 @@ impl BookmarkRef {
 }
 
 /// Read-only view of a comment and its thread metadata.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct CommentRef<'a> {
+    document: &'a Document,
     inner: &'a CT_Comment,
     extension: Option<&'a CT_CommentEx>,
     parent_id: Option<i32>,
 }
 
+impl std::fmt::Debug for CommentRef<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CommentRef")
+            .field("inner", self.inner)
+            .field("extension", &self.extension)
+            .field("parent_id", &self.parent_id)
+            .finish()
+    }
+}
+
 impl CommentRef<'_> {
+    /// Checked accepted-view range, without an invented parent range for replies.
+    pub fn anchor(&self) -> Result<Option<StoryRunRange>> {
+        self.document.comment_anchor(self.id())
+    }
+
+    /// Checked accepted span text. A point is empty and a known orphan is absent.
+    pub fn anchor_text(&self) -> Result<Option<String>> {
+        self.document.comment_anchor_text(self.id())
+    }
+
     pub fn id(&self) -> i32 {
         self.inner.id
     }
@@ -400,7 +422,12 @@ impl Document {
         let mut candidate = self.clone_for_staging();
         let mut identifiers = candidate.identifiers.clone();
         let id = identifiers.reserve_bookmark_id()?;
-        candidate.anchor_story_range(&range, RangeAnchor::Bookmark { id, name }, "bookmark")?;
+        candidate.anchor_story_range(
+            &range,
+            RangeAnchor::Bookmark { id, name },
+            "bookmark",
+            false,
+        )?;
         candidate.identifiers = identifiers;
         candidate.story_ranges()?;
         let reopened = candidate.prepare_and_reopen_staged()?;
@@ -441,6 +468,7 @@ impl Document {
             &range,
             RangeAnchor::Permission { id, editor, group },
             "permission",
+            false,
         )?;
         candidate.story_ranges()?;
         let reopened = candidate.prepare_and_reopen_staged()?;
@@ -457,7 +485,7 @@ impl Document {
         }
         self.story_ranges()?;
         let mut candidate = self.clone_for_staging();
-        candidate.anchor_story_range(&range, RangeAnchor::Proofing { kind }, "proofing")?;
+        candidate.anchor_story_range(&range, RangeAnchor::Proofing { kind }, "proofing", false)?;
         candidate.story_ranges()?;
         let reopened = candidate.prepare_and_reopen_staged()?;
         self.commit_staged_mutation(reopened);
@@ -480,6 +508,66 @@ impl Document {
     }
 
     /// Move a checked pair to a new range in one story owner.
+    /// Move one existing root comment without changing its thread identity.
+    /// Unknown IDs, replies, incomplete anchors and unsupported destinations
+    /// are refused without publishing any change.
+    pub fn move_comment(&mut self, id: i32, range: StoryRunRange) -> Result<()> {
+        let selected = self.checked_movable_comment(id)?;
+        self.move_story_range(&selected, range)
+    }
+
+    /// Move an existing root comment onto a literal main-story occurrence.
+    /// Search and run splitting follow [`Self::add_comment_on_text`].
+    pub fn move_comment_to_text(&mut self, id: i32, anchor: &str, occurrence: usize) -> Result<()> {
+        let selected = self.checked_movable_comment(id)?;
+        let mut candidate = self.clone_for_staging();
+        let reference = candidate.remove_comment_source_for_move(&selected)?;
+        candidate.anchor_existing_comment_on_text(id, anchor, occurrence)?;
+        candidate.restore_comment_reference_run(id, reference)?;
+        candidate.flush_to_package()?;
+        candidate.comment_ownership_at(&candidate.doc_part_name)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
+    fn checked_movable_comment(&self, id: i32) -> Result<StoryRangeRef> {
+        let mut proof = self.clone_for_staging();
+        proof.flush_to_package()?;
+        let ownership = proof.comment_ownership_at(&proof.doc_part_name)?;
+        match ownership.parents.get(&id) {
+            None => return Err(Error::Other(format!("unknown comment {id}"))),
+            Some(Some(_)) => {
+                return Err(Error::Other(format!(
+                    "comment {id} is a reply, not a movable root"
+                )));
+            }
+            Some(None) => {}
+        }
+        let counts = CommentOwnership::marker_counts(&ownership.markers);
+        if counts.get(&id) != Some(&[1, 1, 1]) {
+            return Err(Error::Other(format!(
+                "comment {id} requires one complete paired range and reference"
+            )));
+        }
+        // This exact accepted projection also rejects hidden, reversed,
+        // cross-owner or unrepresentable endpoints rather than inventing one.
+        self.comment_anchor(id)?
+            .ok_or_else(|| Error::Other(format!("comment {id} has no movable paired range")))?;
+        let mut selected = self.story_ranges()?.into_iter().filter(
+            |entry| matches!(entry.kind(), StoryRangeKind::Comment { id: found } if *found == id),
+        );
+        let entry = selected
+            .next()
+            .ok_or_else(|| Error::Other(format!("comment {id} has no selected source range")))?;
+        if selected.next().is_some() {
+            return Err(Error::Other(format!(
+                "comment {id} has ambiguous source ranges"
+            )));
+        }
+        Ok(entry)
+    }
+
     pub fn move_story_range(
         &mut self,
         selected: &StoryRangeRef,
@@ -487,6 +575,20 @@ impl Document {
     ) -> Result<()> {
         if !self.story_ranges()?.contains(selected) {
             return Err(Error::Other("selected story range is stale".to_owned()));
+        }
+        if let StoryRangeKind::Comment { id } = selected.kind() {
+            let checked = self.checked_movable_comment(*id)?;
+            if &checked != selected {
+                return Err(Error::Other("selected comment range is stale".into()));
+            }
+            let mut candidate = self.clone_for_staging();
+            candidate.move_comment_story_range(selected, &range, *id)?;
+            candidate.flush_to_package()?;
+            candidate.comment_ownership_at(&candidate.doc_part_name)?;
+            candidate.story_ranges()?;
+            let reopened = candidate.prepare_and_reopen_staged()?;
+            self.commit_staged_mutation(reopened);
+            return Ok(());
         }
         let mut candidate = self.clone_for_staging();
         candidate.remove_story_range_markers(selected, true)?;
@@ -501,7 +603,7 @@ impl Document {
             StoryRangeKind::Proofing { kind } => RangeAnchor::Proofing { kind },
         };
         let mut placement_check = self.clone_for_staging();
-        placement_check.anchor_story_range(&range, anchor, "story")?;
+        placement_check.anchor_story_range(&range, anchor, "story", false)?;
         let refreshed = candidate.stories()?;
         let rebase = |position: &StoryRunPosition| -> Result<StoryRunPosition> {
             let source = position.location.story();
@@ -528,7 +630,7 @@ impl Document {
             start: rebase(&range.start)?,
             end: rebase(&range.end)?,
         };
-        candidate.anchor_story_range(&range, anchor, "story")?;
+        candidate.anchor_story_range(&range, anchor, "story", false)?;
         candidate.story_ranges()?;
         let reopened = candidate.prepare_and_reopen_staged()?;
         self.commit_staged_mutation(reopened);
@@ -966,13 +1068,13 @@ impl Document {
         let by_para_id = comments
             .comments
             .iter()
-            .filter_map(|comment| first_para_id(comment).map(|para_id| (para_id, comment.id)))
+            .flat_map(|comment| para_ids(comment).map(|para_id| (para_id, comment.id)))
             .collect::<HashMap<_, _>>();
         comments
             .comments
             .iter()
             .map(|comment| {
-                let extension = first_para_id(comment).and_then(|para_id| {
+                let extension = last_para_id(comment).and_then(|para_id| {
                     self.comments_extended
                         .as_ref()?
                         .comments
@@ -983,6 +1085,7 @@ impl Document {
                     .and_then(|entry| entry.para_id_parent.as_deref())
                     .and_then(|para_id| by_para_id.get(para_id).copied());
                 CommentRef {
+                    document: self,
                     inner: comment,
                     extension,
                     parent_id,
@@ -996,7 +1099,8 @@ impl Document {
     /// Run indexes count the runs that `Paragraph::runs` lists, and the
     /// range markers are placed as [`Self::add_bookmark`] places its markers.
     /// The reference run follows the end marker. A range that cannot be
-    /// anchored exactly is an error and leaves the document unchanged.
+    /// anchored exactly is an error and leaves the document unchanged. Each
+    /// line of `text` becomes one paragraph of the comment.
     pub fn add_comment(
         &mut self,
         range: RunRange,
@@ -1010,7 +1114,8 @@ impl Document {
     /// Add a dated comment over a half-open range of body paragraph runs.
     ///
     /// `date`, when present, must be an RFC 3339 timestamp. No date is the
-    /// deterministic default used by [`Document::add_comment`].
+    /// deterministic default used by [`Document::add_comment`]. Each line of
+    /// `text` becomes one paragraph of the comment.
     pub fn add_comment_with_date(
         &mut self,
         range: RunRange,
@@ -1033,6 +1138,7 @@ impl Document {
     /// control with the two-segment path that
     /// [`Document::paragraph_story_location`] returns. Run indexes count the
     /// runs that `Paragraph::runs` lists, as in [`Document::add_comment`].
+    /// Each line of `text` becomes one paragraph of the comment.
     pub fn add_story_comment_with_date(
         &mut self,
         range: StoryRunRange,
@@ -1075,7 +1181,8 @@ impl Document {
                 "comment story range start must not follow its end".to_owned(),
             ));
         }
-        if range.start.location.index_path().len() == 2
+        if range.start.location != range.end.location
+            || range.start.location.index_path().len() == 2
             || range.end.location.index_path().len() == 2
             || matches!(
                 range.start.location.story().kind(),
@@ -1089,7 +1196,7 @@ impl Document {
         {
             let mut identifiers = self.identifiers.clone();
             let id = identifiers.reserve_comment_id()?;
-            self.anchor_story_range(&range, RangeAnchor::Comment(id), "comment")?;
+            self.anchor_story_range(&range, RangeAnchor::Comment(id), "comment", false)?;
             self.ensure_comment_models()?;
             self.ensure_comment_relationships()?;
             self.push_comment_definition(id, author, initials, text, date)?;
@@ -1198,7 +1305,7 @@ impl Document {
     /// be anchored exactly is an error and leaves the document unchanged. A
     /// match is not exact when its range would also show text that the
     /// literal text leaves out, such as the result of a field between two of
-    /// its runs.
+    /// its runs. Each line of `text` becomes one paragraph of the comment.
     pub fn add_comment_on_text(
         &mut self,
         anchor: &str,
@@ -1236,6 +1343,25 @@ impl Document {
         self.ensure_comment_relationships()?;
         let mut identifiers = self.identifiers.clone();
         let id = identifiers.reserve_comment_id()?;
+        self.anchor_existing_comment_on_text(id, anchor, occurrence)?;
+        self.push_comment_definition(id, author, initials, text, date)?;
+        self.identifiers = identifiers;
+        self.comments_dirty = true;
+        self.invalidate_layout();
+        Ok(id)
+    }
+
+    // Shared existing literal finder and checked splitter. Moving a comment
+    // supplies its identity directly and never allocates a temporary thread.
+    fn anchor_existing_comment_on_text(
+        &mut self,
+        id: i32,
+        anchor: &str,
+        occurrence: usize,
+    ) -> Result<()> {
+        if anchor.is_empty() {
+            return Err(Error::Other("comment anchor text must not be empty".into()));
+        }
         let mut remaining = occurrence;
         let mut anchored = None;
         visit_body_paragraphs_mut(&mut self.document.body.content, &mut |paragraph| {
@@ -1267,18 +1393,6 @@ impl Document {
                             RangeAnchor::Comment(id),
                             "comment",
                         )
-                    })
-                    .and_then(|()| {
-                        // Preserved children such as `w:fldSimple` are not in
-                        // the literal text, but the range shows their text.
-                        let shown = paragraph.comment_range_text(id).unwrap_or_default();
-                        if shown == anchor {
-                            Ok(())
-                        } else {
-                            Err(Error::Other(format!(
-                                "comment anchor text {anchor:?} occurrence {occurrence} cannot be anchored exactly: its range would show {shown:?}"
-                            )))
-                        }
                     }),
             );
         });
@@ -1290,15 +1404,20 @@ impl Document {
                 "comment anchor text {anchor:?} has no occurrence {occurrence}: it occurs {found} {times} in the main story"
             ))
         })??;
-        self.push_comment_definition(id, author, initials, text, date)?;
-        self.identifiers = identifiers;
-        self.comments_dirty = true;
+        // Read actual namespace scopes after the mutable walk releases its borrow.
+        // Preserved field results count, while tabs and breaks have zero width.
+        let shown = self.comment_literal_range_text(id)?.unwrap_or_default();
+        if shown != anchor {
+            return Err(Error::Other(format!(
+                "comment anchor text {anchor:?} occurrence {occurrence} cannot be anchored exactly: its range would show {shown:?}"
+            )));
+        }
         self.invalidate_layout();
-        Ok(id)
+        Ok(())
     }
 
-    /// Append comment `id`, holding one text paragraph, and its thread entry
-    /// to the comment models, which must already exist.
+    /// Append comment `id`, holding one paragraph per line of `text`, and its
+    /// thread entry to the comment models, which must already exist.
     fn push_comment_definition(
         &mut self,
         id: i32,
@@ -1307,9 +1426,9 @@ impl Document {
         text: &str,
         date: Option<&str>,
     ) -> Result<()> {
-        let para_id = allocate_para_id(self.comments.as_ref(), self.comments_extended.as_ref())?;
-        let mut paragraph = CT_P::new();
-        paragraph.add_run(text);
+        let mut occupied =
+            occupied_para_ids(self.comments.as_ref(), self.comments_extended.as_ref());
+        let (paragraphs, paragraph_ids, para_id) = comment_text_paragraphs(text, &mut occupied)?;
         self.comments
             .as_mut()
             .expect("comment model was initialized")
@@ -1319,8 +1438,8 @@ impl Document {
                 author: Some(author.to_owned()),
                 date: date.map(str::to_owned),
                 initials: initials.map(str::to_owned),
-                paragraphs: vec![paragraph],
-                paragraph_ids: vec![Some(para_id.clone())],
+                paragraphs,
+                paragraph_ids,
                 extra_attributes: Vec::new(),
                 extra_xml: Vec::new(),
             });
@@ -1337,14 +1456,16 @@ impl Document {
         Ok(())
     }
 
-    /// Add a reply linked to the selected comment paragraph.
+    /// Add a reply linked to the selected comment's last paragraph. Each line
+    /// of `text` becomes one paragraph of the reply.
     pub fn reply_to(&mut self, parent_id: i32, author: &str, text: &str) -> Result<i32> {
         self.reply_to_with_date(parent_id, author, text, None)
     }
 
-    /// Add a dated reply linked to the selected comment paragraph.
+    /// Add a dated reply linked to the selected comment's last paragraph.
     ///
-    /// `date`, when present, must be an RFC 3339 timestamp.
+    /// `date`, when present, must be an RFC 3339 timestamp. Each line of
+    /// `text` becomes one paragraph of the reply.
     pub fn reply_to_with_date(
         &mut self,
         parent_id: i32,
@@ -1377,7 +1498,7 @@ impl Document {
                     .position(|item| item.id == parent_id)
             })
             .ok_or_else(|| Error::Other(format!("comment id {parent_id} does not exist")))?;
-        let existing_parent_para_id = first_para_id(
+        let existing_parent_para_id = last_para_id(
             &self
                 .comments
                 .as_ref()
@@ -1385,15 +1506,13 @@ impl Document {
                 .comments[parent_index],
         )
         .map(str::to_owned);
+        let mut occupied =
+            occupied_para_ids(self.comments.as_ref(), self.comments_extended.as_ref());
         let parent_para_id = match existing_parent_para_id {
             Some(para_id) => para_id,
-            None => allocate_para_id(self.comments.as_ref(), self.comments_extended.as_ref())?,
+            None => allocate_para_id_from_occupied(&mut occupied)?,
         };
-        let para_id = allocate_para_id_with_reserved(
-            self.comments.as_ref(),
-            self.comments_extended.as_ref(),
-            Some(&parent_para_id),
-        )?;
+        let (paragraphs, paragraph_ids, para_id) = comment_text_paragraphs(text, &mut occupied)?;
         self.ensure_comment_models()?;
         self.ensure_comment_relationships()?;
         let id = self.identifiers.reserve_comment_id()?;
@@ -1406,16 +1525,14 @@ impl Document {
         if parent.paragraph_ids.len() < parent.paragraphs.len() {
             parent.paragraph_ids.resize(parent.paragraphs.len(), None);
         }
-        parent.paragraph_ids[0] = Some(parent_para_id.clone());
-        let mut paragraph = CT_P::new();
-        paragraph.add_run(text);
+        parent.paragraph_ids[parent.paragraphs.len() - 1] = Some(parent_para_id.clone());
         comments.comments.push(CT_Comment {
             id,
             author: Some(author.to_owned()),
             date: date.map(str::to_owned),
             initials: None,
-            paragraphs: vec![paragraph],
-            paragraph_ids: vec![Some(para_id.clone())],
+            paragraphs,
+            paragraph_ids,
             extra_attributes: Vec::new(),
             extra_xml: Vec::new(),
         });
@@ -1466,7 +1583,7 @@ impl Document {
         else {
             return Ok(false);
         };
-        let existing_para_id = first_para_id(
+        let existing_para_id = last_para_id(
             &self
                 .comments
                 .as_ref()
@@ -1491,7 +1608,8 @@ impl Document {
         if comment.paragraph_ids.len() < comment.paragraphs.len() {
             comment.paragraph_ids.resize(comment.paragraphs.len(), None);
         }
-        comment.paragraph_ids[0] = Some(para_id.clone());
+        let last = comment.paragraphs.len() - 1;
+        comment.paragraph_ids[last] = Some(para_id.clone());
         let extended = self
             .comments_extended
             .as_mut()
@@ -1516,95 +1634,46 @@ impl Document {
         Ok(true)
     }
 
-    /// Remove a comment and every reply descended from it.
+    /// Remove a qualified comment thread and its source anchors atomically.
+    /// Unsupported or ambiguous companion ownership leaves the document unchanged.
     pub fn remove_comment(&mut self, id: i32) -> Result<bool> {
+        if !self.comments().iter().any(|comment| comment.id() == id) {
+            return Ok(false);
+        }
         let mut candidate = self.clone_for_staging();
-        let removed = candidate.remove_comment_staged(id)?;
-        if removed {
-            candidate.flush_dirty_related_story_models()?;
-            self.commit_staged_mutation(candidate);
-        }
-        Ok(removed)
-    }
-
-    fn remove_comment_staged(&mut self, id: i32) -> Result<bool> {
-        let Some(comments) = self.comments.as_ref() else {
-            return Ok(false);
-        };
-        if comments.comments.iter().all(|comment| comment.id != id) {
-            return Ok(false);
-        }
-
-        let id_by_para = comments
-            .comments
-            .iter()
-            .filter_map(|comment| first_para_id(comment).map(|para| (para.to_owned(), comment.id)))
-            .collect::<HashMap<_, _>>();
-        let mut removed_ids = HashSet::from([id]);
-        let mut removed_para_ids = comments
-            .comments
-            .iter()
-            .filter(|comment| comment.id == id)
-            .filter_map(first_para_id)
-            .map(str::to_owned)
-            .collect::<HashSet<_>>();
-        if let Some(extended) = self.comments_extended.as_ref() {
-            loop {
-                let mut changed = false;
-                for entry in &extended.comments {
-                    if entry
-                        .para_id_parent
-                        .as_ref()
-                        .is_some_and(|parent| removed_para_ids.contains(parent))
-                        && removed_para_ids.insert(entry.para_id.clone())
-                    {
-                        if let Some(comment_id) = id_by_para.get(&entry.para_id) {
-                            removed_ids.insert(*comment_id);
-                        }
-                        changed = true;
-                    }
-                }
-                if !changed {
-                    break;
-                }
+        candidate.flush_to_package()?;
+        let ownership = candidate.comment_ownership_at(&candidate.doc_part_name)?;
+        let removed = ownership.descendants(id);
+        candidate.remove_comment_ids_staged_at(&candidate.doc_part_name.clone(), &removed)?;
+        // An inverse add/remove can recover the complete retained producer source.
+        // Compare every modeled value and raw child, ignoring only declarations
+        // introduced by the intermediate canonical serialization.
+        if let Some(retained) = self.package.get_part(&self.doc_part_name)
+            && let Ok(original) = rdocx_oxml::document::CT_Document::from_xml(retained)
+        {
+            let declarations_preserved = original
+                .extra_namespaces
+                .iter()
+                .all(|binding| candidate.document.extra_namespaces.contains(binding));
+            let only_added_canonical_wp = candidate.document.extra_namespaces.iter().all(|binding|
+                original.extra_namespaces.contains(binding)
+                    || (binding.0 == "xmlns:wp"
+                        && binding.1 == "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+                        && !original.extra_namespaces.iter().any(|original| original.0 == binding.0)));
+            let mut restored = candidate.document.clone();
+            restored.extra_namespaces = original.extra_namespaces.clone();
+            // Full canonical XML equality includes all modeled values and opaque
+            // bytes while ignoring unused inherited-prefix projection caches.
+            if declarations_preserved
+                && only_added_canonical_wp
+                && restored.to_xml()? == original.to_xml()?
+            {
+                let part = candidate.doc_part_name.clone();
+                crate::document::set_story_source_xml(&mut candidate, &part, retained.to_vec())?;
             }
         }
-
-        let comments = self.comments.as_mut().expect("model exists");
-        let removed_comment_entries = comments
-            .comments
-            .iter()
-            .map(|comment| removed_ids.contains(&comment.id))
-            .collect::<Vec<_>>();
-        comments.comments = comments
-            .comments
-            .drain(..)
-            .zip(&removed_comment_entries)
-            .filter_map(|(comment, remove)| (!remove).then_some(comment))
-            .collect();
-        remap_raw_positions(&mut comments.extra_xml, &removed_comment_entries);
-        if let Some(extended) = self.comments_extended.as_mut() {
-            let removed_extension_entries = extended
-                .comments
-                .iter()
-                .map(|entry| removed_para_ids.contains(&entry.para_id))
-                .collect::<Vec<_>>();
-            extended.comments = extended
-                .comments
-                .drain(..)
-                .zip(&removed_extension_entries)
-                .filter_map(|(entry, remove)| (!remove).then_some(entry))
-                .collect();
-            remap_raw_positions(&mut extended.extra_xml, &removed_extension_entries);
-        }
-        for content in &mut self.document.body.content {
-            remove_anchors_from_body_content(content, &removed_ids);
-        }
-        self.identifiers
-            .retire_authored_comment_ids(removed_ids.iter().copied());
-        self.remove_owned_empty_comment_parts();
-        self.comments_dirty = self.comments.is_some();
-        self.invalidate_layout();
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
         Ok(true)
     }
 
@@ -1689,11 +1758,14 @@ impl Document {
     }
 
     fn remove_owned_empty_comment_parts(&mut self) {
-        if self
-            .comments
-            .as_ref()
-            .is_some_and(|comments| comments.comments.is_empty())
-            && self.comments_owned
+        if self.comments.as_ref().is_some_and(|comments| {
+            comments.comments.is_empty()
+                && comments.extra_xml.is_empty()
+                && comments
+                    .root_attributes
+                    .iter()
+                    .all(|(key, _)| key == "xmlns" || key.starts_with("xmlns:"))
+        }) && self.comments_owned
         {
             if let Some(part) = self.comments_part_name.take() {
                 remove_owned_part(self, &part, oxml_opc::relationship::rel_types::COMMENTS);
@@ -1701,11 +1773,14 @@ impl Document {
             self.comments = None;
             self.comments_owned = false;
         }
-        if self
-            .comments_extended
-            .as_ref()
-            .is_some_and(|extended| extended.comments.is_empty())
-            && self.comments_extended_owned
+        if self.comments_extended.as_ref().is_some_and(|extended| {
+            extended.comments.is_empty()
+                && extended.extra_xml.is_empty()
+                && extended
+                    .root_attributes
+                    .iter()
+                    .all(|(key, _)| key == "xmlns" || key.starts_with("xmlns:"))
+        }) && self.comments_extended_owned
         {
             if let Some(part) = self.comments_extended_part_name.take() {
                 remove_owned_part(self, &part, COMMENTS_EXTENDED_REL_TYPE);
@@ -1752,7 +1827,7 @@ fn selected_fragment_comment_ids(
                 .comments
                 .iter()
                 .filter(|comment| included_ids.contains(&comment.id))
-                .filter_map(first_para_id)
+                .flat_map(para_ids)
                 .collect::<HashSet<_>>();
             let before = included_ids.len();
             for extension in &extended.comments {
@@ -1763,7 +1838,7 @@ fn selected_fragment_comment_ids(
                     && let Some(comment) = source
                         .comments
                         .iter()
-                        .find(|comment| first_para_id(comment) == Some(&extension.para_id))
+                        .find(|comment| para_ids(comment).any(|para| para == extension.para_id))
                 {
                     included_ids.insert(comment.id);
                 }
@@ -1776,8 +1851,39 @@ fn selected_fragment_comment_ids(
     Ok(included_ids)
 }
 
-fn first_para_id(comment: &CT_Comment) -> Option<&str> {
-    comment.paragraph_ids.first()?.as_deref()
+/// The `w14:paraId` of the comment's last paragraph, which keys its
+/// `w15:commentEx` entry and names it as a reply's `w15:paraIdParent`.
+fn last_para_id(comment: &CT_Comment) -> Option<&str> {
+    let last = comment.paragraphs.len().checked_sub(1)?;
+    comment.paragraph_ids.get(last)?.as_deref()
+}
+
+/// Every `w14:paraId` of the comment. Identifiers are unique, so a parent
+/// link naming any of them, as older producers wrote, still finds it.
+fn para_ids(comment: &CT_Comment) -> impl Iterator<Item = &str> {
+    comment.paragraph_ids.iter().filter_map(Option::as_deref)
+}
+
+/// Build one comment paragraph per line of `text`, each with a fresh
+/// `w14:paraId`, and return the last one's identifier with them.
+fn comment_text_paragraphs(
+    text: &str,
+    occupied: &mut HashSet<u32>,
+) -> Result<(Vec<CT_P>, Vec<Option<String>>, String)> {
+    let mut paragraphs = Vec::new();
+    let mut paragraph_ids = Vec::new();
+    for line in text.split('\n') {
+        let mut paragraph = CT_P::new();
+        paragraph.add_run(line.strip_suffix('\r').unwrap_or(line));
+        paragraphs.push(paragraph);
+        paragraph_ids.push(Some(allocate_para_id_from_occupied(occupied)?));
+    }
+    let para_id = paragraph_ids
+        .last()
+        .cloned()
+        .flatten()
+        .expect("splitting text yields at least one line");
+    Ok((paragraphs, paragraph_ids, para_id))
 }
 
 fn validate_bookmark_name(name: &str) -> Result<()> {
@@ -2152,19 +2258,7 @@ fn allocate_para_id(
     comments: Option<&CT_Comments>,
     extended: Option<&CT_CommentsEx>,
 ) -> Result<String> {
-    allocate_para_id_with_reserved(comments, extended, None)
-}
-
-fn allocate_para_id_with_reserved(
-    comments: Option<&CT_Comments>,
-    extended: Option<&CT_CommentsEx>,
-    reserved: Option<&str>,
-) -> Result<String> {
-    let mut occupied = occupied_para_ids(comments, extended);
-    if let Some(reserved) = reserved.and_then(parse_para_id) {
-        occupied.insert(reserved);
-    }
-    allocate_para_id_from_occupied(&mut occupied)
+    allocate_para_id_from_occupied(&mut occupied_para_ids(comments, extended))
 }
 
 fn occupied_para_ids(
@@ -2187,7 +2281,7 @@ fn occupied_para_ids(
     occupied
 }
 
-fn allocate_para_id_from_occupied(occupied: &mut HashSet<u32>) -> Result<String> {
+pub(crate) fn allocate_para_id_from_occupied(occupied: &mut HashSet<u32>) -> Result<String> {
     if let Some(max) = occupied.iter().copied().max()
         && max < u32::MAX
     {
@@ -2238,15 +2332,7 @@ fn remove_owned_part(document: &mut Document, part: &str, relationship_type: &st
         .retire_authored_story_relationships(&owner, removed_relationship_ids);
 }
 
-fn remove_anchors_from_body_content(content: &mut BodyContent, ids: &HashSet<i32>) {
-    match content {
-        BodyContent::Paragraph(paragraph) => remove_anchors_from_paragraph(paragraph, ids),
-        BodyContent::Table(table) => remove_anchors_from_table(table, ids),
-        BodyContent::ContentControl(control) => remove_anchors_from_control(control, ids),
-        BodyContent::RawXml(_) => {}
-    }
-}
-
+#[cfg(test)]
 fn remove_anchors_from_table(table: &mut CT_Tbl, ids: &HashSet<i32>) {
     for (_, _, control) in &mut table.content_controls {
         remove_anchors_from_control(control, ids);
@@ -2256,6 +2342,7 @@ fn remove_anchors_from_table(table: &mut CT_Tbl, ids: &HashSet<i32>) {
     }
 }
 
+#[cfg(test)]
 fn remove_anchors_from_row(row: &mut CT_Row, ids: &HashSet<i32>) {
     for (_, _, control) in &mut row.content_controls {
         remove_anchors_from_control(control, ids);
@@ -2265,6 +2352,7 @@ fn remove_anchors_from_row(row: &mut CT_Row, ids: &HashSet<i32>) {
     }
 }
 
+#[cfg(test)]
 fn remove_anchors_from_cell(cell: &mut CT_Tc, ids: &HashSet<i32>) {
     for content in &mut cell.content {
         match content {
@@ -2275,6 +2363,7 @@ fn remove_anchors_from_cell(cell: &mut CT_Tc, ids: &HashSet<i32>) {
     }
 }
 
+#[cfg(test)]
 fn remove_anchors_from_control(control: &mut CT_Sdt, ids: &HashSet<i32>) {
     // Markers written inside `w:sdtContent` are preserved children there.
     control.remove_comment_anchors(&ids.iter().copied().collect::<Vec<_>>());
@@ -2290,6 +2379,7 @@ fn remove_anchors_from_control(control: &mut CT_Sdt, ids: &HashSet<i32>) {
     }
 }
 
+#[cfg(test)]
 fn remove_anchors_from_paragraph(paragraph: &mut CT_P, ids: &HashSet<i32>) {
     for (_, _, _, control) in &mut paragraph.content_controls {
         remove_anchors_from_control(control, ids);
@@ -2298,15 +2388,1028 @@ fn remove_anchors_from_paragraph(paragraph: &mut CT_P, ids: &HashSet<i32>) {
     paragraph.remove_comment_anchors(&ids);
 }
 
-fn remap_raw_positions(extra_xml: &mut [(usize, Vec<u8>)], removed: &[bool]) {
-    for (position, _) in extra_xml {
-        *position = position.saturating_sub(
-            removed
+// Source marker presence deliberately ignores accepted-view range pairing.
+// A raw reference inside an opaque wrapper still owns its definition.
+#[derive(Debug)]
+pub(crate) struct CommentSourceMarker {
+    pub(crate) id: i32,
+    pub(crate) family: usize,
+    pub(crate) span: Range<usize>,
+    empty_run: Option<Range<usize>>,
+}
+
+struct CommentPartEntry {
+    attributes: BTreeMap<String, String>,
+    span: Range<usize>,
+}
+
+struct CommentOwnership {
+    markers: BTreeMap<String, Vec<CommentSourceMarker>>,
+    parents: BTreeMap<i32, Option<i32>>,
+    entries: BTreeMap<String, Vec<(i32, Range<usize>)>>,
+}
+
+impl CommentOwnership {
+    fn marker_counts(
+        markers: &BTreeMap<String, Vec<CommentSourceMarker>>,
+    ) -> BTreeMap<i32, [usize; 3]> {
+        let mut counts = BTreeMap::new();
+        for marker in markers.values().flatten() {
+            counts.entry(marker.id).or_insert([0; 3])[marker.family] += 1;
+        }
+        counts
+    }
+
+    fn descendants(&self, id: i32) -> HashSet<i32> {
+        let mut ids = HashSet::from([id]);
+        loop {
+            let before = ids.len();
+            for (&child, parent) in &self.parents {
+                if parent.is_some_and(|parent| ids.contains(&parent)) {
+                    ids.insert(child);
+                }
+            }
+            if ids.len() == before {
+                return ids;
+            }
+        }
+    }
+}
+
+pub(crate) fn comment_source_markers(xml: &[u8]) -> Result<Vec<CommentSourceMarker>> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut markers = Vec::new();
+    let mut preceding_run: Option<(usize, usize, Vec<u8>)> = None;
+    loop {
+        let start = reader.buffer_position() as usize;
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(error.to_string()))?
+        {
+            Event::Start(element) | Event::Empty(element) => {
+                let preceding = preceding_run.take();
+                let end = reader.buffer_position() as usize;
+                let (namespace, local) = reader.resolver().resolve_element(element.name());
+                if matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == rdocx_oxml::namespace::W_NS.as_bytes())
+                {
+                    if local.as_ref() == b"r"
+                        && xml.get(end.saturating_sub(2)..end) != Some(b"/>")
+                        && element.attributes().all(|attribute| {
+                            attribute.is_ok_and(|attribute| {
+                                attribute.key.as_ref() == b"xmlns"
+                                    || attribute.key.as_ref().starts_with(b"xmlns:")
+                            })
+                        })
+                    {
+                        preceding_run = Some((start, end, element.name().as_ref().to_vec()));
+                    }
+                    let family = match local.as_ref() {
+                        b"commentRangeStart" => Some(0),
+                        b"commentRangeEnd" => Some(1),
+                        b"commentReference" => Some(2),
+                        _ => None,
+                    };
+                    if let Some(family) = family {
+                        let mut ids = 0;
+                        for attribute in element.attributes() {
+                            let attribute =
+                                attribute.map_err(|error| Error::Other(error.to_string()))?;
+                            let (namespace, local) =
+                                reader.resolver().resolve_attribute(attribute.key);
+                            if local.as_ref() == b"id"
+                                && matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == rdocx_oxml::namespace::W_NS.as_bytes())
+                            {
+                                ids += 1;
+                            }
+                        }
+                        if ids != 1 {
+                            return Err(Error::Other(
+                                "comment marker has missing or ambiguous qualified id".into(),
+                            ));
+                        }
+                        let id = word_marker_attribute(&reader, &element, b"id")?
+                            .and_then(|id| id.parse::<i32>().ok())
+                            .ok_or_else(|| {
+                                Error::Other("comment marker has an invalid qualified id".into())
+                            })?;
+                        if xml.get(end.saturating_sub(2)..end) != Some(b"/>") {
+                            reader
+                                .read_to_end_into(element.name(), &mut Vec::new())
+                                .map_err(|error| Error::Other(error.to_string()))?;
+                        }
+                        let marker_end = reader.buffer_position() as usize;
+                        let empty_run = preceding.and_then(|(run_start, run_end, name)| {
+                            let mut close = b"</".to_vec();
+                            close.extend(name);
+                            close.push(b'>');
+                            (family == 2
+                                && run_end == start
+                                && xml.get(marker_end..marker_end + close.len())
+                                    == Some(close.as_slice()))
+                            .then_some(run_start..marker_end + close.len())
+                        });
+                        markers.push(CommentSourceMarker {
+                            id,
+                            family,
+                            span: start..marker_end,
+                            empty_run,
+                        });
+                    }
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    Ok(markers)
+}
+
+/// Scan only qualified direct entries, retaining exact source spans for removal.
+fn comment_part_entries(
+    xml: &[u8],
+    namespace: &str,
+    root: &[u8],
+    item: &[u8],
+) -> Result<Vec<CommentPartEntry>> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    let mut saw_root = false;
+    let mut entries = Vec::new();
+    loop {
+        let start = reader.buffer_position() as usize;
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(error.to_string()))?
+        {
+            Event::Start(element) | Event::Empty(element) => {
+                let end = reader.buffer_position() as usize;
+                let empty = xml.get(end.saturating_sub(2)..end) == Some(b"/>");
+                let (resolved, local) = reader.resolver().resolve_element(element.name());
+                let qualified = matches!(resolved, ResolveResult::Bound(Namespace(uri)) if uri == namespace.as_bytes());
+                if depth == 0 {
+                    if saw_root || !qualified || local.as_ref() != root {
+                        return Err(Error::Other(
+                            "comment part has no unique qualified root".into(),
+                        ));
+                    }
+                    saw_root = true;
+                } else if depth == 1 && qualified && local.as_ref() == item {
+                    let mut attributes = BTreeMap::new();
+                    for attribute in element.attributes() {
+                        let attribute =
+                            attribute.map_err(|error| Error::Other(error.to_string()))?;
+                        let (resolved, local) = reader.resolver().resolve_attribute(attribute.key);
+                        if matches!(resolved, ResolveResult::Bound(Namespace(uri)) if uri == namespace.as_bytes())
+                        {
+                            let key = String::from_utf8_lossy(local.as_ref()).into_owned();
+                            let value = attribute
+                                .decoded_and_normalized_value(
+                                    XmlVersion::Implicit1_0,
+                                    reader.decoder(),
+                                )
+                                .map_err(|error| Error::Other(error.to_string()))?
+                                .into_owned();
+                            if attributes.insert(key, value).is_some() {
+                                return Err(Error::Other(
+                                    "comment part has duplicate qualified attributes".into(),
+                                ));
+                            }
+                        }
+                    }
+                    if !empty {
+                        reader
+                            .read_to_end_into(element.name(), &mut Vec::new())
+                            .map_err(|error| Error::Other(error.to_string()))?;
+                    }
+                    entries.push(CommentPartEntry {
+                        attributes,
+                        span: start..reader.buffer_position() as usize,
+                    });
+                    buffer.clear();
+                    continue;
+                }
+                if !empty {
+                    depth += 1;
+                }
+            }
+            Event::End(_) => {
+                depth = depth
+                    .checked_sub(1)
+                    .ok_or_else(|| Error::Other("comment XML is unbalanced".into()))?;
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    if !saw_root || depth != 0 {
+        return Err(Error::Other("comment XML has no complete root".into()));
+    }
+    Ok(entries)
+}
+
+impl Document {
+    /// Return a selected comment's exact accepted-view run range.
+    /// Unknown or malformed ownership and unrepresentable endpoints are errors.
+    /// Known orphans and reference-only points have no paired range.
+    pub fn comment_anchor(&self, id: i32) -> Result<Option<StoryRunRange>> {
+        Ok(self
+            .comment_anchor_snapshots_selected(Some(id))?
+            .remove(&id)
+            .ok_or_else(|| Error::Other(format!("unknown comment {id}")))?
+            .0)
+    }
+
+    /// Return accepted span text, empty for a reference-only point and absent
+    /// for a known orphan or a reply without its own source markers.
+    pub fn comment_anchor_text(&self, id: i32) -> Result<Option<String>> {
+        Ok(self
+            .comment_anchor_snapshots_selected(Some(id))?
+            .remove(&id)
+            .ok_or_else(|| Error::Other(format!("unknown comment {id}")))?
+            .1)
+    }
+
+    /// Build checked owned anchor snapshots with one source inventory for listings.
+    #[doc(hidden)]
+    #[allow(clippy::type_complexity)] // Concrete shared range and text listing contract.
+    pub fn comment_anchor_snapshots(
+        &self,
+    ) -> Result<BTreeMap<i32, (Option<StoryRunRange>, Option<String>)>> {
+        self.comment_anchor_snapshots_selected(None)
+    }
+
+    #[allow(clippy::type_complexity)] // Same concrete payload as the public batch accessor.
+    fn comment_anchor_snapshots_selected(
+        &self,
+        selected: Option<i32>,
+    ) -> Result<BTreeMap<i32, (Option<StoryRunRange>, Option<String>)>> {
+        let mut source = self.clone_for_staging();
+        source.flush_to_package()?;
+        let ownership = source.comment_owned_graph_at(&source.doc_part_name)?;
+        if let Some(id) = selected
+            && !ownership.parents.contains_key(&id)
+        {
+            return Err(Error::Other(format!("unknown comment {id}")));
+        }
+        let counts = CommentOwnership::marker_counts(&ownership.markers);
+        let paragraphs = source
+            .comment_story_range_paragraphs()?
+            .into_iter()
+            .map(|(location, xml)| {
+                let ids = comment_source_markers(&xml)?
+                    .into_iter()
+                    .map(|marker| marker.id)
+                    .collect::<HashSet<_>>();
+                Ok((location, CT_P::from_xml_fragment(&xml)?, ids, xml))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut marker_paragraphs = HashMap::<i32, Vec<usize>>::new();
+        let mut owner_paragraphs = HashMap::<crate::StoryId, Vec<usize>>::new();
+        for (index, (location, _, ids, _)) in paragraphs.iter().enumerate() {
+            owner_paragraphs
+                .entry(location.story().clone())
+                .or_default()
+                .push(index);
+            for &id in ids {
+                marker_paragraphs.entry(id).or_default().push(index);
+            }
+        }
+        let mut snapshots = BTreeMap::new();
+        for &id in ownership
+            .parents
+            .keys()
+            .filter(|id| selected.is_none_or(|selected| selected == **id))
+        {
+            let count = counts.get(&id).copied().unwrap_or_default();
+            if count == [0; 3] {
+                snapshots.insert(id, (None, None));
+                continue;
+            }
+            if count == [0, 0, 1] {
+                snapshots.insert(id, (None, Some(String::new())));
+                continue;
+            }
+            if count[0] != 1 || count[1] != 1 || count[2] > 1 {
+                return Err(Error::Other(format!(
+                    "comment {id} has duplicate or unmatched source markers"
+                )));
+            }
+            let mut start = None::<StoryRunPosition>;
+            let mut end = None::<StoryRunPosition>;
+            let mut open = false;
+            let mut text = String::new();
+            let mut first_paragraph = None;
+            for &index in marker_paragraphs.get(&id).into_iter().flatten() {
+                let (_, _, _, xml) = &paragraphs[index];
+                let (_, _, first, last) = CT_P::accepted_comment_source_projection(xml, id, false)?;
+                if first.is_some() || last.is_some() {
+                    first_paragraph = Some(index);
+                    break;
+                }
+            }
+            let first_paragraph = first_paragraph.ok_or_else(|| Error::Other(format!(
+                "comment {id} source cannot be projected faithfully on the existing accepted run axis"
+            )))?;
+            let owner = &owner_paragraphs[paragraphs[first_paragraph].0.story()];
+            let offset = owner
+                .binary_search(&first_paragraph)
+                .expect("registered owner paragraph");
+            for &index in &owner[offset..] {
+                let (location, paragraph, ids, xml) = &paragraphs[index];
+                let was_open = open;
+                let (contribution, next_open, first, last) = if ids.contains(&id) {
+                    CT_P::accepted_comment_source_projection(xml, id, open)?
+                } else {
+                    (paragraph.accepted_text(), open, None, None)
+                };
+                if let Some(index) = first {
+                    if start.is_some() {
+                        return Err(Error::Other(format!(
+                            "comment {id} has duplicate projected starts"
+                        )));
+                    }
+                    start = Some(StoryRunPosition {
+                        location: location.clone(),
+                        run_index: index,
+                    });
+                }
+                if was_open || first.is_some() {
+                    if was_open {
+                        text.push('\n');
+                    }
+                    text.push_str(&contribution);
+                }
+                if let Some(index) = last {
+                    if end.is_some() {
+                        return Err(Error::Other(format!(
+                            "comment {id} has duplicate projected ends"
+                        )));
+                    }
+                    end = Some(StoryRunPosition {
+                        location: location.clone(),
+                        run_index: index,
+                    });
+                }
+                open = next_open;
+                if end.is_some() {
+                    break;
+                }
+            }
+            let (Some(start), Some(end)) = (start, end) else {
+                return Err(Error::Other(format!(
+                    "comment {id} source cannot be projected faithfully on the existing accepted run axis"
+                )));
+            };
+            if open || start.location.story() != end.location.story() {
+                return Err(Error::Other(format!(
+                    "comment {id} range has no ordered end in the same story owner"
+                )));
+            }
+            snapshots.insert(id, (Some(StoryRunRange { start, end }), Some(text)));
+        }
+        Ok(snapshots)
+    }
+
+    /// Classify glossary review ownership from one actual internal relationship.
+    pub(crate) fn glossary_comment_owner(&self) -> Result<Option<String>> {
+        let Some(owner) = self.glossary_part_name.as_deref() else {
+            return Ok(None);
+        };
+        let Some(_part) =
+            self.comment_relationship_part_at(owner, oxml_opc::relationship::rel_types::COMMENTS)?
+        else {
+            if self.package.get_part_rels(owner).iter().flat_map(|rels| &rels.items).any(|relationship| {
+                matches!(relationship.rel_type.as_str(), COMMENTS_EXTENDED_REL_TYPE
+                    | "http://schemas.microsoft.com/office/2016/09/relationships/commentsIds"
+                    | "http://schemas.microsoft.com/office/2018/08/relationships/commentsExtensible")
+            }) {
+                return Err(Error::Other("glossary comment companions have no owned definitions relationship".into()));
+            }
+            return Ok(None);
+        };
+        self.comment_definition_entries_at(owner)?;
+        self.comment_owned_graph_at(owner)?;
+        // Two review graphs cannot claim the same physical part.
+        for local in self
+            .package
+            .get_part_rels(owner)
+            .iter()
+            .flat_map(|rels| &rels.items)
+        {
+            if !matches!(
+                local.rel_type.as_str(),
+                oxml_opc::relationship::rel_types::COMMENTS
+                    | COMMENTS_EXTENDED_REL_TYPE
+                    | "http://schemas.microsoft.com/office/2016/09/relationships/commentsIds"
+                    | "http://schemas.microsoft.com/office/2018/08/relationships/commentsExtensible"
+            ) {
+                continue;
+            }
+            if !crate::document::relationship_is_internal(local) {
+                return Err(Error::Other(
+                    "glossary comment companion is external".into(),
+                ));
+            }
+            let target = OpcPackage::resolve_rel_target(owner, &local.target);
+            if self
+                .package
+                .get_part_rels(&self.doc_part_name)
                 .iter()
-                .take((*position).min(removed.len()))
-                .filter(|remove| **remove)
-                .count(),
-        );
+                .flat_map(|rels| &rels.items)
+                .any(|main| {
+                    crate::document::relationship_is_internal(main)
+                        && crate::document::part_name_identity(&OpcPackage::resolve_rel_target(
+                            &self.doc_part_name,
+                            &main.target,
+                        )) == crate::document::part_name_identity(&target)
+                })
+            {
+                return Err(Error::Other(
+                    "glossary and main comment owners share a dependency target".into(),
+                ));
+            }
+        }
+        // Shared unannotated notes are harmless. A marked physical source,
+        // however, cannot belong to both independent review graphs.
+        let main_sources = self.word_story_part_names();
+        for local in self
+            .package
+            .get_part_rels(owner)
+            .iter()
+            .flat_map(|rels| &rels.items)
+        {
+            if !crate::document::relationship_is_internal(local)
+                || !matches!(
+                    local.rel_type.as_str(),
+                    oxml_opc::relationship::rel_types::FOOTNOTES
+                        | oxml_opc::relationship::rel_types::ENDNOTES
+                )
+            {
+                continue;
+            }
+            let target = OpcPackage::resolve_rel_target(owner, &local.target);
+            let identity = crate::document::part_name_identity(&target);
+            if main_sources.iter().any(|part| {
+                crate::document::part_name_identity(part) == identity
+                    && crate::document::part_name_identity(part)
+                        != crate::document::part_name_identity(owner)
+            }) && let Some(xml) = self.package.get_part(&target)
+                && !comment_source_markers(xml)?.is_empty()
+            {
+                return Err(Error::Other(
+                    "glossary and main review owners share a marked physical source".into(),
+                ));
+            }
+        }
+        Ok(Some(owner.to_owned()))
+    }
+
+    /// Omit only qualified marker spans, retaining mixed runs and opaque siblings.
+    pub(crate) fn omit_comment_markers(xml: &[u8]) -> Result<Vec<u8>> {
+        let markers = comment_source_markers(xml)?;
+        let mut result = xml.to_vec();
+        for marker in markers.into_iter().rev() {
+            let mut reader = quick_xml::Reader::from_reader(&xml[marker.span.clone()]);
+            if matches!(
+                reader
+                    .read_event()
+                    .map_err(|error| Error::Other(error.to_string()))?,
+                Event::Start(_)
+            ) && !matches!(
+                reader
+                    .read_event()
+                    .map_err(|error| Error::Other(error.to_string()))?,
+                Event::End(_)
+            ) {
+                return Err(Error::Other(format!(
+                    "cannot omit comment {} with opaque marker content",
+                    marker.id
+                )));
+            }
+            result.drain(marker.span);
+        }
+        Ok(result)
+    }
+
+    fn comment_relationship_part_at(
+        &self,
+        owner: &str,
+        relationship_type: &str,
+    ) -> Result<Option<String>> {
+        let mut target = None;
+        for relationship in self
+            .package
+            .get_part_rels(owner)
+            .iter()
+            .flat_map(|rels| &rels.items)
+            .filter(|relationship| relationship.rel_type == relationship_type)
+        {
+            if !crate::document::relationship_is_internal(relationship) || target.is_some() {
+                return Err(Error::Other(
+                    "comment part ownership is external or ambiguous".into(),
+                ));
+            }
+            let part = OpcPackage::resolve_rel_target(owner, &relationship.target);
+            if self.package.get_part(&part).is_none() {
+                return Err(Error::Other(format!(
+                    "comment relationship targets missing part {part}"
+                )));
+            }
+            target = Some(part);
+        }
+        Ok(target)
+    }
+
+    fn comment_source_inventory_at(
+        &self,
+        owner: &str,
+    ) -> Result<BTreeMap<String, Vec<CommentSourceMarker>>> {
+        if self.package.get_part(&self.doc_part_name).is_none() {
+            return Err(Error::Other("main comment source part is missing".into()));
+        }
+        let mut markers = BTreeMap::new();
+        let local = if owner == self.doc_part_name {
+            self.glossary_comment_owner()?
+        } else {
+            None
+        };
+        let parts = if owner == self.doc_part_name {
+            self.word_story_part_names()
+                .into_iter()
+                .filter(|part| local.as_deref() != Some(part.as_str()))
+                .collect::<Vec<_>>()
+        } else {
+            let mut parts = vec![owner.to_owned()];
+            for relationship in self
+                .package
+                .get_part_rels(owner)
+                .iter()
+                .flat_map(|rels| &rels.items)
+            {
+                if crate::document::relationship_is_internal(relationship)
+                    && matches!(
+                        relationship.rel_type.as_str(),
+                        oxml_opc::relationship::rel_types::COMMENTS
+                            | oxml_opc::relationship::rel_types::FOOTNOTES
+                            | oxml_opc::relationship::rel_types::ENDNOTES
+                    )
+                {
+                    parts.push(OpcPackage::resolve_rel_target(owner, &relationship.target));
+                }
+            }
+            parts
+        };
+        for part in parts {
+            // Dangling story relationships contain no source to inventory.
+            // Package validation diagnoses them independently of comment ownership.
+            if let Some(xml) = self.package.get_part(&part) {
+                markers.insert(part, comment_source_markers(xml)?);
+            }
+        }
+        Ok(markers)
+    }
+
+    fn comment_definition_entries_at(
+        &self,
+        owner: &str,
+    ) -> Result<Option<(String, Vec<CommentPartEntry>)>> {
+        let Some(part) =
+            self.comment_relationship_part_at(owner, oxml_opc::relationship::rel_types::COMMENTS)?
+        else {
+            if owner == self.doc_part_name && self.comments_part_name.is_some() {
+                return Err(Error::Other(
+                    "owned comment definition relationship is missing".into(),
+                ));
+            }
+            return Ok(None);
+        };
+        let entries = comment_part_entries(
+            self.package.get_part(&part).expect("checked part"),
+            rdocx_oxml::namespace::W_NS,
+            b"comments",
+            b"comment",
+        )?;
+        let mut ids = HashSet::new();
+        for entry in &entries {
+            let id = entry
+                .attributes
+                .get("id")
+                .and_then(|id| id.parse::<i32>().ok())
+                .ok_or_else(|| Error::Other("comment definition has invalid id".into()))?;
+            if !ids.insert(id) {
+                return Err(Error::Other(format!(
+                    "comment {id} has duplicate definitions"
+                )));
+            }
+        }
+        Ok(Some((part, entries)))
+    }
+
+    fn comment_owned_graph_at(&self, owner: &str) -> Result<CommentOwnership> {
+        let mut ownership = CommentOwnership {
+            markers: self.comment_source_inventory_at(owner)?,
+            parents: BTreeMap::new(),
+            entries: BTreeMap::new(),
+        };
+        let source_definitions = self.comment_definition_entries_at(owner)?;
+        let comments = if let Some((part, _)) = &source_definitions {
+            CT_Comments::from_xml(self.package.get_part(part).expect("checked part"))?
+        } else {
+            CT_Comments::new()
+        };
+        let mut by_para = BTreeMap::new();
+        let mut by_parent_para = BTreeMap::new();
+        let mut definitions = Vec::new();
+        for entry in source_definitions
+            .as_ref()
+            .into_iter()
+            .flat_map(|(_, entries)| entries)
+        {
+            let id = entry
+                .attributes
+                .get("id")
+                .and_then(|id| id.parse::<i32>().ok())
+                .ok_or_else(|| Error::Other("comment definition has invalid id".into()))?;
+            if ownership.parents.insert(id, None).is_some() {
+                return Err(Error::Other(format!(
+                    "comment {id} has duplicate definitions"
+                )));
+            }
+            definitions.push((id, entry.span.clone()));
+        }
+        if comments.comments.len() != definitions.len() {
+            return Err(Error::Other(
+                "comment definitions cannot be qualified without losing opaque ownership".into(),
+            ));
+        }
+        for comment in &comments.comments {
+            for para in para_ids(comment) {
+                if by_parent_para
+                    .insert(para.to_ascii_uppercase(), comment.id)
+                    .is_some()
+                {
+                    return Err(Error::Other(
+                        "comment paragraph identity is ambiguous".into(),
+                    ));
+                }
+            }
+            if !ownership.parents.contains_key(&comment.id) {
+                return Err(Error::Other(
+                    "comment model differs from qualified source definitions".into(),
+                ));
+            }
+            if let Some(para) = last_para_id(comment)
+                && by_para
+                    .insert(para.to_ascii_uppercase(), comment.id)
+                    .is_some()
+            {
+                return Err(Error::Other(
+                    "comment last-paragraph identity is ambiguous".into(),
+                ));
+            }
+        }
+        if let Some((part, _)) = source_definitions {
+            ownership.entries.insert(part, definitions);
+        }
+        const IDS_REL: &str =
+            "http://schemas.microsoft.com/office/2016/09/relationships/commentsIds";
+        const EXTENSIBLE_REL: &str =
+            "http://schemas.microsoft.com/office/2018/08/relationships/commentsExtensible";
+        const IDS_NS: &str = "http://schemas.microsoft.com/office/word/2016/wordml/cid";
+        const CEX_NS: &str = "http://schemas.microsoft.com/office/word/2018/wordml/cex";
+        let mut by_durable = BTreeMap::new();
+        for (relationship, namespace, root, item, key) in [
+            (
+                COMMENTS_EXTENDED_REL_TYPE,
+                rdocx_oxml::comments_extended::W15_NS,
+                b"commentsEx".as_slice(),
+                b"commentEx".as_slice(),
+                "paraId",
+            ),
+            (
+                IDS_REL,
+                IDS_NS,
+                b"commentsIds".as_slice(),
+                b"commentId".as_slice(),
+                "paraId",
+            ),
+            (
+                EXTENSIBLE_REL,
+                CEX_NS,
+                b"commentsExtensible".as_slice(),
+                b"commentExtensible".as_slice(),
+                "durableId",
+            ),
+        ] {
+            let Some(part) = self.comment_relationship_part_at(owner, relationship)? else {
+                continue;
+            };
+            let xml = self.package.get_part(&part).expect("checked part");
+            let mut mapped = Vec::new();
+            let mut seen = HashSet::new();
+            for entry in comment_part_entries(xml, namespace, root, item)? {
+                let value = entry
+                    .attributes
+                    .get(key)
+                    .ok_or_else(|| Error::Other(format!("comment companion has no {key}")))?
+                    .to_ascii_uppercase();
+                if !seen.insert(value.clone()) {
+                    return Err(Error::Other(format!(
+                        "comment companion {key} {value} is ambiguous"
+                    )));
+                }
+                let id = if key == "paraId" {
+                    by_para.get(&value)
+                } else {
+                    by_durable.get(&value)
+                }
+                .copied()
+                .ok_or_else(|| {
+                    Error::Other(format!(
+                        "comment companion {key} {value} has unprovable linkage"
+                    ))
+                })?;
+                if relationship == COMMENTS_EXTENDED_REL_TYPE
+                    && let Some(parent) = entry.attributes.get("paraIdParent")
+                {
+                    let parent = by_parent_para
+                        .get(&parent.to_ascii_uppercase())
+                        .copied()
+                        .ok_or_else(|| {
+                            Error::Other(format!("comment {id} has unknown parent {parent}"))
+                        })?;
+                    ownership.parents.insert(id, Some(parent));
+                }
+                if relationship == IDS_REL {
+                    let durable = entry
+                        .attributes
+                        .get("durableId")
+                        .ok_or_else(|| {
+                            Error::Other(format!("comment {id} has no durable identity"))
+                        })?
+                        .to_ascii_uppercase();
+                    if durable.len() != 8
+                        || u32::from_str_radix(&durable, 16).is_err()
+                        || by_durable.insert(durable, id).is_some()
+                    {
+                        return Err(Error::Other(format!(
+                            "comment {id} has invalid or duplicate durable identity"
+                        )));
+                    }
+                }
+                mapped.push((id, entry.span));
+            }
+            ownership.entries.insert(part, mapped);
+        }
+        for &id in ownership.parents.keys() {
+            let mut seen = HashSet::new();
+            let mut ancestor = Some(id);
+            while let Some(current) = ancestor {
+                if !seen.insert(current) {
+                    return Err(Error::Other(format!(
+                        "comment {id} has cyclic thread ownership"
+                    )));
+                }
+                ancestor = ownership.parents[&current];
+            }
+        }
+        Ok(ownership)
+    }
+
+    fn comment_ownership_at(&self, owner: &str) -> Result<CommentOwnership> {
+        let ownership = self.comment_owned_graph_at(owner)?;
+        let counts = CommentOwnership::marker_counts(&ownership.markers);
+        if !counts.is_empty()
+            && self
+                .comment_relationship_part_at(owner, oxml_opc::relationship::rel_types::COMMENTS)?
+                .is_none()
+        {
+            return Err(Error::Other(
+                "comment markers have no owned definitions part".into(),
+            ));
+        }
+        for id in counts.keys() {
+            if !ownership.parents.contains_key(id) {
+                return Err(Error::Other(format!(
+                    "comment {id} has markers but no definition"
+                )));
+            }
+        }
+        Ok(ownership)
+    }
+
+    /// Check raw comment presence and thread ownership across relationship-resolved stories.
+    #[doc(hidden)]
+    pub fn validate_comment_ownership(&self) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let mut owners = vec![candidate.doc_part_name.clone()];
+        owners.extend(candidate.glossary_comment_owner()?);
+        for owner in owners {
+            let ownership = candidate.comment_ownership_at(&owner)?;
+            let counts = CommentOwnership::marker_counts(&ownership.markers);
+            for (&id, parent) in &ownership.parents {
+                let count = counts.get(&id).copied().unwrap_or_default();
+                if count.iter().any(|count| *count > 1) || count[0] != count[1] {
+                    return Err(Error::Other(format!(
+                        "comment {id} has duplicate or unmatched source markers"
+                    )));
+                }
+                if parent.is_none() && count == [0; 3] {
+                    return Err(Error::Other(format!(
+                        "comment {id} is an orphan root with no source range or reference"
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Compare one unpublished destructive edit with its frozen source inventory.
+    pub(crate) fn reconcile_comment_removal(&mut self, before: &Document) -> Result<()> {
+        let mut owners = vec![before.doc_part_name.clone()];
+        let local = before.glossary_comment_owner()?;
+        if local != self.glossary_comment_owner()? {
+            return Err(Error::Other(
+                "glossary comment relationship owner changed during edit".into(),
+            ));
+        }
+        owners.extend(local);
+        for owner in owners {
+            self.reconcile_comment_removal_at(before, &owner)?;
+        }
+        Ok(())
+    }
+
+    fn reconcile_comment_removal_at(&mut self, before: &Document, owner: &str) -> Result<()> {
+        let mut source = before.clone_for_staging();
+        source.flush_to_package()?;
+        self.flush_to_package()?;
+        let before_counts =
+            CommentOwnership::marker_counts(&source.comment_source_inventory_at(owner)?);
+        let after_counts =
+            CommentOwnership::marker_counts(&self.comment_source_inventory_at(owner)?);
+        // Only source ownership decreases need deletion proof. Unchanged
+        // or cloned anchors must not validate or repair unrelated producer
+        // definitions. Explicit deletion and CLI validation remain strict.
+        if before_counts.iter().all(|(id, count)| {
+            let after = after_counts.get(id).copied().unwrap_or_default();
+            count
+                .iter()
+                .zip(after)
+                .all(|(before, after)| after >= *before)
+        }) {
+            return Ok(());
+        }
+        // A demonstrably undefined source marker cannot orphan an absent
+        // definition. Retain its established editing/comparison lifecycle.
+        // Raw qualified entries prove absence even if typed projection omits one.
+        let definitions = source.comment_definition_entries_at(owner)?;
+        let defined_decrease = definitions.as_ref().is_some_and(|(_, entries)| {
+            entries.iter().any(|entry| {
+                let id = entry.attributes["id"]
+                    .parse::<i32>()
+                    .expect("validated definition id");
+                let before = before_counts.get(&id).copied().unwrap_or_default();
+                let after = after_counts.get(&id).copied().unwrap_or_default();
+                before
+                    .iter()
+                    .zip(after)
+                    .any(|(before, after)| after < *before)
+            })
+        });
+        if !defined_decrease {
+            return Ok(());
+        }
+        let original = source.comment_ownership_at(owner)?;
+        let remaining = self.comment_ownership_at(owner)?;
+        let before_counts = CommentOwnership::marker_counts(&original.markers);
+        let after_counts = CommentOwnership::marker_counts(&remaining.markers);
+        let mut removed = HashSet::new();
+        for (&id, count) in &before_counts {
+            let after = after_counts.get(&id).copied().unwrap_or_default();
+            if count
+                .iter()
+                .zip(after)
+                .all(|(before, after)| after >= *before)
+            {
+                continue;
+            }
+            if after != [0; 3] || count.iter().any(|count| *count > 1) || count[0] != count[1] {
+                return Err(Error::Other(format!(
+                    "cannot remove part of comment {id}; its source graph survives or is ambiguous"
+                )));
+            }
+            removed.extend(original.descendants(id));
+        }
+        for id in &removed {
+            if after_counts.get(id).is_some_and(|counts| *counts != [0; 3]) {
+                return Err(Error::Other(format!(
+                    "cannot remove comment {id}; a descendant source anchor survives"
+                )));
+            }
+        }
+        if !removed.is_empty() {
+            self.remove_comment_ids_staged_at(owner, &removed)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn refuse_commented_fragment(xml: &[u8]) -> Result<()> {
+        if let Some(marker) = comment_source_markers(xml)?.first() {
+            return Err(Error::Other(format!(
+                "cannot detach content bearing comment {}; fragments do not own comment threads",
+                marker.id
+            )));
+        }
+        Ok(())
+    }
+
+    fn remove_comment_ids_staged_at(&mut self, owner: &str, ids: &HashSet<i32>) -> Result<()> {
+        let ownership = self.comment_ownership_at(owner)?;
+        for (part, entries) in &ownership.entries {
+            for (_, span) in entries.iter().filter(|(id, _)| ids.contains(id)) {
+                if let Some(marker) =
+                    ownership
+                        .markers
+                        .get(part)
+                        .into_iter()
+                        .flatten()
+                        .find(|marker| {
+                            !ids.contains(&marker.id)
+                                && span.start <= marker.span.start
+                                && marker.span.end <= span.end
+                        })
+                {
+                    return Err(Error::Other(format!(
+                        "cannot remove a comment definition carrying unrelated comment {}",
+                        marker.id
+                    )));
+                }
+            }
+        }
+        let mut spans = BTreeMap::<String, Vec<Range<usize>>>::new();
+        for (part, markers) in ownership.markers {
+            for marker in markers
+                .into_iter()
+                .filter(|marker| ids.contains(&marker.id))
+            {
+                spans
+                    .entry(part.clone())
+                    .or_default()
+                    .push(marker.empty_run.unwrap_or(marker.span));
+            }
+        }
+        for (part, entries) in ownership.entries {
+            for (id, span) in entries.into_iter().filter(|(id, _)| ids.contains(id)) {
+                let _ = id;
+                spans.entry(part.clone()).or_default().push(span);
+            }
+        }
+        for (part, mut ranges) in spans {
+            ranges.sort_by_key(|range| range.start);
+            ranges.dedup();
+            // A removed definition can contain a source marker of another removed comment.
+            let mut outer = Vec::<Range<usize>>::new();
+            for range in ranges {
+                if let Some(previous) = outer.last() {
+                    if range.end <= previous.end {
+                        continue;
+                    }
+                    if range.start < previous.end {
+                        return Err(Error::Other(
+                            "comment removal spans overlap ambiguously".into(),
+                        ));
+                    }
+                }
+                outer.push(range);
+            }
+            let mut xml = self
+                .package
+                .get_part(&part)
+                .ok_or_else(|| Error::Other("comment removal part disappeared".into()))?
+                .to_vec();
+            for range in outer.into_iter().rev() {
+                xml.drain(range);
+            }
+            if self.comments_extended_part_name.as_deref() == Some(part.as_str()) {
+                self.comments_extended = Some(CT_CommentsEx::from_xml(&xml)?);
+            }
+            crate::document::set_story_source_xml(self, &part, xml)?;
+        }
+        if owner == self.doc_part_name {
+            self.identifiers
+                .retire_authored_comment_ids(ids.iter().copied());
+            self.remove_owned_empty_comment_parts();
+            self.comments_dirty = false;
+        }
+        self.invalidate_layout();
+        Ok(())
     }
 }
 
@@ -2607,6 +3710,52 @@ mod tests {
     }
 
     #[test]
+    fn comment_removal_retains_owned_empty_parts_with_opaque_root_payload() {
+        let mut document = Document::new();
+        document.add_paragraph("anchor");
+        let id = document
+            .add_comment(
+                RunRange {
+                    start: RunPosition {
+                        body_index: 0,
+                        run_index: 0,
+                    },
+                    end: RunPosition {
+                        body_index: 0,
+                        run_index: 1,
+                    },
+                },
+                "Ada",
+                None,
+                "root",
+            )
+            .unwrap();
+        let raw =
+            br#"<x:opaque xmlns:x="urn:producer" x:flag='exact'><x:child /></x:opaque>"#.to_vec();
+        document
+            .comments
+            .as_mut()
+            .unwrap()
+            .extra_xml
+            .push((1, raw.clone()));
+        document
+            .comments_extended
+            .as_mut()
+            .unwrap()
+            .extra_xml
+            .push((1, raw.clone()));
+        document.comments_dirty = true;
+        assert!(document.remove_comment(id).unwrap());
+        assert!(document.comments().is_empty());
+        let saved = document.to_bytes().unwrap();
+        let package = OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+        for part in [DEFAULT_COMMENTS_PART, DEFAULT_COMMENTS_EXTENDED_PART] {
+            let xml = package.get_part(part).unwrap();
+            assert!(xml.windows(raw.len()).any(|window| window == raw), "{part}");
+        }
+    }
+
+    #[test]
     fn removing_the_last_owned_comment_retires_its_complete_identifier_bundle() {
         fn final_document(with_history: bool) -> Document {
             let mut document =
@@ -2733,6 +3882,367 @@ mod tests {
         assert!(!comments[1].resolved());
     }
 
+    /// Five comments whose `w15:commentEx` rows are keyed, as Word and Google
+    /// Docs key them, by the paraId of each comment's last paragraph: a reply
+    /// of two paragraphs, a reply to a parent of two paragraphs and a
+    /// resolved comment of two paragraphs.
+    fn multi_paragraph_threads() -> Document {
+        const COMMENTS: [(&str, &[&str]); 5] = [
+            ("Ada", &["1A000001"]),
+            ("Ben", &["1B000001", "1B000002"]),
+            ("Ada", &["2A000001", "2A000002"]),
+            ("Ben", &["2B000001"]),
+            ("Ada", &["3A000001", "3A000002"]),
+        ];
+        let mut document = Document::new();
+        let mut paragraph = document.add_paragraph("");
+        paragraph.add_run("anchor");
+        let range = RunRange {
+            start: RunPosition {
+                body_index: 0,
+                run_index: 0,
+            },
+            end: RunPosition {
+                body_index: 0,
+                run_index: 1,
+            },
+        };
+        let ids = COMMENTS
+            .iter()
+            .map(|(author, _)| document.add_comment(range, author, None, "x").unwrap())
+            .collect::<Vec<_>>();
+        let comments = ids
+            .iter()
+            .zip(COMMENTS)
+            .map(|(id, (author, para_ids))| {
+                let paragraphs = para_ids
+                    .iter()
+                    .map(|para_id| {
+                        format!(
+                            r#"<w:p w14:paraId="{para_id}"><w:r><w:t>{para_id}</w:t></w:r></w:p>"#
+                        )
+                    })
+                    .collect::<String>();
+                format!(r#"<w:comment w:id="{id}" w:author="{author}">{paragraphs}</w:comment>"#)
+            })
+            .collect::<String>();
+        let comments = format!(
+            r#"<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">{comments}</w:comments>"#
+        );
+        let extended = r#"<w15:commentsEx xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"><w15:commentEx w15:paraId="1A000001" w15:done="0"/><w15:commentEx w15:paraId="1B000002" w15:paraIdParent="1A000001" w15:done="0"/><w15:commentEx w15:paraId="2A000002" w15:done="0"/><w15:commentEx w15:paraId="2B000001" w15:paraIdParent="2A000002" w15:done="0"/><w15:commentEx w15:paraId="3A000002" w15:done="1"/></w15:commentsEx>"#;
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+        package
+            .parts
+            .insert(DEFAULT_COMMENTS_PART.to_owned(), comments.into_bytes());
+        package.parts.insert(
+            DEFAULT_COMMENTS_EXTENDED_PART.to_owned(),
+            extended.as_bytes().to_vec(),
+        );
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        Document::from_bytes(bytes.get_ref()).unwrap()
+    }
+
+    fn comment_extensions(document: &Document) -> Vec<(String, Option<String>, Option<bool>)> {
+        document
+            .comments_extended
+            .as_ref()
+            .unwrap()
+            .comments
+            .iter()
+            .map(|entry| {
+                (
+                    entry.para_id.clone(),
+                    entry.para_id_parent.clone(),
+                    entry.done,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn threads_and_resolved_state_read_through_the_last_paragraph() {
+        let document = multi_paragraph_threads();
+        let comments = document.comments();
+        let ids = comments.iter().map(CommentRef::id).collect::<Vec<_>>();
+        let observed = comments
+            .iter()
+            .map(|comment| (comment.parent_id(), comment.resolved()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            observed,
+            [
+                (None, false),
+                (Some(ids[0]), false),
+                (None, false),
+                (Some(ids[2]), false),
+                (None, true),
+            ]
+        );
+        assert_eq!(comments[1].text(), "1B000001\n1B000002");
+    }
+
+    #[test]
+    fn reply_and_resolve_write_the_parent_last_paragraph() {
+        let mut document = multi_paragraph_threads();
+        let parent = document.comments()[2].id();
+
+        let reply = document.reply_to(parent, "Cy", "new reply").unwrap();
+        assert!(document.resolve_comment(parent, true).unwrap());
+
+        let extensions = comment_extensions(&document);
+        let reply_row = extensions.last().unwrap();
+        assert_eq!(reply_row.1.as_deref(), Some("2A000002"));
+        assert!(
+            extensions
+                .iter()
+                .any(|(para_id, _, done)| para_id == "2A000002" && *done == Some(true))
+        );
+        assert!(
+            extensions
+                .iter()
+                .all(|(para_id, _, _)| para_id != "2A000001")
+        );
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        let comments = reopened.comments();
+        let reread = comments
+            .iter()
+            .find(|comment| comment.id() == reply)
+            .unwrap();
+        assert_eq!(reread.parent_id(), Some(parent));
+        assert!(comments[2].resolved());
+    }
+
+    #[test]
+    fn removing_a_parent_of_several_paragraphs_removes_its_reply() {
+        let mut document = multi_paragraph_threads();
+        let ids = document
+            .comments()
+            .iter()
+            .map(CommentRef::id)
+            .collect::<Vec<_>>();
+
+        assert!(document.remove_comment(ids[2]).unwrap());
+
+        let remaining = document
+            .comments()
+            .iter()
+            .map(CommentRef::id)
+            .collect::<Vec<_>>();
+        assert_eq!(remaining, [ids[0], ids[1], ids[4]]);
+        assert!(
+            comment_extensions(&document)
+                .iter()
+                .all(|(para_id, _, _)| para_id != "2A000002" && para_id != "2B000001")
+        );
+    }
+
+    #[test]
+    fn a_windows_line_ending_starts_a_paragraph_without_a_carriage_return() {
+        let mut document = multi_paragraph_threads();
+        let root = document.comments()[0].id();
+
+        let reply = document.reply_to(root, "Cy", "first\r\nsecond").unwrap();
+
+        let comments = document.comments();
+        let reply = comments
+            .iter()
+            .find(|comment| comment.id() == reply)
+            .unwrap();
+        assert_eq!(reply.text(), "first\nsecond");
+    }
+
+    #[test]
+    fn each_line_of_a_comment_text_becomes_one_paragraph() {
+        let mut document = multi_paragraph_threads();
+        let read = document.comments()[1].text();
+
+        let root = document.comments()[0].id();
+        let reply = document.reply_to(root, "Cy", &read).unwrap();
+        let comment = document
+            .comments
+            .as_ref()
+            .unwrap()
+            .comments
+            .iter()
+            .find(|comment| comment.id == reply)
+            .unwrap();
+        assert_eq!(comment.paragraphs.len(), 2);
+        let last = comment.paragraph_ids[1].clone().unwrap();
+        assert_ne!(comment.paragraph_ids[0].as_deref(), Some(last.as_str()));
+        assert_eq!(
+            comment_extensions(&document).last().unwrap(),
+            &(last, Some("1A000001".to_owned()), None)
+        );
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        let comments = reopened.comments();
+        let reread = comments
+            .iter()
+            .find(|comment| comment.id() == reply)
+            .unwrap();
+        assert_eq!(reread.text(), read);
+        assert_eq!(reread.parent_id(), Some(root));
+    }
+
+    #[test]
+    fn every_comment_entry_point_preserves_empty_lines_and_unique_paragraph_ids() {
+        let mut document = Document::new();
+        document.add_paragraph("anchor");
+        let range = RunRange {
+            start: RunPosition {
+                body_index: 0,
+                run_index: 0,
+            },
+            end: RunPosition {
+                body_index: 0,
+                run_index: 1,
+            },
+        };
+        let text = "first\n\nlast\n";
+        let root = document.add_comment(range, "Ada", None, text).unwrap();
+        let found = document
+            .add_comment_on_text("anchor", 0, "Ben", None, text, None)
+            .unwrap();
+        let location = document.paragraph_story_location(0).unwrap().unwrap();
+        let story = document
+            .add_story_comment(
+                StoryRunRange {
+                    start: StoryRunPosition {
+                        location: location.clone(),
+                        run_index: 0,
+                    },
+                    end: StoryRunPosition {
+                        location,
+                        run_index: 1,
+                    },
+                },
+                "Cy",
+                None,
+                text,
+            )
+            .unwrap();
+        let reply = document.reply_to(root, "Dee", text).unwrap();
+        let empty = document.reply_to(root, "Eve", "").unwrap();
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        let model = reopened.comments.as_ref().unwrap();
+        let mut occupied = HashSet::new();
+        for id in [root, found, story, reply, empty] {
+            let comment = model.comments.iter().find(|item| item.id == id).unwrap();
+            let expected = if id == empty { "" } else { text };
+            assert_eq!(comment.paragraphs.len(), expected.split('\n').count());
+            assert_eq!(
+                reopened
+                    .comments()
+                    .iter()
+                    .find(|item| item.id() == id)
+                    .unwrap()
+                    .text(),
+                expected
+            );
+            for para_id in comment.paragraph_ids.iter().flatten() {
+                assert!(occupied.insert(para_id.clone()));
+            }
+        }
+        let xml = std::str::from_utf8(reopened.package.parts.get(DEFAULT_COMMENTS_PART).unwrap())
+            .unwrap();
+        assert!(!xml.contains("first\n"));
+    }
+
+    #[test]
+    fn missing_final_paragraph_ids_are_allocated_without_replacing_earlier_ids() {
+        for reply in [false, true] {
+            let mut document = multi_paragraph_threads();
+            let parent = document.comments()[2].id();
+            document.comments.as_mut().unwrap().comments[2].paragraph_ids[1] = None;
+            if reply {
+                document.reply_to(parent, "Cy", "reply\nlast").unwrap();
+            } else {
+                document.resolve_comment(parent, true).unwrap();
+            }
+            let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+            let comment = &reopened.comments.as_ref().unwrap().comments[2];
+            assert_eq!(comment.paragraph_ids[0].as_deref(), Some("2A000001"));
+            let last = comment.paragraph_ids[1].as_deref().unwrap();
+            assert_ne!(last, "2A000001");
+            assert!(
+                comment_extensions(&reopened)
+                    .iter()
+                    .any(|(id, _, done)| id == last && (reply || *done == Some(true)))
+            );
+            if reply {
+                assert_eq!(
+                    reopened.comments().last().unwrap().parent_id(),
+                    Some(parent)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fragment_import_keeps_last_paragraph_threads_and_unsupported_xml() {
+        let mut source = multi_paragraph_threads();
+        let root = source.comments()[2].id();
+        let raw = br#"<x:keep xmlns:x="urn:producer" x:flag='exact'><x:child /></x:keep>"#.to_vec();
+        source.comments.as_mut().unwrap().comments[2]
+            .extra_xml
+            .push((1, raw.clone()));
+        let mut destination = Document::new();
+        let remap = destination
+            .import_fragment_comments_staged(
+                source.comments.as_ref(),
+                source.comments_extended.as_ref(),
+                &[root.to_string()],
+            )
+            .unwrap();
+        assert_eq!(remap.len(), 2);
+        let bytes = destination.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        let comments = reopened.comments();
+        assert_eq!(comments.len(), 2);
+        assert_eq!(comments[1].parent_id(), Some(comments[0].id()));
+        let xml = reopened.package.parts.get(DEFAULT_COMMENTS_PART).unwrap();
+        assert!(xml.windows(raw.len()).any(|window| window == raw));
+    }
+
+    #[test]
+    fn removing_a_root_removes_nested_replies_linked_to_legacy_first_paragraphs() {
+        let mut document = multi_paragraph_threads();
+        let root = document.comments()[0].id();
+        let child = document.comments()[1].id();
+        let grandchild = document.reply_to(child, "Cy", "nested").unwrap();
+        let own = document
+            .comments
+            .as_ref()
+            .unwrap()
+            .comments
+            .last()
+            .unwrap()
+            .paragraph_ids[0]
+            .clone()
+            .unwrap();
+        let row = document
+            .comments_extended
+            .as_mut()
+            .unwrap()
+            .comments
+            .iter_mut()
+            .find(|row| row.para_id == own)
+            .unwrap();
+        row.para_id_parent = Some("1B000001".to_owned());
+        assert_eq!(document.comments().last().unwrap().parent_id(), Some(child));
+        assert!(document.remove_comment(root).unwrap());
+        assert!(
+            document
+                .comments()
+                .iter()
+                .all(|comment| ![root, child, grandchild].contains(&comment.id()))
+        );
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(reopened.comments().len(), 3);
+    }
+
     #[test]
     fn removing_a_reference_run_keeps_an_unrelated_empty_run() {
         let mut paragraph = CT_P::new();
@@ -2820,5 +4330,25 @@ mod tests {
             .expect("plist value is utf8")
             .trim()
             .to_owned()
+    }
+    #[test]
+    fn glossary_omission_preserves_mixed_carriers_and_refuses_opaque_marker_payload() {
+        let marker = r#"<q:commentReference q:id="4"/>"#;
+        let xml = format!(
+            r#"<q:p xmlns:q="{}" xmlns:x="urn:producer"><q:r x:keep="yes"><q:rPr><q:b/></q:rPr><?keep same?>{marker}<!--stay--><x:commentReference x:id="4"/></q:r></q:p>"#,
+            rdocx_oxml::namespace::W_NS
+        );
+        assert_eq!(
+            Document::omit_comment_markers(xml.as_bytes()).unwrap(),
+            xml.replace(marker, "").as_bytes()
+        );
+        for invalid in [
+            r#"<q:commentReference/>"#,
+            r#"<q:commentReference q:id="bad"/>"#,
+            r#"<q:commentReference q:id="4"><x:opaque/></q:commentReference>"#,
+        ] {
+            let invalid = xml.replace(marker, invalid);
+            assert!(Document::omit_comment_markers(invalid.as_bytes()).is_err());
+        }
     }
 }

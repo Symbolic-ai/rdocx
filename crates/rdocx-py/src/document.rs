@@ -163,7 +163,7 @@ impl PyBookmark {
 }
 
 #[pyclass(name = "Comment", frozen, get_all, eq, skip_from_py_object)]
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct PyComment {
     pub id: i32,
     pub author: Option<String>,
@@ -172,12 +172,31 @@ pub struct PyComment {
     pub text: String,
     pub parent_id: Option<i32>,
     pub resolved: bool,
+    pub anchor_text: Option<String>,
+    pub anchor: Option<PyStoryRunRange>,
 }
+
+// Preserve the established metadata value equality. Derived anchor snapshots
+// carry document revisions and do not change the identity of a comment record.
+impl PartialEq for PyComment {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.author == other.author
+            && self.initials == other.initials
+            && self.date == other.date
+            && self.text == other.text
+            && self.parent_id == other.parent_id
+            && self.resolved == other.resolved
+    }
+}
+
+impl Eq for PyComment {}
 
 #[pymethods]
 impl PyComment {
     #[new]
-    #[pyo3(signature = (*, id, author, initials, date, text, parent_id, resolved))]
+    #[pyo3(signature = (*, id, author, initials, date, text, parent_id, resolved, anchor_text=None, anchor=None))]
+    #[allow(clippy::too_many_arguments)] // Preserve seven original fields plus optional anchor snapshots.
     fn new(
         id: i32,
         author: Option<String>,
@@ -186,8 +205,12 @@ impl PyComment {
         text: String,
         parent_id: Option<i32>,
         resolved: bool,
+        anchor_text: Option<String>,
+        anchor: Option<PyRef<'_, PyStoryRunRange>>,
     ) -> Self {
         Self {
+            anchor_text,
+            anchor: anchor.map(|range| (*range).clone()),
             id,
             author,
             initials,
@@ -382,6 +405,8 @@ pub struct PyLayoutBackedFieldUpdateReport {
     page_fields: usize,
     num_pages_fields: usize,
     page_reference_fields: usize,
+    section_fields: usize,
+    section_pages_fields: usize,
     diagnostics: Vec<String>,
 }
 
@@ -1078,17 +1103,21 @@ impl PyTocRebuildReport {
 #[pymethods]
 impl PyLayoutBackedFieldUpdateReport {
     #[new]
-    #[pyo3(signature = (*, page_fields, num_pages_fields, page_reference_fields, diagnostics))]
+    #[pyo3(signature = (*, page_fields, num_pages_fields, page_reference_fields, diagnostics, section_fields=0, section_pages_fields=0))]
     fn new(
         page_fields: usize,
         num_pages_fields: usize,
         page_reference_fields: usize,
         diagnostics: Vec<String>,
+        section_fields: usize,
+        section_pages_fields: usize,
     ) -> Self {
         Self {
             page_fields,
             num_pages_fields,
             page_reference_fields,
+            section_fields,
+            section_pages_fields,
             diagnostics,
         }
     }
@@ -1109,8 +1138,22 @@ impl PyLayoutBackedFieldUpdateReport {
     }
 
     #[getter]
+    fn section_fields(&self) -> usize {
+        self.section_fields
+    }
+
+    #[getter]
+    fn section_pages_fields(&self) -> usize {
+        self.section_pages_fields
+    }
+
+    #[getter]
     fn updated_count(&self) -> usize {
-        self.page_fields + self.num_pages_fields + self.page_reference_fields
+        self.page_fields
+            + self.num_pages_fields
+            + self.page_reference_fields
+            + self.section_fields
+            + self.section_pages_fields
     }
 
     #[getter]
@@ -1636,6 +1679,34 @@ impl PyDocument {
         Ok(locations)
     }
 
+    fn comment_story_position(
+        &self,
+        py: Python<'_>,
+        position: &rdocx::StoryRunPosition,
+        items: &mut HashMap<rdocx::ContentLocation, rdocx::StoryItemSnapshot>,
+    ) -> PyResult<PyStoryRunPosition> {
+        if !items.contains_key(&position.location) {
+            let snapshot = self
+                .inner
+                .story_range_paragraph_snapshot(&position.location)
+                .map_err(|error| rdocx_to_pyerr(py, error))?;
+            items.insert(position.location.clone(), snapshot);
+        }
+        let item = &items[&position.location];
+        Ok(PyStoryRunPosition {
+            item: PyStoryItem {
+                story: story_snapshot(item.location().story()),
+                kind: story_item_kind_name(item.location().item_kind()).to_owned(),
+                index_path: item.location().index_path().to_vec(),
+                direct_body_index: item.direct_body_index(),
+                text: item.text().map(str::to_owned),
+                xml: item.xml().to_vec(),
+                revision: self.revisions.current(),
+            },
+            run_index: position.run_index,
+        })
+    }
+
     fn story_item_snapshot(
         &self,
         py: Python<'_>,
@@ -1659,10 +1730,7 @@ impl PyDocument {
         })
     }
 
-    /// Snapshot the story item of a body paragraph handle. A paragraph
-    /// inside a block content control has no story item of its own, so it
-    /// gets the two-segment path of `paragraph_story_location` with the
-    /// paragraph text and no XML.
+    /// Snapshot a checked body paragraph, including a paragraph inside a block control.
     fn paragraph_story_item(py: Python<'_>, paragraph: &PyParagraph) -> PyResult<PyStoryItem> {
         let ParagraphLocation::Body(paragraph_index) = paragraph.validate(py)? else {
             return Err(PyValueError::new_err(
@@ -1675,27 +1743,20 @@ impl PyDocument {
             .paragraph_story_location(paragraph_index)
             .map_err(|error| rdocx_to_pyerr(py, error))?
             .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
-        let [control_index, _] = location.index_path() else {
+        let [_, _] = location.index_path() else {
             return document.story_item_snapshot(py, &location);
         };
-        let control = document.story_item_snapshot(
-            py,
-            &rdocx::ContentLocation::new(
-                location.story().clone(),
-                rdocx::StoryItemKind::ContentControl,
-                vec![*control_index],
-            ),
-        )?;
+        let item = document
+            .inner
+            .story_range_paragraph_snapshot(&location)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
         Ok(PyStoryItem {
-            story: control.story,
-            kind: "paragraph".to_owned(),
-            index_path: location.index_path().to_vec(),
-            direct_body_index: control.direct_body_index,
-            text: document
-                .inner
-                .paragraph(paragraph_index)
-                .map(|paragraph| paragraph.text()),
-            xml: Vec::new(),
+            story: story_snapshot(item.location().story()),
+            kind: story_item_kind_name(item.location().item_kind()).to_owned(),
+            index_path: item.location().index_path().to_vec(),
+            direct_body_index: item.direct_body_index(),
+            text: item.text().map(str::to_owned),
+            xml: item.xml().to_vec(),
             revision: document.revisions.current(),
         })
     }
@@ -1806,6 +1867,25 @@ impl PyDocument {
             self.revisions.bump();
         }
         Ok(counts)
+    }
+
+    // Both checked item and physical cell routes share singular count/error and
+    // publication policy. The concrete closures are the two actual consumers.
+    pub(crate) fn scoped_replacement<F>(&mut self, py: Python<'_>, mutation: F) -> PyResult<usize>
+    where
+        F: FnOnce(
+                &mut rdocx::Document,
+            ) -> rdocx::Result<Result<usize, rdocx::ReplacementCountMismatch>>
+            + Send,
+    {
+        let count = py
+            .detach(|| mutation(&mut self.inner))
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+            .map_err(|mismatch| crate::replacement_count_to_pyerr(py, &mismatch, false))?;
+        if count > 0 {
+            self.revisions.bump();
+        }
+        Ok(count)
     }
 
     /// Check the names and the section of one header or footer variant.
@@ -2373,18 +2453,49 @@ impl PyDocument {
 
     #[getter]
     fn comments<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
-        PyTuple::new(
-            py,
-            self.inner.comments().into_iter().map(|comment| PyComment {
-                id: comment.id(),
-                author: comment.author().map(str::to_owned),
-                initials: comment.initials().map(str::to_owned),
-                date: comment.date().map(str::to_owned),
-                text: comment.text(),
-                parent_id: comment.parent_id(),
-                resolved: comment.resolved(),
-            }),
-        )
+        let mut anchors = self
+            .inner
+            .comment_anchor_snapshots()
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let mut items = self
+            .inner
+            .story_item_snapshots()
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+            .into_iter()
+            .map(|item| (item.location().clone(), item))
+            .collect::<HashMap<_, _>>();
+        let records = self
+            .inner
+            .comments()
+            .into_iter()
+            .map(|comment| {
+                let (range, anchor_text) = anchors.remove(&comment.id()).ok_or_else(|| {
+                    PyValueError::new_err(
+                        "comment snapshot is missing its checked ownership record",
+                    )
+                })?;
+                let anchor = range
+                    .map(|range| -> PyResult<PyStoryRunRange> {
+                        Ok(PyStoryRunRange {
+                            start: self.comment_story_position(py, &range.start, &mut items)?,
+                            end: self.comment_story_position(py, &range.end, &mut items)?,
+                        })
+                    })
+                    .transpose()?;
+                Ok(PyComment {
+                    id: comment.id(),
+                    author: comment.author().map(str::to_owned),
+                    initials: comment.initials().map(str::to_owned),
+                    date: comment.date().map(str::to_owned),
+                    text: comment.text(),
+                    parent_id: comment.parent_id(),
+                    resolved: comment.resolved(),
+                    anchor_text,
+                    anchor,
+                })
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+        PyTuple::new(py, records)
     }
 
     #[getter]
@@ -3063,14 +3174,18 @@ impl PyDocument {
             .map_err(|error| rdocx_to_pyerr(py, error))
     }
 
-    fn set_header(&mut self, text: &str) {
-        self.inner.set_header(text);
+    fn set_header(&mut self, py: Python<'_>, text: &str) -> PyResult<()> {
+        py.detach(|| self.inner.try_set_header(text))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
         self.revisions.bump();
+        Ok(())
     }
 
-    fn set_footer(&mut self, text: &str) {
-        self.inner.set_footer(text);
+    fn set_footer(&mut self, py: Python<'_>, text: &str) -> PyResult<()> {
+        py.detach(|| self.inner.try_set_footer(text))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
         self.revisions.bump();
+        Ok(())
     }
 
     fn set_story_text(
@@ -3196,6 +3311,45 @@ impl PyDocument {
             .map_err(|error| rdocx_to_pyerr(py, error))?;
         self.revisions.bump();
         Ok(id)
+    }
+
+    /// Move a root comment to a checked current story range atomically.
+    fn move_comment(
+        &mut self,
+        id: i32,
+        range: PyRef<'_, PyStoryRunRange>,
+        py: Python<'_>,
+    ) -> PyResult<()> {
+        let start = rdocx::StoryRunPosition {
+            location: self.native_location(py, &range.start.item)?,
+            run_index: range.start.run_index,
+        };
+        let end = rdocx::StoryRunPosition {
+            location: self.native_location(py, &range.end.item)?,
+            run_index: range.end.run_index,
+        };
+        py.detach(|| {
+            self.inner
+                .move_comment(id, rdocx::StoryRunRange { start, end })
+        })
+        .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.revisions.bump();
+        Ok(())
+    }
+
+    /// Move a root comment onto the selected literal main-story occurrence.
+    #[pyo3(signature = (id, anchor, *, occurrence = 0))]
+    fn move_comment_to_text(
+        &mut self,
+        id: i32,
+        anchor: &str,
+        occurrence: usize,
+        py: Python<'_>,
+    ) -> PyResult<()> {
+        py.detach(|| self.inner.move_comment_to_text(id, anchor, occurrence))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.revisions.bump();
+        Ok(())
     }
 
     #[pyo3(signature = (parent_id, *, author, text, date = None))]
@@ -3398,6 +3552,22 @@ impl PyDocument {
         self.counted_mutation(py, |document| document.reject_revision_id(id))
     }
 
+    /// Replace literal text only inside a checked paragraph, table or control item.
+    #[pyo3(signature = (item, old, new, *, expect = None))]
+    fn replace_text_at(
+        &mut self,
+        py: Python<'_>,
+        item: &PyStoryItem,
+        old: &str,
+        new: &str,
+        expect: Option<usize>,
+    ) -> PyResult<usize> {
+        let location = self.native_location(py, item)?;
+        self.scoped_replacement(py, |document| {
+            document.try_replace_text_at(&location, old, new, expect)
+        })
+    }
+
     #[pyo3(signature = (placeholder, replacement, *, expect = None))]
     fn try_replace_text(
         &mut self,
@@ -3527,6 +3697,8 @@ impl PyDocument {
             page_fields: report.page_fields,
             num_pages_fields: report.num_pages_fields,
             page_reference_fields: report.page_reference_fields,
+            section_fields: report.section_fields,
+            section_pages_fields: report.section_pages_fields,
             diagnostics: report.diagnostics,
         })
     }
@@ -3585,12 +3757,14 @@ impl PyDocument {
         Py::new(py, PyTable::new(slf, path))
     }
 
-    fn remove_content(&mut self, index: usize) -> bool {
-        let removed = self.inner.remove_content(index);
+    fn remove_content(&mut self, py: Python<'_>, index: usize) -> PyResult<bool> {
+        let removed = py
+            .detach(|| self.inner.try_remove_content(index))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
         if removed {
             self.revisions.bump();
         }
-        removed
+        Ok(removed)
     }
 
     fn find_content_index(

@@ -21,6 +21,7 @@
 
 #![allow(clippy::too_many_arguments)]
 
+mod bibliography;
 mod building_block;
 mod comments;
 mod comparison;
@@ -44,6 +45,12 @@ mod svg;
 pub mod table;
 mod template;
 
+pub use bibliography::{
+    BibliographyAuthor, BibliographyContributor, BibliographyContributorRole, BibliographyOptions,
+    BibliographyPerson, BibliographyProperty, BibliographySource, BibliographySourceField,
+    BibliographySourceInfo, BibliographySourceKind, BibliographyStyle, BibliographyStyleInfo,
+    BibliographyUpdateReport, CitationOptions, CitationSourceOptions,
+};
 pub use building_block::{BuildingBlock, BuildingBlockInfo, BuildingBlockKind};
 pub use comments::{
     BookmarkRef, CommentRef, RunPosition, RunRange, StoryRangeKind, StoryRangeRef,
@@ -73,11 +80,14 @@ pub use embedded::{
 pub use epub::{EpubDiagnostic, EpubWriteResult};
 pub use error::{Error, Result};
 pub use field::{
-    BarcodeCaseStyle, BarcodeField, BarcodeKind, BarcodePointOfSaleStyle, FieldDateTime,
-    FieldEvaluation, FieldEvaluationContext, FieldOutcome, LayoutBackedFieldUpdateReport,
-    LegacyFormFieldInfo, LegacyFormFieldKind, LegacyFormFieldValue, MailMergeControl,
-    MailMergeData, MailMergeFormatContext, MailMergeFormattedText, MailMergeImage, MailMergeRecord,
-    MailMergeValue, TcField, TocEntrySelection, TocField, TocRebuildReport,
+    AuthorityEntry, BarcodeCaseStyle, BarcodeField, BarcodeKind, BarcodePointOfSaleStyle,
+    CaptionOptions, CaptionTarget, CrossReferenceNumber, CrossReferenceOptions, FieldDateTime,
+    FieldEvaluation, FieldEvaluationContext, FieldOutcome, GeneratedTablesReport, IndexEntry,
+    IndexOptions, LayoutBackedFieldUpdateReport, LegacyFormFieldInfo, LegacyFormFieldKind,
+    LegacyFormFieldValue, MailMergeControl, MailMergeData, MailMergeFormatContext,
+    MailMergeFormattedText, MailMergeImage, MailMergeRecord, MailMergeValue, SequenceOptions,
+    TableOfAuthoritiesOptions, TableOfFiguresOptions, TcField, TocEntrySelection, TocField,
+    TocRebuildReport,
 };
 pub use html::{
     HtmlDiagnostic, HtmlFragmentInsertResult, HtmlImageResource, HtmlReadResult, MhtmlDiagnostic,

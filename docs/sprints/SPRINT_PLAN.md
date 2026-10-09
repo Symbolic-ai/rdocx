@@ -1984,7 +1984,7 @@ dependency order.
 
 **Goal**: provide a complete field construction surface and deterministic
 field results across stories, then compose captions, cross-references, indexes,
-citations, and numbering-aware navigation.
+bounded native citations and bibliography results.
 
 | F-ID | Title | Size |
 |------|-------|------|
@@ -1993,13 +1993,144 @@ citations, and numbering-aware navigation.
 | F-280 | Captions, sequences, and complete cross-references | M |
 | F-281 | Indexes and tables of figures and authorities | L |
 | F-282 | Citations and bibliography authoring | L |
-| F-283 | Complete numbering-aware navigation fields | L |
+| F-X179 | Correct multi-paragraph comment threads from PR 271 | S |
+| F-X180 | Correct cell nil and none border precedence | S |
+| F-X181 | Ignore page and column breaks inside table cells | S |
+| F-X182 | Honor direct table alignment | M |
+| F-X183 | Correct table margins and legacy positioning | M |
+| F-X184 | Safe comment ownership during content removal | L |
+| F-X185 | Expose comment anchor text and story location | M |
+| F-X186 | Move comment anchors without losing threads | M |
+| F-X187 | Scoped paragraph and cell text replacement | M |
+| F-X188 | Preserve comment ownership when replacing or removing whole stories | L |
+| F-X190 | Preserve cached text in multi-run complex field story snapshots | M |
+| F-X191 | Ignore namespace declarations in numbering reader completeness | S |
+| F-X189 | Prepare Word 0.16.0 and PowerPoint 0.14.0 families | L |
 
 F-278 is the field substrate. F-279 uses the S89 note policy, and F-280 uses
 S89 range markers. F-281 follows the field, pagination, and caption work.
-F-282 can proceed after F-278. F-283 closes the composed numbering and
-navigation result. The sprint gate checks one source-built document's field
-caches, page targets, and numbering against the pinned Word oracle.
+F-282 follows F-278 and delivers its revised measured-subset contract.
+F-283 carries the composed numbering and navigation result to S91. The S90
+gate checks delivered field caches and page targets against pinned Word controls.
+F-X178 is carried out of the S90 execution at the user's instruction to leave
+Issue 264 alone. Its backlog row remains pending for separate work. F-282
+covers the measured native source-authoring and formatter subset. F-X192 owns the
+remaining full catalogue work in S91. F-283 is carried to S91.
+
+F-X179 integrates PR 271 only after every Issue 270 criterion passes. It has
+no dependency and preserves Issue 264 and F-X178 for separate work.
+
+The user added Issues 272 and 273 with PRs 274 and 275 during S90.
+F-X180 and F-X181 validate each full issue before accepting its contribution.
+Their source and regression files overlap F-282 and F-283. Pause F-282 at a
+saved checkpoint, run these independent fixes in separate waves, then resume
+the bounded F-282 contract. F-283 is carried to S91. Source and Cargo ownership never overlap. Reconcile both
+approved contracts at integration and check table geometry and bibliography
+output. Issue 264 remains excluded.
+
+
+Newly opened Issues 277 and 276 add F-X182 and F-X183. Run direct alignment
+before legacy positioning, with F-X182 completed at a scoped dependency
+checkpoint before F-X183 starts. Keep F-282 paused through these exclusive
+source and hash-baseline waves, then resume its bounded S90 contract. F-283 is carried to S91. Each rendering
+delta is separately declared and reviewed. Issue 264 remains excluded.
+PR 279 supplies F-X182. PR 280 is stacked on it and supplies F-X183, including new Issue 278 for unset side margins. Validate both complete issue sets before contributor disposition.
+
+
+Issue [281](https://github.com/tensorbee/rdocx/issues/281), raised by `hadim`,
+adds roadmap feedback to this sprint intake. Record its unified CLI/Python
+workflow, template filling, preservation-safe edits and rendering needs in the
+existing F-184 decision at S95. The [maintainer response](https://github.com/tensorbee/rdocx/issues/281#issuecomment-6058792996)
+answers scheduling and staged-delivery questions and requests concrete workflows
+and preservation needs. Keep the discussion open for the F-184 decision. S90 delivers the documented
+assessment, while spreadsheet implementation retains its affirmative decision
+barrier.
+
+Issues [282](https://github.com/tensorbee/rdocx/issues/282), [283](https://github.com/tensorbee/rdocx/issues/283), [284](https://github.com/tensorbee/rdocx/issues/284) and [285](https://github.com/tensorbee/rdocx/issues/285), reported by `hadim`, add F-X184 through F-X187. The intake was read against canonical 0a775842a8fd12f088bf4f2b3d0a049ddc3e976b. All four were opened on 2026-10-08 at 13:35 UTC and have no matching contribution PR at intake. Subsequent [PR 286](https://github.com/tensorbee/rdocx/pull/286), by `hadim`, targets Issue 285 at head `08361f6af99110cbae71bf9f0498a12feadc01db` and is included in F-X187 contribution assessment. Its patch must satisfy the approved scope and integrated verification before acceptance or closure. Their approved plans retain the complete issue criteria. Issue numbers 282 and 283 are distinct from existing feature IDs F-282 and F-283.
+
+Pause F-282 only at an explicit saved external checkpoint. Run F-X184, F-X185, F-X186 and F-X187 in exclusive waves 11, 12, 13 and 14, respectively. F-X184 uses completed F-X179 and F-271. Complete each formal dependency before starting its consumer. F-X187 has no formal dependency but follows F-X186 because document, comment, binding and existing test entrypoints overlap. These waves exclusively own shared source, Cargo execution and HLD edits. Resume the revised measured-subset F-282 contract afterward. Remaining bibliography work is F-X192 in S91, and F-283 is carried to S91. Draft batch planning does not waive implementation barriers or the final integrated full gate. Issue 264 and F-X178 remain excluded. GitHub closure waits for verified sprint close and complete issue acceptance.
+
+Subsequent [PR 287](https://github.com/tensorbee/rdocx/pull/287), by Hadrien
+Mary (`hadim`), targets Issues 282, 283 and 284 at immutable head
+`e4b216934eb3abc58ea1a42d72a902f90aa8e120`, based on
+`20888b7a2c636e322ad23dc611f494beaac1c09b`. It is included in F-X184 through
+F-X186 contribution assessment. Existing F-X184 acceptance retains atomic
+partial-cut and fragment-detach refusal. Assess reusable anchor projection,
+typed binding and movement changes against the full F-X185 and F-X186 plans,
+without replacing the completed ownership protections or accepting the PR's
+stated note and header removal gaps. The stacked F-X179 contribution is
+already integrated. Read the exact contribution and preserve contributor
+attribution, with PR reconciliation only after complete integrated acceptance
+at verified sprint close. No additional F-ID or scope reduction is introduced.
+
+Issues [288](https://github.com/tensorbee/rdocx/issues/288) and
+[289](https://github.com/tensorbee/rdocx/issues/289), reported by `hadim` on
+2026-10-08 at 16:18 UTC, are included in S90 acceptance assessment. Issue288
+covers note removal, all header and footer replacement variants, shared story
+references and building-block removal with complete comment thread and
+companion preservation or atomic refusal. Compare every criterion with the
+completed F-X184 implementation and add any missing implementation and tests
+through the feature lifecycle before acceptance. Issue289 requires nested
+block-control paragraph snapshots to carry accepted text and XML, including
+comment anchor endpoints and other checked two-segment path consumers. Assess
+it under F-X185's existing checked paragraph snapshot contract. Nested
+paragraph enumeration is optional in that issue and does not change the
+ordinary story inventory contract. Neither issue is closed from similarity to
+an existing fix. Exact integrated evidence and full issue acceptance remain
+required. The seven observed PR heads remain unchanged. Issue264 remains
+excluded.
+
+Issue292 is included in F-X188 with documented comment omission from
+building-block transfers and physical glossary/main owner isolation.
+The user corrected the exclusion to Issue281, which remains open for F-184.
+Issue291 is included through F-X190, whose planned, verified multi-run field
+snapshot correction runs in exclusive wave16 after F-X188 and before F-282 resumes. Issue264 remains
+excluded. Assess updated stacked contributions selectively against complete
+issue acceptance before merging or closing any record.
+
+F-X188 owns exclusive wave15 after F-X187 and before F-282
+resumes under its revised measured-subset contract. Its approved Issue288 contract completes the remaining replacement,
+glossary and shared-reference ownership work. Issue289 is part of F-X185.
+
+The user approved F-X189 for new Word0.16.0 and shared/PowerPoint0.14.0
+release preparation. Existing unified versions are published at S88 and their
+tags remain immutable. Run exclusive wave18 only after all included S90
+implementation dependencies complete, including the revised F-282 measured
+subset and F-X191. Prepare exact carriers, reviewed family notes and authenticated
+contribution inventories over each complete previous-tag range, including
+S89. Current local package/binding evidence precedes final integrated full
+verification and review. The final reviewed and pushed sprint SHA must pass
+the hosted build-only rehearsal before close. Publication follows close
+through separate final exact-main-SHA approvals for each family, with shared
+packages published before their new Word consumers. This is a user-approved
+release preparation boundary, not completion of M24 or a1.0 decision.
+Issue264 remains excluded and Issue281 remains open for F-184.
+
+S90 contribution intake is frozen by the user at PR293. Do not search for
+or add later issues or pull requests to this sprint. Finish the existing
+measured bibliography, numbering reader and release preparation scope.
+Remaining catalogue work and unfinished navigation move to S91.
+Issues264 and281 remain open.
+
+PR [293](https://github.com/tensorbee/rdocx/pull/293), contributed by Pedro
+Assumpcao (`pedroassumpcao`) at head
+`fd112a7ac3333709f62746b7065c5cc1b4be0eed`, adds F-X191. The user approved
+its workflow records. Exclusive wave17 corrects the namespace-only numbering
+reader flag while preserving declarations, foreign attributes, opaque children
+and the separate authoring completeness contract. It has no formal dependency,
+but shared source and Cargo ownership remain exclusive. Complete F-X191 before
+F-X189 in wave18. Assess only the reader fix and focused tests, preserving
+current archive policy rather than adopting contributor platform overrides.
+Issue264 remains excluded and Issue281 stays open. PR disposition waits for
+complete integrated acceptance at verified sprint close.
+
+The user moved remaining bibliography work to F-X192 in S91 and explicitly
+carried F-283 to S91 to publish completed S90 work. F-282 must satisfy its
+revised measured-subset design, actual admission and atomic refusal contracts,
+independent review and scoped gates. Its current 210-of-223 dense APA checkpoint
+is not full catalogue parity. F-X189 depends on completed revised F-282 and
+F-X191, not the carried S91 stories. Final integrated verification, sprint
+review, package checks and exact-SHA publication approval remain required.
 
 #### Sprint S91, Templates, controls, and forms
 
@@ -2009,6 +2140,9 @@ state through public APIs.
 
 | F-ID | Title | Size |
 |------|-------|------|
+| F-X178 | Clearable direct run formatting setters | S |
+| F-X192 | Complete the remaining Word bibliography catalogue | L |
+| F-283 | Complete numbering-aware navigation fields | L |
 | F-284 | Stable container-wide template grammar | L |
 | F-285 | Content control creation and lifecycle | L |
 | F-286 | Rich, repeating, and typed content controls | L |
@@ -2016,6 +2150,16 @@ state through public APIs.
 | F-288 | Legacy form field creation | M |
 | F-289 | Modern Word form authoring | L |
 | F-290 | Mail-merge package and data-source authoring | M |
+
+F-X178 is the explicit S90 carry for the user-excluded Issue264. Its next
+eligible planning target is S91. It remains pending and requires a separate
+scope decision before implementation, preserving the exclusion in S90.
+
+F-X192 completes the bibliography catalogue deferred from S90 after the
+reviewed F-282 native foundation. F-283 carries unfinished numbering-aware
+navigation under its existing approved contract. Complete their actual
+prerequisites before claim. These additions do not imply S90 delivered full
+bibliography or navigation parity.
 
 F-284 builds on S89 fragment transactions. F-285 establishes the control
 lifecycle before F-286 and F-287 add typed values and bindings. F-288 uses the
@@ -2108,6 +2252,40 @@ F-184 is a true go or no-go gate. It reassesses Calamine,
 then classifies each proposed feature as preserved, modeled and editable, or
 executable. If the ecosystem provides the complete required lifecycle by then,
 M19 is archived rather than implemented.
+
+[Issue 281](https://github.com/tensorbee/rdocx/issues/281) supplies user demand
+for a unified CLI/Python workflow, template filling, preservation-safe edits
+and rendering. Include integration, installation and maintenance costs in
+F-184, including reuse of a maintained engine behind a consistent facade.
+S95 through S98 stage reading and loss-aware editing before calculation and
+pivots. Rendering and distribution retain the S104 boundary. An earlier
+distributable reader/editor requires a reviewed roadmap and release decision.
+
+The reporter's [follow-up](https://github.com/tensorbee/rdocx/issues/281#issuecomment-6063901190)
+defines a Google Sheets review workflow: read and change cell text, edit a
+shared-formula column and preserve reviewer comments. Ordinary spreadsheet
+reading is already covered in that workflow. The differentiators are one
+CLI/Python shape and installation, Rust performance and safety, loss-aware
+editing and later rendering without Excel. The requested first cut preserves
+all unmodeled parts, including threaded comments and `commentsmeta*`, data
+validation, conditional formatting and defined names. It reads values and
+types, shared strings, formats and styles, merged ranges, formulas and cached
+results. Edits include values, formulas and styles, rows and columns, sheets,
+widths and heights, frozen panes and auto-filters, with atomic output. Shared
+formula structure must survive. The decision must choose explicit stale-cache
+invalidation and recalculate-on-load, or a separately bounded evaluator for
+arithmetic, references, SUM, AVERAGE, MIN, MAX and IF. Chart authoring is not a
+requested first-cut need. Rendering is a desired second step. These are inputs
+to F-184, not S90 implementation or an approved earlier release boundary.
+
+The [maintainer commitment](https://github.com/tensorbee/rdocx/issues/281#issuecomment-6064533994)
+confirms preservation tests and the review workflow first, then reading and
+styled edits with explicit stale-cache handling. A bounded evaluator and
+rendering follow, with chart authoring deferred. Pivot refresh, Power Query
+and scripting remain longer-term goals. F-184 must reconcile the scheduled
+stories and any proposed reader/editor distribution boundary with that order
+before approving implementation. S90 records this direction without claiming
+that the conditional spreadsheet programme or an earlier release is approved.
 
 #### Sprint S96, Styles, tables and structured references
 

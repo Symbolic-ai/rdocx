@@ -252,6 +252,7 @@ fn shape_run(
         field_kind: None,
         field_source: None,
         note: None,
+        note_reference_source: None,
     })
 }
 
@@ -1130,6 +1131,7 @@ fn emit_segment(
         field_kind: segment.field_kind,
         field_source: segment.field_source,
         note: segment.note,
+        note_reference_source: segment.note_reference_source,
         tab_aligned: None,
     }));
 
@@ -1221,6 +1223,7 @@ fn emit_multilingual_segment(
         field_kind: base.field_kind,
         field_source: base.field_source,
         note: base.note,
+        note_reference_source: base.note_reference_source,
     }));
 
     if base.underline.is_some() {
@@ -2642,6 +2645,7 @@ mod tests {
             field_kind: None,
             field_source: None,
             note: None,
+            note_reference_source: None,
         };
         let line = oxml_layout::LayoutLine {
             items: vec![

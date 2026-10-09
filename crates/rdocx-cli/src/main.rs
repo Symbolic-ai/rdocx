@@ -252,12 +252,31 @@ enum CommentCommand {
         /// Optional comment author initials
         #[arg(long)]
         initials: Option<String>,
-        /// Comment text
+        /// Comment text, one paragraph per line
         #[arg(long)]
         text: String,
         /// RFC 3339 comment timestamp, omitted from the comment when absent
         #[arg(long)]
         date: Option<String>,
+        /// Output DOCX file
+        #[arg(long, short = 'o')]
+        output: PathBuf,
+        /// Output the operation record as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Move an existing root comment onto literal main-story text
+    Move {
+        /// Path to the DOCX file
+        file: PathBuf,
+        /// Existing root comment id
+        id: i32,
+        /// Literal case-sensitive destination text
+        #[arg(long)]
+        text: String,
+        /// Zero-based destination occurrence
+        #[arg(long, default_value_t = 0)]
+        occurrence: usize,
         /// Output DOCX file
         #[arg(long, short = 'o')]
         output: PathBuf,
@@ -275,7 +294,7 @@ enum CommentCommand {
         /// Reply author
         #[arg(long)]
         author: String,
-        /// Reply text
+        /// Reply text, one paragraph per line
         #[arg(long)]
         text: String,
         /// RFC 3339 reply timestamp, omitted from the reply when absent
@@ -567,6 +586,14 @@ fn run_cli() {
                 &output,
                 json,
             ),
+            CommentCommand::Move {
+                file,
+                id,
+                text,
+                occurrence,
+                output,
+                json,
+            } => commands::comment_move(&file, id, &text, occurrence, &output, json),
             CommentCommand::Reply {
                 file,
                 id,

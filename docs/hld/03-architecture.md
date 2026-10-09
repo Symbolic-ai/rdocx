@@ -413,6 +413,43 @@ PowerPoint edge. The all-target tree admits this test-only edge and retains the
 rule that no `oxml-*` crate depends on either facade family.
 
 ## What stays put
+Bibliography source authoring and formatting stay in the native
+`rdocx::bibliography` module. It owns qualified custom XML source inspection,
+checked source CRUD, document style/options and concrete measured citation and
+bibliography consumers. `rdocx::field` owns physical field discovery, recursive
+instruction spans, result replacement and structured paragraph/table cache
+boundaries. The facade stages a complete document and publishes only after
+source graph and output preparation succeed. An unfinished standard formatter
+aborts that transaction. Noncatalogue paths retain the owner with diagnostics.
+Normal save preserves caches and does not invoke this materializer.
+
+Source kind, contributor role and style metadata do not imply formatter parity.
+APA has 210 earned ordinary dense locale configurations with separately measured
+sparse, source-script and rich operations. Other bibliography styles retain
+lean numeric1033 Book admissions. Citation consumers remain separate. Actual
+source LCID, field locale and explicit application default select existing
+consumers without an en-US fallback. Multi-source non-ASCII sort keys refuse.
+The remaining catalogue and Word comparator are F-X192 backlog work, with no
+new collation dependency in this boundary.
+
+The bibliography table-width caller shares `rdocx_layout::engine::resolve_font_family`
+with the existing layout callers. Its public inputs must already contain the
+effective cascaded run properties. Font-slot and theme resolution retain the
+same concrete algorithm and deterministic font manager. Rich bibliography
+runs carry the measured font, language, script, italic and direction facts.
+They do not introduce a general Unicode font-coverage classifier.
+
+
+Generated-table source discovery and rebuilding stay in `rdocx::field`.
+Concrete XE and TA markers, INDEX, caption-selected TOC and numbered TOA options
+use the existing checked story inventory and shared dynamic owned-span scanner.
+The shared instruction grammar in `rdocx-oxml::text` owns bare and quoted
+operands, including INDEX LCIDs and TA/TOA categories. It distinguishes INDEX
+run-in and TOA heading flags from operands without changing other opcode rules.
+Source discovery excludes every generated cache and correlates accepted marker
+and caption paragraphs with their exact retained OPC owner. Source SEQ values
+come from the existing physical sequence snapshot rather than another counter
+interpreter. Existing `rebuild_toc` keeps its compatibility contract.
 
 `rdocx-oxml` remains a real crate holding the WordprocessingML grammar for
 text, properties, tables, styles, numbering, borders, headers and footers,
@@ -646,10 +683,25 @@ those runs and its fields are unchanged. Otherwise each field writes its own
 part of the span, so one field of a shared run can be updated alone. Direct-run and marker mutation rebuild the same read projection in
 memory. Simple and complex fields share one recursive
 `Field` grammar with a normalized name, text or
-nested arguments, switches, cached result, and optional dirty state. Its private
+nested arguments, switches, cached result, and optional dirty and lock states. Its private
 source records the original field form, run partition, and producer XML.
 Complex fields expose ordered cached-display segments with each segment's
-direct run properties. Tracked insertion projection retains inline paragraph
+direct run properties. Native callers construct either representation through
+checked raw instructions or typed arguments and switches, using `CT_R` values
+for ordered cached content. Typed operands cannot inject instruction tokens.
+Unknown switch operands are quoted on write and recognized as quoted or nested
+operands on read. Known flag switches keep their positional-operand grammar.
+This enriches the pre-1.0 projection of ambiguous unknown producer switches
+without changing preserved producer bytes. Cached page and column breaks remain
+typed XML controls rather than literal XML-invalid display characters. A nested
+field replacement invalidates the unchanged-source shortcut even when its
+display text stays equal. Lock edits rewrite only the physical simple owner or
+complex begin marker, retaining opaque subtrees and namespace bindings.
+Nested simple-cache projection reuses the producer's effective Word alias without
+replacing an occupied prefix. Cache writes retain aliased owner bindings and source text aliases. Only
+source-less generated result elements receive a local canonical binding. Foreign cached subtrees keep
+their original bytes and never become typed pagination identities.
+ Tracked insertion projection retains inline paragraph
 structure and nested revision boundaries, with a fixed depth ceiling checked
 before recursive projection.
 The mutable native run facade owns one logical ordered sequence of text, tabs,
@@ -678,8 +730,15 @@ comment. Moving a comment range moves its reference run with the pair.
 field kinds.
 
 The `rdocx` facade owns pure field evaluation over that recursive grammar. It
-walks every typed paragraph in main text, tables, content controls, distinct
-header and footer parts, footnotes, and endnotes. Package-backed inputs come
+registers physical typed field owners in main text, tables, content controls,
+distinct header and footer parts, notes, original annotations and selected
+text boxes. SEQ and REF use this expanded source scope. Other field kinds keep
+their established discovery scope, including direct related-story paragraphs.
+Hidden ordinary owners retain cache and dirty attributes. Public result indices
+number only visible evaluation records and are distinct from physical source
+IDs. Accepted revision selection uses the same initialized borrowed physical
+projection as layout, retaining deleted source IDs without evaluating them.
+Package-backed inputs come
 from unique bookmarks, styles, core and custom properties, and settings
 document variables. Date-time, filename, merge, and included-text values come
 only from an explicit caller context. Evaluation reports resolved text,
@@ -702,11 +761,54 @@ operand uses the shared recursive field grammar, including quoted escapes and
 nested fields. Barcode requests carry validated data, symbology, dimensions,
 correction, colour, and typed symbology-specific display options without
 generating renderer content. `CASE` retains its public spelling while using
-the same payload and case-style rules as `ITF14`. Sequence counters and
-mail-merge record state remain
-isolated by story. Mail-merge record and output sequence numbers come only from
-the explicit caller context. Raw text boxes and other untyped XML remain
-outside this evaluation boundary.
+the same payload and case-style rules as `ITF14`. Mail-merge record state remains isolated by story. Its record and output
+sequence numbers come only from the explicit caller context. SEQ uses one
+font-independent accepted-source snapshot owned by `rdocx-layout`. The facade
+and renderer consume its indexed counter events, field values and physical
+source identities. Selected text boxes participate in main-document order.
+Related-story increments produce the measured main-document-only error.
+Source-qualified note repeats use their document context, while shared
+furniture repeats resolve against actual page event boundaries. Pure evaluation
+retains caches when physical context is unavailable. Tracked views retain SEQ
+caches with diagnostics rather than joining accepted indices to tracked runs.
+Opaque fallback XML does not manufacture sequence sources. Producer instructions with unclosed
+quoting retain their cache and contribute no sequence event. The shared XML
+instruction quote validator honors quoted escapes before snapshot mutation.
+
+Snapshot equality includes retained field XML, effective instructions, inherited
+locks and selected owner projections before layout cache reuse. Rich selected
+text boxes bind exact physical source paths before shaping and restore local
+indices through the same injective map for the existing outer binding. Generated
+cache descendants cannot increment counters. Instruction descendants emit
+zero-width structural events at their owning accepted run. REF number and
+position projections also use the same source-only registration when no SEQ
+exists, so selected owners cannot alias local body indices.
+
+Ordinary REF target text and numbering use uniquely paired physical bookmark
+owners in the main story, headers, footers, notes and selected text boxes.
+The layout result exposes the existing resolved numbering for a uniquely paired
+bookmark, including nested table and control owners, without facade source-path
+reconstruction. Duplicate physical names and malformed ranges have no projection.
+Relative position uses the same registered physical owner, accepted paragraph
+path and actual run boundary in the shared source-only snapshot. Header and
+footer aliases share a physical part identity, while notes and selected boxes
+retain their actual owner identity. A field inside its target, an ambiguous range or an unavailable
+cross-story comparison retains the complete cache with a diagnostic, including
+combined numbering and position requests.
+
+The native facade authors checked captions, sequence fields and REF fields at
+accepted story boundaries. Caption insertion allocates separate whole-caption,
+label-and-number and number bookmark ranges atomically. REF numbering shares
+one resolved-numbering formatter with layout, including current-level, relative,
+full-context, text omission and current-leaf delimiter behavior.
+
+REF note and annotation copies freeze original source ownership before staged
+allocation. Typed cache runs and paragraph-sibling comment endpoints preserve
+rich payload and schema order. Unique cached copy owners may refresh from the
+original source without accumulating note, comment or companion graph entries.
+Ambiguous ownership or unsupported companion edges retain source caches and
+ordered diagnostics. Optional comment metadata parts remain absent when absent.
+Unmodelled XML and existing relationship scope remain authoritative.
 
 The facade also owns explicit field cache updates across that same typed story
 scope. It evaluates the complete field set before changing cloned document and
@@ -724,15 +826,38 @@ or malformed producer value stays unmodelled and byte-preserved, and an
 explicit mutation rejects that ambiguous ownership before publication. The two
 methods are additive pre-1.0 `rdocx` API.
 
-`Document::update_layout_backed_fields` is the separate pagination-aware entry
-point for PAGE, NUMPAGES, and resolved PAGEREF caches. It lays out one staged
-candidate deterministically, reads each placed field through its layout field
-identity, and writes only those caches through the same traversal and
-validated story patching. The owned report separates the three updated counts
-and retains ordered layout diagnostics. `Document::update_page_fields` is the
-count-only compatibility wrapper over that operation. Every unsupported or
-unplaced field keeps its cache and dirty spelling, and `update_fields` still
-defers every layout-backed field kind.
+`Document::update_layout_backed_fields` materializes PAGE, NUMPAGES, SECTION,
+SECTIONPAGES and resolved PAGEREF through one staged deterministic layout.
+Its immutable snapshot retains physical pages, displayed numbering, every section
+occupying a continuous page, bookmark target ownership and recursive field
+placements. Field indices follow preorder through instructions and cached results.
+Cached children have their own display placement. Instruction operands inherit
+only their owning field's placement. Locks propagate to descendants.
+
+Physical source identity covers modeled paragraphs, tables, controls, headers,
+footers, notes and selected typed text boxes. Actual OPC names remain distinct
+from logical source paths. Rich related-story and text-box bodies replace their
+paragraph-only projections when present. Text-box source owner ordinals bind
+from actual namespace-qualified anchor occurrences before shaping, including
+identical anchors and earlier unregistered owners. Original DrawingML and opaque
+fallbacks remain serialization authorities. Cache staging validates the exact
+field source inside the matched physical owner before publishing atomically.
+Physical binding traverses all revision and raw owner slots before accepted
+selection. Opaque occurrences consume identity without becoming editable stories.
+Accepted revision projection metadata survives without serialization and reparsing.
+Authoritative rich story bodies and actual part names participate in reusable
+context and header/footer cache identity, including note-only invalidation.
+
+
+The report separates five counts and retains ordered diagnostics. The count-only
+`update_page_fields` wrapper uses the same operation. PAGE follows its field's
+section format and PAGEREF follows the target's format. A unique placed target
+permits unlocked PAGEREF updates in unused source stories. Other unplaced fields,
+missing or ambiguous targets, unsupported switches and locked fields retain their
+caches. Saved header and footer PAGE and NUMPAGES caches remain unchanged under
+the pinned Word policy, while dynamic rendering uses per-page values. Note PAGE
+and SECTION follow the unique body reference owner even when document-end note
+text is printed on a later physical page. No second layout resolves these facts.
 
 The native facade also rebuilds supported existing main-story table of
 contents fields. It reparses each owned instruction through the same recursive
@@ -1303,6 +1428,22 @@ them. The families fold into a lockstep train once rpptx stabilises.
 
 ## Facade conventions
 
+Destructive Word facade edits stage the document and reconcile qualified raw
+comment ownership before publication. One inventory covers body, related
+stories, selected and opaque source owners, and linked comment companions.
+`try_remove_content` distinguishes an absent index from an unsafe cut, while
+its legacy boolean twin returns false for either. Complete owned threads may
+be removed. Note deletion, section story pruning and revision resolution use
+the same candidate boundary. Unchanged or increased source marker counts leave unrelated
+producer annotation metadata untouched rather than adding global save-time
+validation. Decreases of demonstrably undefined markers retain their legacy
+lifecycle because no owned definition can be orphaned, with absence proved from
+actual qualified raw definitions, malformed or ambiguous owned linkage refused,
+and CLI validation remaining strict. Partial ranges and commented fragment detaches refuse without
+changing the live package. Cell text edits retain checked paragraph anchors,
+and a document-unaware cell removes only a proven plain empty paragraph when
+another required paragraph remains.
+
 Both facades use the same borrow-handle idiom rdocx already has: a mutable
 `Foo<'a>` wrapping `&'a mut CT_Foo` and a read-only `FooRef<'a>`, with
 consuming builders for formatting so calls chain, `&mut self` methods for adding
@@ -1393,7 +1534,14 @@ Owned story-item and story-link snapshots build the package source and owner
 inventory once per accessor. Namespace scopes for all selected owners, items,
 and hyperlink starts are collected in bounded source passes. Item and hyperlink
 text is then projected from namespace-complete fragments without restarting at
-the physical story root for each returned value.
+the physical story root for each returned value. Complex-field text and link
+excerpts share one namespace envelope around the exact sibling-run bytes.
+The envelope inherits the context before the first run. Each original element
+retains its local declarations, which never become sibling context. Single-root
+excerpts likewise keep their own declarations authoritative.
+Enclosing fields establish typed discovery admission but carry no local offsets
+into an isolated excerpt. Checked inverse translation restores hyperlink source
+positions before relationship lookup or smallest-owner deduplication.
 
 The Python projection materializes each story item as a frozen value with its
 exact XML bytes and the binding revision that produced it. Story mutation
@@ -1711,6 +1859,32 @@ content. `Document` validates both endpoints before mutation, allocates
 collision-free comment and paragraph ids, updates the comment parts and all
 three anchors together, then invalidates layout once. `CommentRef` is a
 read-only view over the typed comment and its comments-extended thread entry.
+Its checked `anchor()` and `anchor_text()` accessors share the document's
+qualified comment ownership proof. `Document::comment_anchor` returns an
+accepted-view `StoryRunRange`, and `comment_anchor_text` returns exactly the
+selected accepted display, with one newline between paragraphs. A known
+orphan returns no range or text, and a reference-only point returns no paired
+range with empty text. Replies do not inherit a fabricated parent range.
+Unknown identities and malformed, ambiguous or unprojectable selected sources
+return errors. Listing validates all owned definitions and companions, while
+raw marker ids proven absent from qualified definitions do not invent records
+or block established comparison reads. Strict deletion and CLI ownership
+validation still reject those undefined markers, and reads preserve their XML. Source-order temporary projections reuse the existing paragraph
+parser and accepted run axis without changing source XML. An interval around
+only a raw wrapper can display text while having zero accepted runs. Such an
+interval is explicitly unsupported when re-anchoring those coordinates cannot
+represent it faithfully. Supported controls, revisions and ordinary field
+caches retain accepted-view semantics. Multi-paragraph insertion qualifies both
+source endpoints before publishing either, retaining stale-owner checks.
+`Document::move_comment` selects a complete root range and reference through
+that same qualified proof. Replies, unknown ids and incomplete or ambiguous
+sources refuse atomically. Moving preserves thread identity and metadata,
+transports the original reference properties and opaque attributes, and leaves
+mixed-run neighbors in source order. Destination paragraph identity and run
+boundaries rebase after removal. Only newly empty pure Google marker controls
+are pruned. `move_comment_to_text` shares the existing recursive literal finder
+and splitter without allocating a temporary thread.
+Rich comment query restores main-part namespace context once through the existing strict declaration replay. Paired XML events prove that names, non-namespace attributes and payload remain identical, yielding exact physical boundary correspondence. The mapped canonical and restored story-owner inventories must be bijective in physical spans, kind and owner index before canonical paragraph paths receive actual namespace scopes. Additional or reinterpreted owners refuse instead of redirecting a query. The existing checked paragraph span traversal serves both discovery and projection, with paragraph scopes inventoried in a bounded pass. Canonical locations, fingerprints and accepted run indices remain authoritative. Imported paragraph and block-local alias fields retain rich A7B, source-byte purity and usable move/reopen endpoints. Comment destination anchoring replays retained declarations before replacing package authority, while other anchor kinds keep their existing path. Redundant declaration replay is omitted only for a unique exact owner whose complete non-namespace event payload and local declarations match, with identical resolved element and attribute namespace facts throughout that owner. Redundant child declarations on a transported reference do not require global replay to reinterpret its shape. This owner-local proof permits unrelated modeled source normalization. Needed declarations still use the unchanged strict replay. The private pre-removal endpoint probe validates the caller's exact accepted endpoints without publishing destination namespace context, while the real Comment destination always preserves that authority before replacing source. Same-owner modeled alias plus local raw-field fixtures that already fail initial save remain outside this correction. Supported controls include separate unrelated root-bound modeled aliases and normalized properties in the same package.
 `StoryRunPosition` and `StoryRunRange` add checked `ContentLocation` ownership
 for body and table-cell paragraphs without changing `RunPosition`. A body
 location can also name a paragraph inside a block content control with a
@@ -1719,9 +1893,21 @@ its paragraphs, which `Document::paragraph_story_location` returns for a
 paragraph index. The staged
 path validates both endpoints and edits cloned paragraphs before it creates
 comment relationships, so any path, run, or package failure publishes nothing.
-Replies follow paragraph-id parent linkage, resolution applies to the thread
-root, and removal deletes the selected comment plus descendant replies without
+Replies follow paragraph-id parent linkage through each comment's last
+paragraph, as `w15:commentEx` keys it, each line of a comment text is one
+paragraph. Resolution applies to the thread root, and removal deletes the
+selected comment plus descendant replies without
 deleting unrelated runs or producer XML.
+Whole-story header/footer setters stage the complete text, raw XML or image
+operation and reconcile removed comment ownership. A clone of that candidate
+prepares and reopens the complete output once before the original candidate
+publishes, preserving live authoring identities until save. Glossary deletion and body replacement reuse that same strict graph.
+The graph accepts an explicit physical main or glossary owner, so equal numeric
+ids never join unrelated review parts. Imported retired section parts stay in
+the package. Their qualified markers are removed only after every modeled,
+inherited and proved opaque physical use disappears. Unknown incoming use
+refuses. Glossary raw edits refresh the typed model before a later flush.
+
 The additive `add_comment_with_date` and `reply_to_with_date` operations own
 validated optional timestamps. The original operations delegate with no date.
 

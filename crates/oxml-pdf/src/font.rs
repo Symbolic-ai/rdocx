@@ -543,6 +543,7 @@ mod tests {
             field_source: None,
             tab_aligned: None,
             note: None,
+            note_reference_source: None,
         })
     }
 
@@ -572,6 +573,7 @@ mod tests {
             field_kind: None,
             field_source: None,
             note: None,
+            note_reference_source: None,
         };
         fonts
             .shape_multilingual_text(segment, None, TextDirection::Auto, false)
@@ -601,6 +603,7 @@ mod tests {
                     field_kind: None,
                     field_source: None,
                     note: None,
+                    note_reference_source: None,
                 })
             })
             .collect()

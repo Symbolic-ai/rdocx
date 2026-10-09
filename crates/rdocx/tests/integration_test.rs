@@ -6321,11 +6321,11 @@ fn rtf_writer_resets_table_cell_paragraph_state() {
     {
         let mut table = document.add_table(1, 2);
         let mut first_cell = table.cell(0, 0).unwrap();
-        first_cell.remove_first_empty_paragraph();
         let mut first = first_cell.add_paragraph("center");
         first.set_alignment(Alignment::Center);
         let mut second = first_cell.add_paragraph("list");
         second.set_numbering(list_id, 0);
+        first_cell.remove_first_empty_paragraph();
         table.cell(0, 1).unwrap().set_text("default");
     }
 
@@ -19535,17 +19535,23 @@ mod advanced_table_authoring_and_geometry {
 
     fn layout_input(document: rdocx_oxml::document::CT_Document) -> rdocx_layout::LayoutInput {
         rdocx_layout::LayoutInput {
+            sequence_snapshot: None,
             automatic_hyphenation: false,
             mirror_margins: false,
             gutter_at_top: false,
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
+            legacy_table_positioning: false,
+            modern_footnote_layout: false,
+            footnote_layout_like_word8: false,
             math_properties: None,
             note_defaults: [None, None],
             document,
             styles: rdocx_oxml::styles::CT_Styles::new_default(),
             numbering: None,
+            story_part_names: Default::default(),
+            story_bodies: Default::default(),
             headers: std::collections::HashMap::new(),
             footers: std::collections::HashMap::new(),
             images: std::collections::HashMap::new(),
@@ -19996,16 +20002,19 @@ mod advanced_table_authoring_and_geometry {
         assert_eq!(origins, GOLDEN_TABLE_GEOMETRY);
     }
 
-    /// Reviewed page geometry for
+    /// Reviewed deterministic page geometry for
     /// `fixed_autofit_and_nested_table_geometry_matches_reviewed_word_pages`,
     /// as `(x, y, width, height)` in points for every painted cell.
     ///
     /// Rows 1 to 6 are the fixed-grid table, which keeps its declared 144,
     /// 144 and 180 point columns. Rows 7 to 10 are the auto-width autofit
-    /// table, whose narrow `ID` column measures 20.34 points against a 242.28
+    /// table, whose narrow `ID` column measures 9.54 points against a 231.48
     /// point heading column and whose total stops short of the 468 point text
     /// column because the content fits. Rows 11 to 14 are the nested table,
     /// which resolves its own grid inside the owning cell content box.
+    /// F-X183 removes implicit side padding. Supplemental DELTA review binds
+    /// the exact Base and current outputs. This source-built geometry pin is
+    /// not an authenticated native Word GUI capture.
     const GOLDEN_TABLE_GEOMETRY: &[(f64, f64, f64, f64)] = &[
         (72.0, 72.0, 144.0, 22.49),
         (216.0, 72.0, 144.0, 22.49),
@@ -20013,14 +20022,14 @@ mod advanced_table_authoring_and_geometry {
         (72.0, 94.49, 144.0, 22.49),
         (216.0, 94.49, 144.0, 22.49),
         (360.0, 94.49, 180.0, 22.49),
-        (72.0, 116.98, 20.34, 22.49),
-        (92.34, 116.98, 242.28, 22.49),
-        (72.0, 139.47, 20.34, 22.49),
-        (92.34, 139.47, 242.28, 22.49),
-        (311.4, 184.45, 111.6, 22.49),
-        (423.0, 184.45, 111.6, 22.49),
-        (311.4, 206.94, 111.6, 22.49),
-        (423.0, 206.94, 111.6, 22.49),
+        (72.0, 116.98, 9.54, 22.49),
+        (81.54, 116.98, 231.48, 22.49),
+        (72.0, 139.47, 9.54, 22.49),
+        (81.54, 139.47, 231.48, 22.49),
+        (306.0, 184.45, 112.5, 22.49),
+        (418.5, 184.45, 112.5, 22.49),
+        (306.0, 206.94, 112.5, 22.49),
+        (418.5, 206.94, 112.5, 22.49),
     ];
 }
 
@@ -21206,7 +21215,7 @@ mod f266c_character_grid_and_vertical_text {
     /// and the six coefficients of the transform that maps the run into page
     /// space, which is what makes a lost or altered rotation fail here.
     const GRID_AND_VERTICAL_GEOMETRY_DIGEST: &str =
-        "02995cf452d8add0ceb9c147d65773d55bc9f8b065b7a92b0e42073fdd770f7f";
+        "2002409b412388ad17b7f85e170d36b8c3658e6c7e4cff84098220772c006b76";
 
     /// One coordinate, with the sign of zero normalised, as F-266a documents.
     fn number(value: f64) -> String {
@@ -22534,8 +22543,9 @@ fn mixed_rich_notes_match_word_at_section_and_document_end_boundaries() {
     const WORD_ORACLE_VERSION: &str = "Microsoft Word 16.113.2 build 16.113.26092012";
     // Word's AX view of this generated DOCX has two pages. Body markers are
     // 1/i and 2/ii, and both endnotes follow the final body text on page two.
-    // HLD 08 currently appends a fresh endnote page and uses decimal labels.
-    // F-274 owns placement and number-format policy.
+    // F-279 now retains that measured document-end flow on page two.
+    // The authored native default decimal marker policy remains independent
+    // of this bounded physical placement regression.
     const WORD_PAGE_COUNT: usize = 2;
     let mut document = Document::new();
     document.add_paragraph("First section body");
@@ -22590,7 +22600,7 @@ fn mixed_rich_notes_match_word_at_section_and_document_end_boundaries() {
         .collect::<Vec<_>>();
     assert_eq!(
         pages.len(),
-        WORD_PAGE_COUNT + 1,
+        WORD_PAGE_COUNT,
         "{WORD_ORACLE_VERSION}: {text}"
     );
     assert!(pages[0].contains("First section body11"), "{text}");
@@ -22599,9 +22609,8 @@ fn mixed_rich_notes_match_word_at_section_and_document_end_boundaries() {
     assert!(pages[1].contains("Second section body22"), "{text}");
     assert!(!pages[1].contains("Second section body2ii"), "{text}");
     assert!(pages[1].contains("second footnote body"), "{text}");
-    assert!(!pages[1].contains("first endnote body"), "{text}");
-    assert!(pages[2].contains("first endnote body"), "{text}");
-    assert!(pages[2].contains("second endnote body"), "{text}");
+    assert!(pages[1].contains("first endnote body"), "{text}");
+    assert!(pages[1].contains("second endnote body"), "{text}");
 }
 
 #[test]
@@ -24154,4 +24163,157 @@ fn invalid_story_range_moves_are_atomic() {
     };
     assert!(document.move_story_range(&selected, reversed).is_err());
     assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn issue_282_row_removal_does_not_orphan_comment_definitions() {
+    let mut document = Document::new();
+    document
+        .add_table(2, 1)
+        .cell(0, 0)
+        .unwrap()
+        .set_text("anchor");
+    let story = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == rdocx::StoryKind::TableCell)
+        .unwrap();
+    let location = document.story_items(&story).unwrap()[0].location().clone();
+    document
+        .add_story_comment(
+            rdocx::StoryRunRange {
+                start: rdocx::StoryRunPosition {
+                    location: location.clone(),
+                    run_index: 0,
+                },
+                end: rdocx::StoryRunPosition {
+                    location,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "root",
+        )
+        .unwrap();
+    assert!(document.remove_table_row(0, 0).unwrap());
+    assert!(
+        Document::from_bytes(&document.to_bytes().unwrap())
+            .unwrap()
+            .comments()
+            .is_empty()
+    );
+}
+
+#[test]
+fn issue_282_pop_refuses_a_complete_commented_fragment() {
+    let mut document = Document::new();
+    document.add_paragraph("anchor");
+    document
+        .add_comment(
+            rdocx::RunRange {
+                start: rdocx::RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: rdocx::RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "root",
+        )
+        .unwrap();
+    let story = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == rdocx::StoryKind::Body)
+        .unwrap();
+    let location = document.story_items(&story).unwrap()[0].location().clone();
+    let before = document.to_bytes().unwrap();
+    assert!(document.remove_content_at(&location).is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn issue_282_cell_text_keeps_the_comment_reference() {
+    let mut document = Document::new();
+    document
+        .add_table(1, 1)
+        .cell(0, 0)
+        .unwrap()
+        .set_text("anchor");
+    let story = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == rdocx::StoryKind::TableCell)
+        .unwrap();
+    let location = document.story_items(&story).unwrap()[0].location().clone();
+    document
+        .add_story_comment(
+            rdocx::StoryRunRange {
+                start: rdocx::StoryRunPosition {
+                    location: location.clone(),
+                    run_index: 0,
+                },
+                end: rdocx::StoryRunPosition {
+                    location,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "root",
+        )
+        .unwrap();
+    document
+        .table_mut(0)
+        .unwrap()
+        .cell(0, 0)
+        .unwrap()
+        .set_text("updated");
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert_eq!(xml.matches("<w:commentReference ").count(), 1, "{xml}");
+}
+
+#[test]
+fn issue_282_rtf_cell_import_keeps_empty_and_formatted_paragraphs() {
+    for (content, expected) in [
+        ("", vec![""]),
+        ("ordinary", vec!["ordinary"]),
+        (r"{\b first}\par {\i second}", vec!["first", "second"]),
+    ] {
+        let input = format!(r"{{\rtf1\ansi\trowd\cellx2000\intbl {content}\cell\row}}");
+        let mut document = Document::from_rtf_bytes(input.as_bytes()).unwrap().document;
+        let table = document.table(0).unwrap();
+        let cell = table.cell(0, 0).unwrap();
+        assert_eq!(
+            cell.paragraphs().map(|p| p.text()).collect::<Vec<_>>(),
+            expected
+        );
+        let before = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&before).unwrap();
+        assert_eq!(
+            reopened
+                .table(0)
+                .unwrap()
+                .cell(0, 0)
+                .unwrap()
+                .paragraph_count(),
+            expected.len()
+        );
+        if expected.len() == 2 {
+            let rtf = rtf_text(document.to_rtf_bytes().unwrap().bytes);
+            assert!(rtf.contains("\\b "), "{rtf}");
+            assert!(rtf.contains("\\i "), "{rtf}");
+        }
+    }
 }

@@ -17474,3 +17474,1246 @@ closure. The 18-page Word SSIM trend is advisory and below its target.
 **Hash harness.** Unchanged on the integrated sprint tree, all 49 entries match.
 
 **Notes for future sessions.** Keep `work/f-277-codex` through sprint close. Content-control creation remains with F-285. Implicit AutoText expansion and new binding entry points remain outside this story.
+
+### F-X179, Correct multi-paragraph comment threads from PR 271
+
+**Sprint.** S90
+**Completed.** 2026-10-07
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Integrated [PR 271](https://github.com/tensorbee/rdocx/pull/271)
+from Hadrien Mary (`hadim`) at e22641a8f20a1c31d905a8c1b83171f548d2e230.
+Every [Issue 270](https://github.com/tensorbee/rdocx/issues/270) criterion now
+passes. Multi-paragraph comments read and write parent and resolved metadata
+through their last paragraph ids. Every existing comment authoring entry point
+writes one paragraph per newline and preserves blank and trailing lines.
+
+**Non-obvious choices.** Parent lookup and fragment closure accept every
+paragraph id for compatibility with older parent links. Removal carries all
+paragraph ids of each removed descendant, fixing the nested legacy-reply defect
+found in microscope pass 1. Paragraph ids remain unique and unsupported
+producer XML survives import byte for byte.
+
+**Deviations from the design plan.** None. The contributed patch needed the
+additional nested-descendant fix to satisfy its legacy-removal claim.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, Facade conventions,
+Word comment mutation.
+
+**Tests.** The regression gate
+`threads_and_resolved_state_read_through_the_last_paragraph` failed before the
+implementation and passes after it. All 18 comment tests pass. The complete
+changed-crate gate passed 497 Word unit, 360 integration, 778 regression,
+61 CLI and two doc tests with pinned LibreOffice 26.2.5.2, Poppler 26.01.0
+and a 16 MiB test stack. Scoped Clippy, formatting, 140 policy tests with two
+expected skips, prose, generated skills, README examples and archive inventory
+passed under Rust 1.97.1. Both locally patched publication dry runs passed.
+Microscope pass 2 reports zero defects and zero smells.
+
+**Hash harness.** Unchanged, all 49 deterministic entries match.
+
+**Notes for future sessions.** Issue 264 and F-X178 were excluded. Preserve
+that exclusion during the requested sprint run. PR 271 and Issue 270 remain
+open until the verified S90 result reaches main through `/close-sprint`.
+Thank hadim for identifying the last-paragraph contract and contributing the
+fix, citing this integration and the sprint merge. Native checks used
+`/private/tmp/rdocx-fx179-build` because the old repository build cache stalled
+inside macOS library loading. Set `RUSTUP_TOOLCHAIN=1.97.1` for temporary
+README consumers, and retain the pinned viewer paths from S89.
+
+
+### F-278, General simple and complex field builder
+
+**Sprint.** S90
+**Completed.** 2026-10-07
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** Checked raw and typed native field construction supports
+explicit simple and complex forms, nested instruction operands, ordered CT_R
+caches and three-state field locks. Run attachment validates before mutation.
+Existing plain-string construction remains usable.
+
+**Non-obvious choices.** Unknown typed switch operands use quoted text or
+nested fields to retain operand positions. Known flags retain positional
+boundaries. Typed page and column cache controls are validated as XML nodes,
+not literal display characters. Recursive source identity prevents equal-text
+nested replacements from losing their cache formatting. Namespace-qualified
+validation preserves foreign lookalikes while rejecting actual raw Word field
+controls.
+
+**Deviations from the design plan.** The plan records the pre-1.0 projection
+clarification for otherwise ambiguous unknown switches and the required
+existing archive inventory refresh. DOCX-045 is complete for checked
+construction and stored-cache round trips. Layout and rendering are not
+applicable to that construction gate and remain assessed by separate field
+capabilities. The completed-owner policy inventory reflects that boundary
+without relaxing any incomplete capability's live-owner rule.
+
+**Spec sections touched.** Native capability scope, recursive field grammar,
+native facade stability and field construction tests in HLD 02, 03, 10 and 12.
+
+**Tests.** The round-trip gate exercises new APIs unavailable on the original
+source. All 613 low-level unit tests and one doctest passed. The facade gate
+passed 497 unit, 360 integration, 782 regression and two doctests with 21
+existing ignored tests. Scoped Clippy, format, prose, generated skills and
+140 policy tests passed with two expected skips. All 22 locally patched
+publication dry runs passed, with every archive below 10 MiB. Microscope
+pass 3 is clean after four initial findings and the recursive follow-up.
+The integration-only capability reconciliation also has a zero-finding review
+and passing affected policy checks. Source commit c1ba60985795 and integration
+84b4a4ba have identical crate and Cargo source graphs.
+
+**Hash harness.** Unchanged, all 49 deterministic entries match on the worker.
+The integrated dependency prefix retains that exact source graph. Full sprint
+verification and sprint review remain due after later stories.
+
+**Notes for future sessions.** Retain work/f-278-codex through sprint close.
+No package was uploaded. The validated handoff was consumed. The handoff-only
+commit follows an immutable reviewed source commit to avoid a self-referential
+SHA. Issue 264 remains excluded. Later stories require genuine fresh Word
+captures, not the prepared temporary input packages alone.
+
+
+### F-279, Pagination field materialization across stories
+
+**Sprint.** S90
+**Completed.** 2026-10-07
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** PAGE, NUMPAGES, SECTION, SECTIONPAGES and PAGEREF
+materialization now consumes one immutable deterministic layout with physical
+story, field, section and bookmark target identity. Modeled tables, controls,
+notes, text boxes and referenced furniture participate without flattened owner
+guesses. Pure field evaluation defers layout-dependent values. Python reports
+expose both section counters while retaining existing constructor defaults.
+
+**Non-obvious choices.** Stored Word furniture caches and dynamic page rendering
+have different measured behavior. Note fields retain printed physical pages
+while displayed page and section ownership follow their unique body reference.
+Generated note glyphs carry structural ownership separately from exact text
+provenance. Accepted revision projection preserves physical anchor order and
+opaque predecessor occurrences. Nested cache ancestry retains intermediate
+locks. Header and footer inheritance follows modeled control-owned sections.
+
+**Deviations from the design plan.** Approved existing-file riders cover
+continuous note compatibility, rich story cache identity, namespace-preserving
+field writes, neutral constructor consumers and actual archive measurements.
+DOCX-046 is complete for modeled stories with explicit opaque, unsupported,
+unplaced and locked cache retention. The valid producer local w:drawing wrapper
+namespace serialization limitation is pre-existing and remains fail-closed.
+It is recorded in the plan and is not represented as repaired.
+
+**Spec sections touched.** HLD 02 capability DOCX-046, HLD 03 immutable staged
+field evaluation and source identity, HLD 08 page, section and note ownership,
+HLD 10 native and Python reports, and HLD 12 authenticated differential gates.
+All five files match the approved HLD impact list.
+
+**Tests.** pagination_field_caches_match_pinned_word_across_stories,
+continuous_furniture_and_restart_caches_match_authenticated_word and
+continuous_note_caches_follow_authenticated_reference_owners pass. The
+companion snapshot gate failed at the claim base because its APIs and counters
+were absent. Discriminating namespace, nested-lock and control furniture
+regressions failed before their repairs. The affected native evidence includes
+499 facade unit, 360 integration, 811 regression, 306 layout and 616 XML model
+passes with doctests, plus the neutral and PPTX constructor consumer suites.
+The isolated rebuilt wheel passed 175 Python cases with one existing warning.
+These full native and Python results belong to the candidate preceding the
+final concrete traversal replacement. That minimal structural change passed
+its inheritance regression, all-target check and all-feature lint, and received
+a fresh zero-finding review. No full-suite repetition after that change is
+claimed. Final-source documentation, README consumers, format, lint, prose,
+generated skills and 140 policy tests pass with two existing skips.
+
+All 22 locally patched publication dry-runs verified their archives without
+uploading. Maximum archive size is 4,634,419 bytes. All 195 Rust-source and README
+members in each actual temporary package and registry archive set match the
+reviewed source. These verified consumer builds are distinct from archive
+measurement recording. Implementation microscope pass 5 and incremental
+integration pass 1 have zero defects, smells and nitpicks. Three focused
+integrated capability-policy checks pass. All 18 genuine no-F9 Word reopens
+retain 957 fields and pass 180 source checks with zero cache or flag changes,
+pinned to Word 16.113.2 build 16.113.26092012. Partial initial update scopes and
+OLD caches remain explicit.
+
+**Hash harness.** Unchanged, all 49 deterministic entries match. The integrated
+316-file source and consumer graph matches reviewed worker source da79898eddf9.
+Full integrated verification, no-default and WASM union riders and sprint
+review remain due after later waves.
+
+**Notes for future sessions.** Source commit da79898eddf9 precedes validated
+handoff-only commit 904fe1b5b375. Integration b62ad734 consumes that handoff.
+Retain work/f-279-codex through sprint close. The authentic pass-5 patch is
+retained, while no original pass-4 full snapshot exists. Review records state
+that evidence limit rather than fabricate historical byte equality. Later
+fields reuse immutable physical source records and authoritative numbering.
+Issue 264 remains excluded. No push, main merge, tag or GitHub closure occurred.
+
+
+### F-280, Captions, sequences, and complete cross-references
+
+**Sprint.** S90
+**Completed.** 2026-10-08
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Atomic caption, sequence and cross-reference authoring uses
+checked physical story insertion and uniquely allocated caption bookmarks.
+Facade evaluation and rendering share accepted physical field identity, sequence
+placement, resolved numbering and bookmark position projections. REF supports
+related targets, numbered delimiters and typed note copies with bounded staged
+note, media and modern annotation graph refresh.
+
+**Non-obvious choices.** Generated caches, inherited locks and raw producer
+instructions remain separate from public visible field indexes. Ambiguous,
+unsupported or cross-owner position comparisons retain stored caches with
+ordered diagnostics. Same-owner containment retains caches and a diagnostic,
+distinct from Word's measured self-reference error. Invalid direct paragraph
+drawing is excluded. The regression uses a labelled cache-only derivative of
+the genuine schema-valid native package, preserving selected Choice and opaque
+Fallback separately.
+
+**Deviations from the design plan.** Approved existing-file riders add concrete
+read-only raw quote, source run, resolved bookmark numbering and relative
+position projections, shared accepted physical preparation and anchored
+furniture painting. No new production file, module, trait or dependency.
+Integration removes duplicate accepted-projection prose and restores the
+canonical malformed-quoting heading, preserving every requirement.
+
+**Spec sections touched.** HLD02 DOCX-047, HLD03 staged source-qualified fields
+and graph copying, HLD08 sequences and references, HLD10 native API boundaries
+and HLD12 authenticated verification. These are the five approved impact files.
+
+**Tests.** captions_and_references_match_pinned_word_before_and_after_renumbering
+passes. A compiling semantic reversion fails its runtime REF1 assertion and
+exact restoration passes. Final scoped worker evidence includes122 shared
+units,500 facade units with6 ignored,360 integrations with8 ignored,844
+regressions with7 ignored,317 layout units,627 XML units and four doc-test
+groups. A subsequent focused rerun proves exact same-owner instructions and
+opaque Fallback preservation. Warnings-denied all-target/all-feature lint and
+documentation pass. README27 and package inventories22 pass. Workflow policy
+passes140 cases with2 skips. Format, prose and26 generated adapters pass.
+Four actual affected publication dry runs verify current archive source without
+upload. Compressed sizes4634504,440535,308769 and1486141 bytes are below10MiB.
+
+Native evidence pins55 original and58 renumbered captions,33 physical sequence
+controls,20 optional bookmark controls,53 delimiters,31 REF-f owners and36
+same-owner position fields, plus typed note and annotation refresh controls.
+Each of six owner-specific updates changes only its six cache texts. Actual
+close and no-F9 reopen retain36 instructions,12 paired selected bookmarks,
+literal targets and qualified rich caches. PDF text is equal, but439 of861696
+native96dpi pixels differ. No pixel equality or universal parity claim.
+Implementation microscope pass2 and integration pass1 report zero defects,
+smells and nitpicks. Three focused integrated capability-policy checks pass.
+
+**Hash harness.** Unchanged, all49 worker deterministic entries match. Every
+integrated crate source, HLD file and verified gate script equals reviewed
+worker Head9ce250276de9. Full integrated verification, union risk riders and
+sprint review remain due after later waves.
+
+**Notes for future sessions.** Worker source9ce250276de9 precedes handoff-only
+tip2ba509306eb7. Integrationfb9dff43 consumes the validated handoff. Retain
+work/f-280-codex through sprint close. Independent frozen pass2 patch is
+b5bcc4cdf8b0f3bdc234c5715e4876d82a4376fd7c3b49039500ee4c1e0a4e91.
+F-281 may consume this completed dependency prefix. Issue264 remains excluded.
+No push, main merge, tag or GitHub closure occurred.
+
+### F-281, Indexes and tables of figures and authorities
+
+**Sprint.** S90
+**Completed.** 2026-10-08
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** Additive checked XE and TA marker authoring and INDEX,
+caption-selected TOC and numbered TOA authoring. Atomic rebuilding supports
+hierarchy, duplicates, ranges, cross-references, chapter context, rich caption
+runs, authority categories and measured passim behavior. Every page reference
+consumes one deterministic post-insertion layout snapshot.
+
+**Non-obvious choices.** INDEX and authority sorting use the measured en-US
+ASCII boundary, retaining unsupported owners with diagnostics. Category None
+inserts populated numbered fields. Source inventory excludes generated caches
+and preserves producer namespaces. Safe aliases rebuild. Conflicting-prefix
+serialization requests fail atomically through the existing checked boundary.
+Simple cache expansion closes local namespaces before staged validation. Empty
+simple owners materialize, while locked and unsupported owners remain exact.
+
+**Deviations from the design plan.** Approved existing-file riders extend shared
+operand grammar, capability ownership and measured archive footprints.
+Integration removes duplicate unchanged plan prose and retains canonical
+exclusive-resource wording. No semantic source reconciliation or new production
+file, module, trait, generic or dependency.
+
+**Spec sections touched.** Exactly six approved HLD files, 02 DOCX-048,
+03 generated-table ownership, 04 atomic preservation, 08 page snapshots,
+10 additive facade and namespace refusal, and 12 native evidence.
+
+**Tests.** generated_tables_match_pinned_word_after_source_mutation passes on
+the integrated tree. Three new namespace and empty-owner regressions and the
+native gate each fail an actual compiled reversion with exit101, then pass
+exact restoration with exit0. Scoped worker tests pass500 facade units,360 XML
+units,861 regressions,628 XML integrations and three doctests. Warnings-denied
+lint and documentation, format, README, public API, prose,26 adapters and140
+policy cases pass, with two documented skips. Verified dry-run archives compile
+without upload. Authoritative footprints are rdocx1513409 compressed bytes,
+8382821 member bytes,36 members and rdocx-oxml441312 bytes,2752259 member bytes,
+32 members. Both remain below10MiB.
+
+Native initial and mutated index, figure and authority cases preserve exact
+source instructions. Chapter ranges measure2-1 to11-3 and3-1 to12-3. Sixteen
+category headings are authenticated. Three actual no-F9 reopen controls preserve
+qualified rich caches. All15 PDF pages have equal text, fonts, geometry and
+decoded96dpi pixels. This does not claim general Unicode sorting or Rust raster
+parity. Worker microscope pass2 and integration pass1 report zero findings.
+
+**Hash harness.** Unchanged, all49 worker and integrated entries match. Reviewed
+source and HLD files are byte-identical after integration. Full integrated
+sprint verification, union riders and sprint review remain due after F-282
+and F-283.
+
+**Notes for future sessions.** Feature d96b7922ba97 precedes handoff-only
+ed323116f9ab. Integration2e26a9b9 consumes the handoff. Retain work/f-281-codex
+through sprint close. Freeze2 diff a308cf94da2e and clean microscope bc8ef8f08288
+bind32 scoped receipts. Integration review7a8418d292fe confirms mechanical
+plan reconciliation. F-282 may consume this completed shared-file prefix.
+Issue264 remains excluded. No push, main merge, tag or GitHub closure occurred.
+
+### F-X182, Honor direct table alignment
+
+**Sprint.** S90
+**Completed.** 2026-10-08
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Direct table alignment survives the base-first style
+cascade. Left, center, right, start and end values override style alignment,
+while direct width and existing indentation rules remain intact. This
+integrates hadim's PR279 against Issue277.
+
+**Non-obvious choices.** Compatibility compensation and absent side-margin
+behavior remain separately owned by F-X183. The source-built matrix keeps
+existing RTL and nested placement as controls. Native Arial positions support
+relative geometry, with no absolute bundled Caladea parity claim.
+
+**Deviations from the design plan.** None. The production correction removes
+seven lines. Archive measurement and README policy tuples track the resulting
+published source.
+
+**Spec sections touched.** Exactly HLD08, table alignment and style cascade.
+
+**Tests.** direct_table_alignment_overrides_style_and_reopens passes across480
+combinations and three lifecycle states, plus indent and margin controls.
+Actual compiled reversion fails at runtime and exact restoration passes. The
+contributed gate also fails before and passes after. Final prepare rerun
+passes in38.57seconds. Scoped facade suites pass500 units,360 integrations
+and867 regressions, CLI3 units and58 integrations, layout317 units and three
+doctests, retaining existing ignores. Warnings-denied Clippy and docs, format,
+prose and26 adapters pass. Workflow140 passes with2 existing skips, including
+27 README examples and22 archive inventories. Both affected locally patched
+publish dry runs verify without upload. Recorded compressed footprints are
+1520783 and308929 bytes, both below10MiB. A later regenerated layout archive
+is308928 bytes with exact normalized1671932 member bytes and15 members,
+within the existing64-byte policy. Its source and README members are exact.
+
+Independent delta and all-aspect microscope passes each report zero findings.
+Authenticated Word16.113.2 build16.113.26092012 controls retain source bytes
+and separately qualify minimal and official Grid contexts. Integration is
+conflict-free, and every reviewed crate, gate script, baseline, README and
+rendering HLD byte equals the worker code Head. No integration source
+reconciliation requires additional checks.
+
+**Hash harness.** Exactly five intentional entries change: invoice page-one
+PNG, invoice PDF bytes and pages, and quote PDF bytes and pages. The totals
+tables translate right by36pt. All44 other entries, source XML and PDF
+resources remain exact. Only invoice changes in seven golden buffers. Its
+6853 changed pixels lie in the reviewed totals region at150DPI, using pinned
+Poppler26.01.0. The delta was independently reviewed before local recording.
+
+**Notes for future sessions.** Worker codee3c26ac7 precedes handoff-only
+39964296. Integration1f03e789 consumes the validated handoff. This scoped
+dependency checkpoint permits F-X183 to start. Full integrated sprint
+verification, union risk riders and sprint review remain due. Retain
+work/f-x182-codex through sprint close. The measured implementation checkpoint
+to freeze interval is19m57s, excluding earlier reading and root native work.
+Backlog summary counts were regenerated from actual feature rows, removing
+previously counted table headers. Issue264 remains excluded. No push, main
+merge, tag, publication or GitHub closure occurred.
+
+
+### F-X184, Safe comment ownership during content removal
+
+**Sprint.** S90
+**Completed.** 2026-10-08
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** Destructive Word edits stage complete comment ownership
+before publishing. Whole owned threads remove roots, replies, grandchildren
+and selectively linked commentsExtended, commentsIds and commentsExtensible
+rows. Partial cuts and commented fragment detaches refuse atomically. Native
+fallible content removal supplies the Python route, while the legacy bool
+returns false on refusal. Document-owned cell text, table rows, notes,
+section-story pruning and revision resolution share the checked lifecycle.
+CLI validate diagnoses orphan roots across actual source stories while
+accepting reference-only points and linked replies. This addresses
+[Issue 282](https://github.com/tensorbee/rdocx/issues/282), reported by
+Hadrien Mary (`hadim`), including its Google wrapper and three removal paths.
+
+**Non-obvious choices.** Unchanged or increased marker counts retain existing
+producer metadata. Decreased undefined markers retain established behavior
+only after actual qualified raw definitions prove absence. Decreased defined
+ids require strict closure. Opaque data, relocated companion targets and
+namespace aliases are preserved, with malformed or ambiguous ownership
+refused. Borrowed cell cleanup removes only a proven plain empty paragraph
+when another direct paragraph remains. RTF callers add replacements first.
+Inverse removal restores retained source only after complete canonical
+serialization equality and bounded namespace checks, then prepare/reopen.
+
+**Deviations from the design plan.** None. Root-approved implementation
+clarifications and compatibility boundaries are explicit in the completed
+plan. Namespace-invalid legacy edits now refuse before publication, retaining
+their original diagnostic and unchanged observable state.
+
+**Spec sections touched.** Exactly HLD03 facade conventions, HLD04 package
+ownership, HLD10 binding mutation and HLD12 regression strategy.
+
+**Tests.** Current facade501 units,364 integrations,883 regressions and two
+doctests pass, with21 existing ignores. CLI3 units and59 integrations pass.
+Fourteen focused ownership tests and original comparison-policy and rich-clone
+controls pass. Genuine compiled Base gates fail whole-thread and partial-cut
+cases, plus row, pop, cell and CLI orphan cases. The final named gate passes.
+Final rebuilt Python has85 core and two pinned Poppler/concurrency passes,
+strict mypy2.3.0 and stubtest success. The earlier173-test runtime result is
+qualified to its earlier source and is not a final full176-test claim.
+Affected all-target checks, all-feature denied-warning Clippy, denied-warning
+docs and both WASM checks pass. Corrected README checking validates27 README
+files,22 inventories and four affected Rust examples. Workflow140 passes
+with two existing skips. Prose,26 adapters and fmt pass. A temporary README
+adapter assertion remains preserved and is superseded by its corrected run.
+
+Measured facade archive1537667 compressed bytes,8510610 normalized member
+bytes and36 members, CLI70770/313667/8. Actual verified locally patched
+publication dry runs retain1537666 and70772 compressed bytes respectively,
+with exact normalized member tuples and source/test contents. Differences
+satisfy existing64-byte compression policy. Both are below10MiB. No upload.
+Independent ALL pass1 reports zero defects, smells and nitpicks, binding21
+tracked files and62 artifacts. Root independently authenticates all source,
+review, receipt and archive identities. Integration is conflict-free and all22
+reviewed paths exactly equal worker CodeHead, with no source reconciliation.
+
+**Hash harness.** All49 worker entries unchanged. Integrated source and
+baseline are byte-identical to the verified prefix. Final integrated full
+verification and sprint review remain due after the remaining waves.
+
+**Notes for future sessions.** CodeHead4c1a9c07 precedes handoff-onlyf7d7056c.
+Integration8ec41437 consumes validated handoffdd8f57261ab5. Freeze8cecb351
+and ALLreview940dfc77 retain source and evidence provenance. The local
+integration commit was corrected before proceeding to consume its staged
+handoff. This scoped dependency checkpoint completes F-X184 so F-X185 may
+start. Keep work/f-x184-codex through sprint close and remove only its clean
+integrated worktree. Issue264 remains excluded. GitHub reconciliation and
+contributor thanks wait for verified `/close-sprint`. No push, main merge,
+tag or GitHub closure occurred.
+
+
+### F-X185, Expose comment anchor text and story location
+
+**Sprint.** S90
+**Completed.** 2026-10-08
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Checked Document and CommentRef APIs expose accepted-view
+comment span text and reusable StoryRunRange coordinates. Python Comment
+records add frozen owned typed anchors and CLI JSON adds complete normalized
+story, owner, path, item and run coordinates. Nested block-control paragraph
+snapshots carry accepted text and namespace-closed XML through both comment
+endpoints and the public Python paragraph constructor. This implements
+[Issue283](https://github.com/tensorbee/rdocx/issues/283) and
+[Issue289](https://github.com/tensorbee/rdocx/issues/289), reported by Hadrien
+Mary (`hadim`). Compatible PR287 projection and test ideas were assessed and
+adapted with complete checked ownership, without accepting that PR as a whole.
+
+**Non-obvious choices.** Qualified source projection reuses accepted paragraph
+parsing and checks exact display and endpoint fidelity after private re-anchor.
+Unknown and malformed sources error. Orphans, reference-only points and replies
+remain distinct. Proven zero-run unrepresentable intervals refuse explicitly.
+Batch discovery shares one owned graph proof and bounded owner/candidate
+indexes. Readers tolerate only raw-proven undefined markers without inventing
+records, while existing destructive and CLI validation remain strict. Python
+keeps original seven-field constructor defaults and metadata equality. Checked
+endpoint snapshots retain revision identity. Existing multi-paragraph comment
+insertion stages both endpoints before publication, retaining stale guards.
+Empty control paragraphs retain their required newline and source index.
+
+**Deviations from the design plan.** None. Approved concrete helper signatures,
+legacy equality and the measured unsupported-axis boundary are recorded in the
+completed plan. Issue289 strengthens the existing checked snapshot contract
+without broadening ordinary story enumeration.
+
+**Spec sections touched.** Exactly HLD03 facade conventions, HLD10 binding
+snapshots and HLD12 regression strategy. Archive rows and affected README
+inventories match the reviewed measurements.
+
+**Tests.** The named comment_anchor_snapshots_match_accepted_story_spans gate
+passes again during prepare, one executed and900 filtered. Genuine compiled
+Base failures cover accepted text and CLI output, and an actual built Base
+Python fails the absent anchor attribute. The old-helper text discriminator is
+qualified separately from the new API gate. Issue289's exact existing two
+constructor cases fail before repair, then pass with populated XML and text,
+reported path1,0, body index1, both endpoints, reopened bytes and stale refusal.
+Focused native11 and CLI7 controls pass. Full facade501 unit,364 integration,
+894 regression and two doctests pass, with21 existing ignores. XML628 tests
+and one doctest, CLI3 units and61 integrations pass. Affected all-target checks,
+all-feature denied-warning Clippy, denied-warning docs and both WASM checks pass.
+
+Current rebuilt Python core93 passes in16.50s with strict mypy2.3.0, stubtest
+and actual Issue289 runtime proof. Earlier parity35 passes in459.99s with one
+upstream style warning and pinned PDF/concurrency2 passes precede only the
+bounded Python constructor repair. No post-repair parity rerun is claimed.
+Native source and tests remain unchanged across that repair. Current retained
+extension SHA0927e5f9f901b2afde90d2a2350547029fc92fa6e6fcc9bffb851553c182a03b
+binds the actual rebuilt source. Three deciding receipts contain13,9and8
+successful steps. Workflow140 passes with two existing skips in87.951s,
+README27/inventory22 with root4 and XML1 compiled examples, prose0, adapters26
+and fmt pass. Earlier lint failures are retained and superseded by three
+localized approved-signature annotations.
+
+Recorded archives are XML443671/2763759/32, CLI72087/321234/8 and
+facade1543654/8549973/36 for compressed bytes, normalized bytes and members.
+Actual verified locally patched publication dry runs retain443672,72087 and
+1543655 compressed bytes, respectively. Normalized tuples and all archived
+source/test members are exact, compression differences satisfy existing64-byte
+policy and every archive is below10MiB. No upload occurred. Root and reviewer
+independently authenticated all six retained archives. Independent ALL pass1
+reports zero defects, smells and nitpicks, final review719960e0. Finalfreeze
+a35874ba binds18 tracked files and78 artifacts, exact diffd3350241. The
+review's unsupported historical README failure wording was corrected before
+prepare without changing its verdict or implementation.
+
+**Hash harness.** All49 worker entries unchanged. Integrated source and
+baseline match the reviewed prefix byte for byte. Final integrated full
+verification and sprint review remain due after the remaining waves.
+
+**Notes for future sessions.** CodeHeadb8fb0326 precedes handoff-only47f5ddcf.
+Integration6418a2ef consumes validated handoffb2195b1f. All19 integrated paths
+exactly match the worker code, with no source reconciliation. This scoped
+dependency checkpoint permits F-X186 to start. Keep work/f-x185-codex through
+sprint close, removing only its clean integrated worktree. Issue288 belongs to
+approved F-X188 wave15. Full-catalogue F-282 remains preserved and paused.
+Issue264 remains excluded. No push, main merge, tag, publication or GitHub
+closure occurred. Complete issue and PR reconciliation waits for verified
+sprint close, with release under its separate reviewed-SHA approval.
+
+### F-X186, Move comment anchors without losing threads
+
+**Sprint.** S90
+**Completed.** 2026-10-08
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Native and Python root-id comment movement and the CLI
+comment move command preserve the existing thread, replies, resolved state,
+metadata and companions across checked supported story destinations. Literal
+text selection shares the existing recursive finder without allocating a
+replacement thread. This addresses [Issue284](https://github.com/tensorbee/rdocx/issues/284),
+reported by Hadrien Mary (`hadim`). Compatible routing and finder ideas from
+[PR287](https://github.com/tensorbee/rdocx/pull/287) were adapted to the stricter
+owned-source transaction contract. The complete PR is not accepted unchanged.
+
+**Non-obvious choices.** Exact typed boundaries own preserved raw reference
+carriers, including attributes and run properties. Independent raw references
+retain bytes even when numeric ids coincide. Source edits rebase destination
+positions and remove only proved emptied marker-only Google wrappers. Ordered
+comments, processing instructions and opaque neighboring payload survive.
+Candidate preparation and reopen precede one publication. Unknown roots,
+replies, stale endpoints, incomplete graphs and ambiguity refuse atomically.
+
+The literal t-only guard preserves zero-width tab and break semantics while
+the rich anchor reader includes displayed field results. Rich queries restore
+proved namespace context without changing canonical locations, fingerprints
+or accepted indices. Paired events and bijective physical story ownership
+prevent namespace replay from promoting or redirecting owners. Redundant
+closed-carrier declarations are omitted only with unique complete-owner,
+retained-declaration and resolved-namespace proof. Existing global replay is
+unchanged. Real comment destination writes preserve source authority, while
+the private endpoint probe remains separate.
+
+**Deviations from the design plan.** None. Qualified implementation details
+are recorded in the completed plan. Unsupported same-owner alias-field forms
+that fail initial save and raw alias SDT forms outside the existing literal
+axis remain explicit boundaries. Saveable paragraph and block field controls
+retain A7B through query, returned-range movement and reopen. Compiled before
+evidence demonstrates paragraph AB only, with the block control already A7B.
+Initially unsaveable table and cell fixtures receive earlier atomic refusal.
+
+**Spec sections touched.** Exactly HLD03 facade conventions, HLD04 namespace
+and package preservation, HLD10 binding movement and HLD12 regression strategy.
+Affected README archive rows and inventory tuples reflect reviewed source.
+
+**Tests.** The named comment_moves_preserve_thread_identity gate fails against
+compiled Base for reference transport, then passes during prepare with one
+executed and909 filtered. Focused anchor13, movement6, Google1 and CLI1 pass.
+Current facade501 unit,364 integration,903 regression and two doctests pass,
+with21 existing ignores. CLI3 unit and62 integration tests pass. The unchanged
+low-level source reuses its631 unit and one doctest result explicitly. Current
+four-crate all-feature Clippy, all-target checks, denied-warning docs, both
+WASM checks, pinned PDF/concurrency2, strict mypy2.3.0 and stubtest pass.
+Actual rebuilt Python core94 passes in16.20s. Current extension SHA
+f61d99e5622983ac507809a7bc800472ef784bb06b93aabe68d846bf281c4c95 is retained
+outside the worker. No post-remediation full35-case parity is claimed.
+
+Current receipts contain5 focused,4 runtime,10 scoped and8 remainder steps,
+all exit zero. Workflow140 passes with two existing skips in62.452s. README
+checks cover27 workspace READMEs and22 publishable inventories, with root4
+and XML1 examples compiled. Prose0, adapters26 and fmt pass. Root and reviewer
+independently authenticate all six archives. Measured compressed/normalized
+bytes/members are XML447612/2784206/32, CLI72545/324047/8 and
+facade1557347/8637890/36. Actual dry-run compressed sizes are447612,72545 and
+1557349, with identical normalized payload tuples and source/test bytes,
+within the unchanged64-byte policy and below10MiB. Genuine locally patched
+publication dry runs use all22 internal patches and upload nothing.
+
+Independent ALL pass4 reports zero defects, smells and nitpicks, review
+a77bc397. Prior nonzero passes and actual failures remain historical records.
+Final freeze d8e1d325 binds20 tracked files and153 artifacts, exact diff7f3e9bbe.
+Prepare changes only completed-plan metadata from that reviewed source.
+
+**Hash harness.** All49 worker entries unchanged. Every integrated source,
+HLD and measurement path matches the reviewed worker code byte for byte.
+No semantic integration conflict or baseline movement occurred. Final full
+integrated sprint verification and review remain due after the remaining waves.
+
+**Notes for future sessions.** CodeHead13fd0241 precedes handoff-only0a987fda.
+Integration a22574b2 consumes validated handoff91bb7bc3. All24 integrated paths
+match the code head. Keep work/f-x186-codex through sprint close and remove only
+its clean completed worktree. Scoped replacement is next in exclusive wave14,
+then whole-story cleanup in wave15. Full-catalogue F-282 remains paused with
+its authenticated backup. Issue264 remains excluded. No push, main merge,
+tag, publication or GitHub closure occurred. Complete issue and PR disposition
+waits for verified sprint close and publication retains separate approval.
+
+### F-X187, Scoped paragraph and cell text replacement
+
+**Sprint.** S90
+**Completed.** 2026-10-08
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Owned native scoped literal replacement and Python
+Paragraph.replace_text, Cell.replace_text and Document.replace_text_at retain
+local counts, run formatting, comments, bookmarks and unselected content.
+Checked detached items support the existing paragraph, table and control
+axis across supported body and related owners. This addresses
+[Issue285](https://github.com/tensorbee/rdocx/issues/285), reported by
+Hadrien Mary (`hadim`). Compatible matcher and binding ideas from
+[PR286](https://github.com/tensorbee/rdocx/pull/286), immutable head
+08361f6af99110cbae71bf9f0498a12feadc01db, were assessed and adapted to the
+complete owned transaction contract rather than accepted unchanged.
+
+**Non-obvious choices.** A private sentinel correspondence probe proves
+selected physical source identity through existing typed normalization.
+Duplicate identical siblings cannot redirect the selected span. Only the
+original selected source is replaced. Scoped table and cell root-attribute
+restoration checks qualified container topology, ancestry and binding
+conflicts. Global serializers, namespace replay and replacement remain
+unchanged. XML validation, count mismatch, preparation and final reopen
+failure publish nothing. Zero counts retain handles, while positive success
+publishes once and advances the binding revision once.
+
+Formal pass1 exposed recursive facade paragraph ordinals being used as
+direct-control ordinals. Native and actual Python before controls each changed
+B instead of A while reporting count one. The repair maps the actual paragraph
+identity to its direct owning control and uses that same direct ordinal for
+comment mutations. Deeper unsupported paths refuse. This adapts `hadim`'s
+[PR287](https://github.com/tensorbee/rdocx/pull/287) commit
+64854a40c9e44505dfac98aa975b4ad3505a2ec8 and completes the existing
+[Issue289](https://github.com/tensorbee/rdocx/issues/289) path correspondence
+alongside F-X185's snapshot payload work. No new path depth is introduced.
+
+**Deviations from the design plan.** None. Added controls remain qualified as
+after-only except the actual compiled exact-Base issue discriminator and
+separately executed attribute-loss and ordinal failures. Initial fixture,
+cache and toolchain failures are retained rather than counted as passes.
+The last Python fixture correction asserts the actual IndexError refusal
+without a production change. Issues264 and291 remain excluded and open.
+
+**Spec sections touched.** Exactly HLD04 package/source preservation, HLD10
+bindings and HLD12 testing. Affected README measurements and inventory tuples
+describe the current two changed published archives.
+
+**Tests.** The named scoped_text_replacement_preserves_unselected_content gate
+fails at compiled Base97c8b599 through the old global guarded API, then passes
+the required prepare rerun with one executed and919 filtered. Complete
+affected all-feature suites pass2422 tests: facade508 unit,364 integration,
+913 regression, XML634 unit and three doctests, with22 existing ignores.
+CLI11 global replacement controls, actual rebuilt Python core97, strict
+mypy2.3.0 seven files and stubtest six modules pass. Focused controls prove
+local scope, duplicate-sibling identity, namespace refusal, exact opaque XML,
+nested attributes, related stories, count guards and actual preparation and
+OPC reopen failures. Existing anchor and movement controls remain green.
+
+Affected all-target checks, denied-warning Clippy and rustdoc, both WASM
+graphs and all49 deterministic hashes pass. The complete scoped receipt has
+13 passing stages. README checks validate27 workspace READMEs and22 package
+inventories with five affected Rust examples compiled. Workflow140 tests
+pass with two existing skips in114.718s. Prose0, adapters26 and fmt pass.
+
+Root and reviewer independently open all four measured and actual dry-run
+archives and compare27 XML and31 facade Rust source/test members exactly.
+Measured compressed/normalized member bytes/member count are XML
+450129/2798010/32 and facade1564667/8680657/36. Actual compressed sizes are
+450128 and1564666, with identical normalized tuples, within the unchanged
+64-byte policy and below10MiB. Actual publication dry runs retain verification,
+all22 local patches and allow-dirty, with no upload. Current runtime extension
+71adef3ca0ba1615f1e2468c050d9276d651800eb62eaf2c86d0fbef348870ab is retained
+outside the worker and independently authenticated.
+
+Independent ALL pass2 reports zero defects, smells and nitpicks, review
+7b16a2a5. Final binder f312b62d authenticates18 files,47 evidence paths and
+three artifacts, with tracked diff465491ef and captured full diffc697783e.
+Prepare changes only authorized lifecycle metadata from the frozen source.
+
+**Hash harness.** All49 worker entries unchanged. All19 integrated code,
+HLD, measurement and review paths match CodeHeade543c089 byte for byte.
+No semantic integration conflict or baseline movement occurred. Final full
+integrated sprint verification and review remain due after remaining waves.
+
+**Notes for future sessions.** CodeHeade543c089 precedes handoff-onlyc1aa56d8.
+Integration56347304 consumes validated handoffc9749f04. Keep
+work/f-x187-codex through sprint close and remove only its clean completed
+worktree. Whole-story cleanup, PR290 and Issue292 follow in exclusive wave15,
+then full-catalogue F-282 resumes from its authenticated paused backup.
+Issues264 and291 remain untouched. No push, main merge, tag, publication or
+GitHub closure occurred. Complete issue and PR disposition waits for verified
+sprint close, and publication retains separate reviewed-SHA approval.
+
+
+### F-X188, Preserve comment ownership across whole-story edits
+
+**Sprint.** S90
+**Completed.** 2026-10-09
+**Size.** L, estimated 4 days, actual effort not recorded.
+
+**What was built.** Complete header and footer replacement transactions now
+reconcile removed comment threads before publication. Text, raw and image
+entrances preserve unrelated review state and live authoring identities.
+Imported physical story parts remain retained, while their proved markers
+retire only after the last effective modeled, inherited or opaque use.
+Glossary removal and replacement reconcile complete owned threads. Supported
+fragment creation, update, extraction and insertion omit transferred review
+markers before dependency capture. This addresses Hadrien Mary (`hadim`)'s
+[Issue288](https://github.com/tensorbee/rdocx/issues/288) and
+[Issue292](https://github.com/tensorbee/rdocx/issues/292), selectively adapting
+[PR290](https://github.com/tensorbee/rdocx/pull/290), head f7841769, and its
+isolated Issue292 commit33ac7827. The inherited PR287 stack is not imported
+unchanged or counted twice.
+
+**Non-obvious choices.** Four additive fallible native setters expose checked
+refusal. Existing native wrappers retain their documented panic convention,
+while Python setters propagate errors and advance revisions only on success.
+The ten installer boundaries validate a cloned output and publish the
+original staged candidate, preserving numbering and relationship handles.
+XML-invalid header text now refuses at entry with exact original bytes.
+Main and glossary-local review owners stay separate even with equal numeric
+ids. Malformed local mappings, orphan companions and shared marked physical
+note ownership refuse. Shared unannotated note sources remain supported.
+Qualified marker omission retains mixed carriers, opaque siblings and source
+package bytes. Plain dependency-free commented creation retains its existing
+refusal policy.
+
+Independent review D1 found unselected note owners entering omission. The
+repair follows only selected recursive footnote, textbox and endnote content.
+D2 found retained root background entering omission and dependency capture.
+Both now use namespace-complete transferred body content, with included
+physical final section properties treated separately. Generic fragment
+admission and dependency policy remain unchanged. Both defects have actual
+current-before failures and passing source-built controls. These later proofs
+are distinct from the three original exact claimed-Base failure logs.
+
+**Deviations from the design plan.** None. The plan records measured live
+identity, early refusal and selected-content clarifications. Historical
+fixture and compilation failures remain unqualified. Shared marked-note
+proof demonstrates validation ambiguity, not executed destructive deletion.
+
+**Spec sections touched.** Exactly HLD03 architecture, HLD04 package ownership,
+HLD10 bindings and HLD12 tests. All four integrated files equal the reviewed
+CodeHead. Affected README inventories describe the current archives.
+
+**Tests.** The named
+whole_story_removal_and_replacement_preserve_comment_closure gate fails at
+compiled claim Basece6d46ba, then passes the actual prepare rerun with one test
+executed in0.20s. Complete affected native suites pass1878 tests and doctests,
+with22 existing ignored. Fresh Python core99, strict mypy2.3.0 seven files and
+stubtest six modules pass against the authenticated rebuilt extension.
+Operation matrices cover all installer entrances and six header/footer
+variants, shared physical targets, complete root/reply/companion closure,
+actual notes, glossary-local ownership, reverse transfer, public insertion,
+source preservation and actual preparation/final-reopen atomic refusal.
+
+All13 scoped stages pass, including all-target checks, denied-warning Clippy
+and rustdoc, both WASM graphs, affected READMEs,140 workflow tests with two
+existing skips, prose0 and adapters26. Receiptcaec5e01 binds18 current inputs
+and all logs. The1363.87s run includes Clippy618.15s, whose sampled wait is in
+dynamic compiler dependency loading. Exact cause remains unproved. It
+completed naturally, with no process signal or retry. Runtime provenance
+a0a34be6 and retained extension16f6d427 authenticate current Python evidence.
+Independent ALL pass3 records zero defects, smells and nitpicks after resolving
+D1 and D2. Frozen binder0a1b4086 retains18 captured inputs,15 records and93 logs.
+
+Root opened actual and retained verified publication dry-run archives and
+compared every archived source/test member,25 facade and three CLI, exactly
+to the current source. Facade actual compressed/normalized/count tuple is
+1577846/8774660/36, one compressed byte above recorded1577845 within the
+existing64-byte allowance. CLI is72979/326487/8. Both remain below10MiB.
+No registry upload occurred.
+
+**Hash harness.** All49 worker entries unchanged. All21 integrated code,
+test, HLD, plan and review files match CodeHead5a5bb726 exactly. The plan-only
+merge overlap resolves to those exact reviewed bytes, with no semantic
+reconciliation or baseline movement. Final full integrated sprint verification
+and review remain due after the remaining waves.
+
+**Notes for future sessions.** CodeHead5a5bb726 precedes handoff-only4f02a17f.
+Integration1674306a consumes validated handoff488fd6bb. Keep
+work/f-x188-codex through sprint close and remove only its clean completed
+worktree. Issue291 is included as separate F-X190 in exclusive wave16 before
+F-282 resumes. This supersedes historical entries that excluded291. Issue264
+remains excluded, and Issue281 remains open for F-184. No push, main merge,
+tag, publication or GitHub closure occurred. Release preparation and separate
+reviewed-main-SHA publication approvals remain ahead.
+
+
+### F-X180, Correct cell nil and none border precedence
+
+**Sprint.** S90
+**Completed.** 2026-10-09
+**Size.** S, estimated 1 day, actual effort not recorded.
+
+**What was built.** Explicit cell nil suppresses both inner and outer borders.
+Cell none and omitted edges inherit the corresponding table edge. Painting
+and border-band geometry share the corrected concrete helper. This addresses
+all seven variants of Hadrien Mary (`hadim`)'s
+[Issue272](https://github.com/tensorbee/rdocx/issues/272), adopting
+[PR274](https://github.com/tensorbee/rdocx/pull/274) at59d9de94.
+Source border tokens and opaque cell XML survive save and reopen.
+
+**Non-obvious choices.** Deterministic bundled-font geometry is compared with
+pinned Word16.113.2 topology and relative positions. Native Arial and bundled
+Caladea metrics are not asserted equal. Formal pass1 corrected fixture child
+order before clean pass2. The separate dense-form golden intentionally loses
+one first-cell top segment,26to25 lines, checksum17727332437927583437,
+without changing row geometry.
+
+**Deviations from the design plan.** None. Original final standalone logs were
+not recovered during this delivery checkpoint. The durable reviewed commit
+and validated integration handoff attest the completed scoped gate, including
+140 workflow tests. The earlier clean review explicitly left that final
+workflow/README result pending. This entry does not claim freshly rehashed
+missing logs or measured total effort.
+
+**Spec sections touched.** Exactly HLD08 table-style cascade and border
+geometry. The later codecommit includes the completed HLD update.
+
+**Tests.** Contributed
+cell_nil_removes_every_edge_and_cell_none_falls_back_to_the_table has genuine
+before failure and after success recorded by ALL pass2. Full issue gate
+issue_272_cell_borders_match_all_seven_word_topologies covers all seven
+reported topologies. The reviewed native index188680c6 binds45 files,
+25 page geometries, seven border topologies and16 break controls. The review
+records affected suites, lint, fmt, archives and hash49 success. All six
+review-frozen inputs authenticate to CodeHeadb4addf1e. ALL pass2 has zero
+defects, smells and nitpicks. Publication dry runs remain local only.
+
+**Hash harness.** All49 worker entries unchanged. The separate dense-form
+golden delta is declared above. Final integrated verification remains due.
+
+**Notes for future sessions.** Claim Basecf58ed1d, CodeHeadb4addf1e and
+integration8eab4796 remain recorded. The consumed handoff retains the original
+scoped acceptance. The worker branch remains through sprint close. GitHub
+issue and PR disposition waits for verified close, with contributor credit
+retained. No new code, baseline, publication or external closure occurs at
+this delivery-record checkpoint.
+
+### F-X181, Ignore page and column breaks inside table cells
+
+**Sprint.** S90
+**Completed.** 2026-10-09
+**Size.** S, estimated 1 day, actual effort not recorded.
+
+**What was built.** Page and column breaks inside ordinary and nested table
+cells are consumed without emitting a line break or space. Field-display FF
+and VT use the same concrete cell context. Ordinary line breaks and body
+pagination retain their existing behavior. This addresses Hadrien Mary
+(`hadim`)'s [Issue273](https://github.com/tensorbee/rdocx/issues/273), adopting
+[PR275](https://github.com/tensorbee/rdocx/pull/275) at5ea2f571. Authored XML
+and opaque content remain unchanged.
+
+**Non-obvious choices.** The existing table paragraph entrypoint supplies the
+cell context, including nested traversal. Library comparisons use each own
+no-break control with deterministic fonts. Native topology and relative
+positions are accepted without an absolute Arial/Caladea or pixel parity
+claim. Native field update or reopen behavior is not inferred.
+
+**Deviations from the design plan.** None. Total effort was not measured.
+
+**Spec sections touched.** Exactly HLD08 line-breaking and page-transition
+rules. The committed HLD bytes equal the review freeze.
+
+**Tests.** The contributed
+page_and_column_breaks_inside_a_table_cell_are_dropped gate genuinely fails
+before production with shifted BBB baseline, then passes. The strengthened
+16-case ordinary/nested, leading/inline matrix, typed field variants, row
+height and body controls pass. Scoped suites record500unit,360integration,
+865regression and317layout passes, with existing ignores6/8/7/0 and passing
+doctests. All-target checks, denied-warning Clippy/docs, fmt,140 workflow tests
+with two skips,27 README examples and22 package inventories, prose0 and
+adapters26 pass. Locally patched verified dry runs retain layout tuple
+308999/1672132/15 and facade1518202/8403444/36 below10MiB. ALL pass1 has zero
+findings. Freeze c145897b retains19 logs, independently rehashed here, and all
+six nonplan frozen inputs equal CodeHead101ff340.
+
+**Hash harness.** All49 worker entries unchanged. No baseline movement.
+Final full integrated sprint gates remain due.
+
+**Notes for future sessions.** Claim Basee4801316, CodeHead101ff340 and
+integration90c2d300 remain recorded with the consumed handoff. Shared native
+index188680c6 retains qualified Word16.113.2 evidence. Keep the branch through
+sprint close. This checkpoint changes delivery records only, with no GitHub
+closure, upload or publication approval.
+
+### F-X183, Correct table margins and legacy positioning
+
+**Sprint.** S90
+**Completed.** 2026-10-09
+**Size.** M, estimated 2 days, actual effort not recorded.
+
+**What was built.** Missing resolved table side margins become zero in
+intrinsic and final layout, with direct cell overlays preserved. Eligible
+legacy top-level positioning consumes the first accepted laid-out cell's left
+margin and resolved-indent context. This addresses Hadrien Mary (`hadim`)'s
+[Issue276](https://github.com/tensorbee/rdocx/issues/276) and
+[Issue278](https://github.com/tensorbee/rdocx/issues/278), hardening the
+incremental [PR280](https://github.com/tensorbee/rdocx/pull/280) contribution
+at795b29d7. Its stacked PR279 alignment work is already credited to F-X182.
+
+**Non-obvious choices.** Measured legacy right/end placement depends on first
+left margin, rather than the contribution's last-right inference. Modern,
+centered, nested, bidi and floating placement remain separate controls.
+Effects-only default consumption is render-only and retains both source
+style parts. The bounded built-in TableNormal left-default exception does
+not generalize to custom defaults or claim unmeasured right padding.
+LayoutInput.legacy_table_positioning is a required public field, with
+pre-1.0 struct-literal compatibility impact. ALL pass1 D1 exposed a leading
+accepted row without a projected cell. The repaired traversal finds the
+first real cell without deleting the source row or control.
+
+**Deviations from the design plan.** None. The published scope retains the
+qualified original869-pass regression attempt plus corrected sole-target pass,
+not a fresh complete870-test invocation. Recorded measurement windows are
+bounded checkpoints, not total effort. Historical compiler/fixture failures
+are not accepted behavior proof.
+
+**Spec sections touched.** Exactly HLD04 package/style preservation and HLD08
+table cascade, geometry and compatibility placement. Both frozen HLD files
+authenticate to the committed source.
+
+**Tests.** The named legacy_table_positions_use_resolved_cell_margins gate
+fails at claim Base with missing margin5.4 versus0, then passes600 fixtures
+and the actual prepare rerun. Direct-cell intrinsic equivalence has its own
+before/after proof. D1 has actual72 versus66.6 before failure and16-case
+restored success. Layout319 plus one doctest, inherited24 controls, all-target
+checks, lint, fmt, hash49/golden7 and140 workflow tests with two skips pass.
+Prior unaffected facade500unit/360integration,869regression plus corrected
+sole-target, CLI3+58, binding, WASM and documentation evidence retain their
+explicit scope. ALL pass2 has zero findings, and three DELTA reviews approve
+the precise intentional outputs. Independent review authenticates491 native
+bindings, with no absolute native font or pixel parity claim.
+
+Freeze890efe77 binds final code and qualified evidence. Root rehashed85
+retained proof/archive/prior-review bindings and checked15 nonplan inputs
+against CodeHead2050ce5b. Verified archives retain layout310871/1681340/15,
+facade measured1526086/8447574/36 and actual1526084/8447574/36. Only README
+raw payload differs between measured and actual archive pairs. The two-byte
+compressed difference is within the existing64-byte policy, with no invented
+compression cause. All source/test members match and both archives remain
+below10MiB. No upload occurred.
+
+**Hash harness.** Exactly14 of49 entries change for declared zero-padding
+behavior, with35 unchanged. Source DOCX members, resources, page counts and
+MediaBoxes remain unchanged. Invoice/quote PNGs, dense-form, F266c and F268a
+geometry changes have independent attribution. F-X182's five changed events
+all overlap these14 keys. Together the two stories record19 change events
+affecting14 unique final keys, not19 distinct keys. Final integrated hash and
+review gates remain due.
+
+**Notes for future sessions.** Claim Based4b8f545, CodeHead2050ce5b,
+handoff-onlytipb038e00e and integration0a775842 remain recorded. The completed
+clean worktree was removed and its branch remains through sprint close.
+Do not repeat broad native capture or reinterpret narrow measurements as
+full Word behavior. This delivery checkpoint adds no code or baseline change.
+GitHub disposition and separate publication approval remain ahead.
+
+### F-X190, Preserve cached complex-field story snapshots
+
+**Sprint.** S90
+**Completed.** 2026-10-09
+**Size.** M, estimated 2 days, actual effort not recorded.
+
+**What was built.** Existing bulk story snapshots and Python StoryItem.text
+now expose cached complex-field text across sibling runs and nested fields.
+The shared text and hyperlink projection uses one inherited namespace envelope
+and checked physical offsets. This addresses Hadrien Mary (`hadim`)'s
+[Issue291](https://github.com/tensorbee/rdocx/issues/291), selectively adapting
+[PR287](https://github.com/tensorbee/rdocx/pull/287)'s semantic contribution
+65365c4b from head39945370. PR290 inherits that stack and is not double counted.
+Source XML, locations, fingerprints, direct-body coordinates, ordering and
+read revisions remain unchanged.
+
+**Non-obvious choices.** The wrapper is private reader state and is never
+saved. External ancestor offsets gate discovery but have no local position.
+The existing public admission boundary for a hyperlink wrapper inside a
+complex field remains opaque. Actual private qualified-link endpoints and
+supported public surrounding links prove translation without relaxing that
+boundary. Noncomplex enclosing hyperlinks retain established literal7yes,
+while the outer and nested fields remain yes and7. ALL pass1 found a local
+namespace lifetime defect. The corrected batch collector takes inherited
+context before the first element's declarations, retaining ancestor bindings
+and each original element's local declarations. Every existing batch consumer
+was reviewed, including rich-comment replay and single-root closure.
+
+**Deviations from the design plan.** The approved admission clarification
+separates opaque public discovery from private link mechanism proof. No new
+public API, production file, module or dependency. Total effort was not measured.
+
+**Spec sections touched.** Exactly HLD03, HLD04, HLD10 and HLD12. All nine
+nonplan frozen feature inputs equal CodeHead and the integrated result.
+
+**Tests.** Two compiled exact-Base controls prove the original failures:
+sibling-run bulk text empty versus direct7, and four actual admitted nested
+excerpt paths panicking on ancestor subtraction. D1 has separate later-current
+native and rebuilt Python before failures across four alias/default shadow
+directions. Fresh after controls restore direct/bulk agreement and preserve
+source bytes, locations, held handles and revisions. Compilation-only failures
+and the unsupported discovery fixture are not behavior-failure evidence.
+
+Final2 scoped receipt d8de3bfb records all13 successful stages in471.61s.
+Native512unit,364integration,944regression and2doctests pass,1822 total with22
+existing ignored. Rebuilt Python105, strict mypy7files and stubtest6modules
+pass. Both WASM targets, denied-warning Clippy/docs, all-target checks, fmt,
+README examples,140workflow tests with two skips, prose0 and adapters26 pass.
+Root authenticated all10 live frozen inputs,15 records and42 logs against
+binder22621621. Actual and retained runtime extension f3468179 authenticate
+at86748104bytes. Actual and retained verified publication archives04388020
+contain all25 current source/test members, normalized1582342/8802989/36,
+below10MiB. The recorded1582341 compressed size differs by one byte within
+the existing64-byte tolerance. All22 local dependency patches remain present.
+ALL pass2 has zero defects, smells and nitpicks. The actual prepare named gate
+passes again,1test0.07s after4.51s compilation, retained log04648b03.
+
+**Hash harness.** All49 worker entries unchanged. No baseline movement.
+Final integrated full verification and sprint review remain due.
+
+**Notes for future sessions.** Claim Base2cea3992, CodeHead49f84796 and
+handoff-only tip7bf20632 retain exact provenance. Validated handoff94ddc0ff
+was consumed by integration126255dc. All12 integrated feature files equal
+CodeHead, with no conflict or semantic reconciliation. Keep the worker branch
+through sprint close. Resume F-282 only against this integrated prefix and
+preserve both text.rs and field.rs changes. Issue281 remains open and Issue264
+excluded. No GitHub closure, push, release tag or publication occurred.
+
+### F-X191, Ignore namespace declarations in numbering reader completeness
+
+**Sprint.** S90
+**Completed.** 2026-10-09
+**Size.** S, estimated 1 day, actual effort not recorded.
+
+**What was built.** The native numbering level reader retains XML namespace
+declarations without counting them as unmodeled numbering semantics. Actual
+extra attributes and children on instances, definitions and levels remain
+flagged. This adapts Pedro Assumpcao (`pedroassumpcao`)'s
+[PR293](https://github.com/tensorbee/rdocx/pull/293) at upstream headfd112a7a.
+No parser, serialization, richer authoring admission or binding API changes.
+
+**Non-obvious choices.** Only exact xmlns and xmlns: lexical declaration
+names are excluded. Producer lookalikes and Word-looking aliases rebound to
+foreign namespaces remain flagged. Existing extra XML predicates remain
+unchanged. Contributor archive platform overrides and stale measurements were
+excluded. The actual local archive was measured through existing policy.
+
+**Deviations from the design plan.** None. Total effort was not measured.
+
+**Spec sections touched.** Exactly HLD10, supporting decisions and native
+Word facade stability. All four integrated scoped inputs exactly match the
+reviewed worker. Integration had no conflicts or semantic reconciliation.
+
+**Tests.** Exact claim Base production plus the named regression compiled
+and failed across twelve declaration and owner combinations, collecting both
+imported and reopened results. Seven focused controls pass after repair,
+including actual producer attributes, foreign rebound aliases, opaque children
+on all three owners and existing completeness contracts. Independent ALL pass1
+has zero defects, smells and nitpicks.
+
+Final scoped receipt abbd3219 records all12 successful stages in1813 seconds.
+Native515unit,364integration,944regression and2doctests pass,1825 total with22
+existing ignored. Affected denied-warning Clippy, all-target checks, fmt,
+workspace rustdoc, README examples and inventory, locally patched22-package
+publication dry run, workflow140 with two existing skips, prose0 and26
+adapters pass. Root authenticated all4 current source bindings and12 logs,
+then final binder0d9a05ad with8 source/completion records,21 evidence records
+and their retained copies. The retained actual dry-run archive29720f3a has
+1583631 compressed bytes,8813125 normalized member bytes and36members.
+All25 archived source/test members match current reviewed source. The one-byte
+compressed difference is within the unchanged64-byte tolerance. All22
+publishable archives are below10MiB. No upload occurred.
+
+**Hash harness.** All49 entries unchanged in the worker. No baseline movement.
+Final full integrated sprint verification and sprint review remain due.
+
+**Notes for future sessions.** Claim Base49249290, CodeHeade5a4d72e,
+handoff-only tipe24746e6 and integration97c5ae65 retain exact provenance.
+Validated handoffd0b6d028 was consumed. No crates changes followed CodeHead.
+Keep the worker branch through sprint close and remove only its clean
+completed worktree. F-X191 completes the release prerequisite, while revised
+F-282 is still in progress. Remaining bibliography is F-X192 in S91 and
+F-283 is carried. Issue264 is excluded and Issue281 remains open. No GitHub
+closure, push, release tag or publication occurred.
+
+
+### F-282, Citations and bibliography authoring
+
+**Sprint.** S90
+**Completed.** 2026-10-09
+**Size.** L, estimated 4 days, actual effort not recorded.
+
+**What was built.** Native Rust source inspection and checked CRUD, document
+style/options, citation and bibliography insertion, and staged cache updates.
+Metadata retains seventeen source kinds, sixteen contributor roles and twelve
+styles. Formatting is explicitly partial:210 of223 measured dense APA locale
+configurations, with separate earned sparse and rich controls, and lean
+numeric1033 Book inputs for the eleven other bibliography styles. Citation
+admissions remain separate. Dedicated bibliography Python/WASM APIs are absent.
+
+**Non-obvious choices.** Recognized unfinished standard formatting aborts the
+whole refresh atomically. Noncatalogue paths retain complete caches with report
+diagnostics. Source LCID precedes field selectors and an actual caller-supplied
+default, with no guessed en-US fallback. Non-ASCII collection sorting refuses.
+Producer XML, qualified source identities and physical paragraph/table cache
+ownership remain preserved. Unknown Word attributes refuse destructive property
+replacement, and legal closing QName whitespace survives source edits. The
+existing concrete layout font resolver is shared without algorithm changes.
+
+**Deviations from the design plan.** The user deferred remaining full catalogue
+work to F-X192 in S91 and carried F-283 there. The revised approved measured
+contract is complete, without a full catalogue claim or weakened oracle tests.
+Total effort was not measured.
+
+**Spec sections touched.** Exactly HLD02,03,04,10,12,14 and15. All integrated
+feature files equal the prepared worker. The independent canonical F-X189 plan
+was retained. Integration had no conflict or semantic reconciliation.
+
+**Tests.** The actual named1094 full-seventeen-kind differential has a genuine
+earlier compiled formatter-refusal control, retained GGO receipt3bd0f8be. It is
+an API-capable formatter checkpoint, not a missing-API failure against original
+claim Base. D1/D2 have compiled original-production failures and repaired passes.
+The mixed eligible/unfinished transaction proves complete package, cache, source
+and held-location rollback. Its corrected original-production pass is existing
+behavior proof, not a new production defect. Independent ALL pass4 is clean,
+with earlier source/OOXML and post-rustdoc passes retained.
+
+Root authenticated green binder34c3da14,27 retained current files,65 evidence
+bindings and21 successful gate rows. Pinned native4160 passes with21 existing
+ignores include all1340 unique APA controls without ignores. This execution
+precedes the two-bracket rustdoc-only correction and retains that source
+qualification. Current layout319 plus its doctest and actual1094 pass. Strict
+affected lint, fmt, workspace rustdoc, no-default shared layout and dualWASM
+pass. README27/22, full workflow140 with two existing skips, fresh Python178,
+strict mypy six files and recursive stubtest six modules pass. Inherited CLI/Py
+strict lint and CLI3 unit/63 integration pass. Stale-target, host-Poppler,
+rustdoc, workflow expectation and duplicate stub discovery failures remain
+qualified in retained records. No test or assertion was removed for acceptance.
+
+Actual verified22-package dry run passed with all local dependency patches.
+Root independently authenticated324 archive members and258 current source
+bindings. Word archive892855f9 is3524406 compressed bytes,50763043 normalized
+member bytes and37 members. Layoutc59c3d80 is311021/1681790/15. OXML4b673322 is
+451818/2806194/32, within the unchanged64-byte compression policy. Every archive
+is below10MiB. The actual rebuilt extension693e9914 at86849128 bytes is retained
+verbatim outside the removable worktree. No upload occurred.
+
+**Hash harness.** All49 scoped entries unchanged. No baseline movement. Final
+integrated full verification and sprint review remain due.
+
+**Notes for future sessions.** Immutable claim Base70e0b11f, reconciled prefix
+5a442f1f, CodeHeada8d85dfb and handoff-only tipb7d51e36 retain exact provenance.
+Prepare receiptc838fd10 authenticates status/checklist-only completion metadata
+and unchanged source. Validated handoff9c9d8025 was consumed by integration
+5de50f6a. No crates change followed CodeHead. Keep the worker branch through
+sprint close, remove only its clean completed worktree. F-X189 is now unblocked.
+Issue264 is excluded and Issue281 remains open. No push, main merge, tag,
+GitHub closure or publication occurred.
+
+
+### F-X189, Prepare Word 0.16.0 and PowerPoint 0.14.0 families
+
+**Sprint.** S90
+**Completed.** 2026-10-09
+**Size.** L, estimated 4 days, actual not recorded
+
+**What was built.** Prepared the exact seven Word crates and Python distribution
+at 0.16.0 and fifteen shared OOXML/PowerPoint crates and Python distribution
+at 0.14.0. Internal pins, lockfile, current release assertions, README archive
+measurements, authenticated contributor inventory and both family release
+notes agree. Current Python wheels were built from retained source distributions
+and installed in isolated Python 3.9 and 3.12 environments. The existing
+rpptx-wasm npm 0.12.1 boundary is preserved.
+
+**Non-obvious choices.** Shared-family publication precedes Word because of
+its internal dependency pins. Preparation grants no tag or upload authority.
+Full bibliography catalogue work is F-X192 in S91, and F-283 is carried.
+The notes describe measured native formatting admission rather than full
+catalogue parity. Intake stops at PR293, Issue264 is excluded and Issue281
+remains open.
+
+**Deviations from the design plan.** Actual default-size executions exposed
+inherited test-only optimizer argument and official version identity omissions.
+The amended plan and independent ALL passes 2 and 3 review those bounded
+corrections. Production pipeline flags, pinned tools, wrappers and size limits
+are unchanged. Source-distribution lock pruning is authenticated against
+canonical identities and checksums, without canonical dependency changes.
+Preserved cache-path and missing offline consumer-source failures were recovered
+without source changes and are not reported as passes.
+
+**Spec sections touched.** HLD10 Packaging and CI, HLD14 F-X189, and HLD15
+Packaging, Publishing, Release process and CI job matrix.
+
+**Tests.** The named s90_release_families_match_reviewed_versions regression
+has genuine immutable-Base failure and current success. Independent ALL pass3
+reports zero defects and smells. Worker CodeHead400b3f1f and handoff tipf0fb4f7f
+were authenticated before integration769202b0. The actual integrated generic
+full gate passed at769202b0, with formatting and strict lint in oz2q3i3z and
+remaining commands in hmo1bqu5. Native suites have5708passes and58existing
+ignores, including all1340 APA prefix controls. Workflow tests have139passes
+and2existing registry skips. Rustdoc, README examples, no-default layout,
+dual WASM, policy checks and supply-chain checks passed.
+
+The actual locally patched22-package publication dry run passed without
+allow-dirty or upload. Final archive receipt0b7de36f binds324members and258
+current-source files, exact versions, clean769202 VCS metadata and matching
+verification-registry copies. All archives satisfy unchanged inventory policies
+and the10MiB limit. Installed Word runtime has178passes on each interpreter,
+strict mypy7files and stubtest6modules. PowerPoint has75normal plus2exact
+Cargo-oracle passes on each interpreter, strict mypy10files and stubtest9modules.
+Final receipts9df89453, de0636df and eaa2808e bind these actual integrated runs.
+WASM receipt63ec6acb has11successful stages, WordNode2tests, PPTNode1test,
+actual default-size1test at684723gzip bytes, both bundler builds and byte-equal
+local npm installs/imports. Golden receipt2304d0fb proves7page-one decoded
+pixel buffers match with pinned Poppler26.01.0 at150DPI.
+
+**Hash harness.** All49entries match. Preparation changes no output relative
+to its claimed integrated Base. Earlier separately labelled X182 and X183
+changes account for19events on14unique keys, with35untouched keys against
+sprint Base20888b7a. Golden and whole-source/member provenance were reauthenticated.
+
+**Notes for future sessions.** These are local preparation and integrated
+verification results, not publication. Ledger and review commits require a
+fresh final-HEAD full gate. Clean sprint review and the exact pushed-SHA
+build-only rehearsal, with12wheels and2sdists, remain before close. Manual
+rehearsal provides run/artifact provenance, not tag-only signed attestations or
+CLI assets. Close-sprint owns main and the sprint tag. Each release requires
+read-only closed-main preflight and its own immediate final approval. Retain
+work/f-x189-codex through close. Its consumed handoff and recorded integration
+allowed clean worktree removal without force. No release tag or upload occurred.

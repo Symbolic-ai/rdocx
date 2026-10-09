@@ -1044,6 +1044,23 @@ impl PyCell {
 
 #[pymethods]
 impl PyCell {
+    /// Replace literal text in this cell and its supported nested descendants.
+    #[pyo3(signature = (old, new, *, expect = None))]
+    fn replace_text(
+        &self,
+        py: Python<'_>,
+        old: &str,
+        new: &str,
+        expect: Option<usize>,
+    ) -> PyResult<usize> {
+        let cell = self.validate(py)?;
+        self.document
+            .borrow_mut(py)
+            .scoped_replacement(py, |document| {
+                document.try_replace_text_in_cell(cell, None, old, new, expect)
+            })
+    }
+
     #[getter]
     fn text(&self, py: Python<'_>) -> PyResult<String> {
         let (table, row, cell) = self.validate(py)?;
@@ -1058,16 +1075,9 @@ impl PyCell {
     fn set_text(&self, py: Python<'_>, value: &str) -> PyResult<()> {
         let (table, row, cell) = self.validate(py)?;
         let mut document = self.document.borrow_mut(py);
-        {
-            let mut table = document
-                .inner
-                .table_mut(table)
-                .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
-            table
-                .cell(row, cell)
-                .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?
-                .set_text(value);
-        }
+        let inner = &mut document.inner;
+        py.detach(|| inner.try_set_cell_text(table, row, cell, value))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
         document.revisions.bump();
         Ok(())
     }

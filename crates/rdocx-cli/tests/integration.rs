@@ -2455,7 +2455,7 @@ fn cli_collaboration_commands_are_schema_stable_and_atomic() {
         value,
         json!({
             "schema": 1,
-            "scope": "main",
+            "scope": "all_stories",
             "comments": [],
         })
     );
@@ -2695,7 +2695,7 @@ fn comment_commands_round_trip_one_resolved_thread() {
         value,
         json!({
             "schema": 1,
-            "scope": "main",
+            "scope": "all_stories",
             "comments": [
                 {
                     "id": 0,
@@ -2705,6 +2705,11 @@ fn comment_commands_round_trip_one_resolved_thread() {
                     "text": "Review this",
                     "parent_id": null,
                     "resolved": true,
+                    "anchor_text": "Comment target",
+                    "anchor": {
+                        "start": { "story_kind": "body", "part_name": "/word/document.xml", "owner_index": 0, "item_kind": "paragraph", "index_path": [0], "run_index": 0, "direct_body_index": 0 },
+                        "end": { "story_kind": "body", "part_name": "/word/document.xml", "owner_index": 0, "item_kind": "paragraph", "index_path": [0], "run_index": 1, "direct_body_index": 0 },
+                    },
                 },
                 {
                     "id": 1,
@@ -2714,6 +2719,8 @@ fn comment_commands_round_trip_one_resolved_thread() {
                     "text": "Agreed",
                     "parent_id": 0,
                     "resolved": false,
+                    "anchor_text": null,
+                    "anchor": null,
                 },
             ],
         })
@@ -3955,4 +3962,307 @@ fn revision_list_names_the_story_of_compared_footer_revisions() {
     assert_success(&resolved, "revision accept footer");
     let value: serde_json::Value = serde_json::from_slice(&resolved.stdout).unwrap();
     assert_eq!(value["resolved"], records.len());
+}
+
+#[test]
+fn validate_distinguishes_orphans_point_comments_and_linked_replies() {
+    let workspace = TempWorkspace::new("comment-ownership");
+    let mut document = Document::new();
+    document.add_paragraph("anchor");
+    let root = document
+        .add_comment(
+            rdocx::RunRange {
+                start: rdocx::RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: rdocx::RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "root",
+        )
+        .unwrap();
+    document.reply_to(root, "Ben", "reply").unwrap();
+    let source = document.to_bytes().unwrap();
+    for (label, orphan) in [("point", false), ("orphan", true)] {
+        let mut package = OpcPackage::from_reader(std::io::Cursor::new(&source)).unwrap();
+        let part = package.main_document_part().unwrap();
+        let mut xml = String::from_utf8(package.get_part(&part).unwrap().to_vec()).unwrap();
+        for name in ["commentRangeStart", "commentRangeEnd", "commentReference"] {
+            if name == "commentReference" && !orphan {
+                continue;
+            }
+            let needle = format!("<w:{name} ");
+            while let Some(start) = xml.find(&needle) {
+                let end = start + xml[start..].find("/>").unwrap() + 2;
+                xml.replace_range(start..end, "");
+            }
+        }
+        package.set_part(&part, xml.into_bytes());
+        let path = workspace.path.join(format!("{label}.docx"));
+        package
+            .write_to(&mut std::fs::File::create(&path).unwrap())
+            .unwrap();
+        let output = cli(&["validate", path.to_str().unwrap()]);
+        assert_eq!(
+            output.status.success(),
+            !orphan,
+            "{label}: {} {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+fn comment_list_json_reports_typed_anchor_locations() {
+    let workspace = TempWorkspace::new("comment-anchor-snapshots");
+    let mut document = Document::new();
+    document.add_paragraph("Alpha stays.");
+    document.add_paragraph("Delta goes away.");
+    document
+        .add_comment(
+            rdocx::RunRange {
+                start: rdocx::RunPosition {
+                    body_index: 1,
+                    run_index: 0,
+                },
+                end: rdocx::RunPosition {
+                    body_index: 1,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "Review Delta",
+        )
+        .unwrap();
+    let path = workspace.path.join("source.docx");
+    document.save(&path).unwrap();
+    let output = cli(&["comment", "list", path_text(&path), "--json"]);
+    assert_success(&output, "comment list JSON anchor");
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let root = &value["comments"][0];
+    assert_eq!(root["anchor_text"], "Delta goes away.");
+    assert_eq!(root["anchor"]["start"]["direct_body_index"], 1);
+    assert_eq!(root["anchor"]["start"]["run_index"], 0);
+    assert_eq!(root["anchor"]["end"]["run_index"], 1);
+}
+
+#[test]
+fn comment_list_json_keeps_related_locations_and_point_orphan_states() {
+    let workspace = TempWorkspace::new("comment-anchor-related-states");
+    let mut document = Document::new();
+    document.add_paragraph("body");
+    document.set_header("header anchor");
+    let story = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == rdocx::StoryKind::Header)
+        .unwrap();
+    let location = document
+        .story_items(&story)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind() == rdocx::StoryItemKind::Paragraph)
+        .unwrap()
+        .location()
+        .clone();
+    document
+        .add_story_comment(
+            rdocx::StoryRunRange {
+                start: rdocx::StoryRunPosition {
+                    location: location.clone(),
+                    run_index: 0,
+                },
+                end: rdocx::StoryRunPosition {
+                    location: location.clone(),
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "header note",
+        )
+        .unwrap();
+    let path = workspace.path.join("header.docx");
+    document.save(&path).unwrap();
+    let output = cli(&["comment", "list", path_text(&path), "--json"]);
+    assert_success(&output, "related comment list");
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["scope"], "all_stories");
+    assert_eq!(value["comments"][0]["anchor_text"], "header anchor");
+    for (boundary, run) in [("start", 0), ("end", 1)] {
+        assert_eq!(
+            value["comments"][0]["anchor"][boundary],
+            json!({
+                "story_kind": "header", "part_name": story.part_name(), "owner_index": story.owner_index(),
+                "item_kind": "paragraph", "index_path": location.index_path(), "run_index": run,
+                "direct_body_index": null,
+            })
+        );
+    }
+    let mut seed = Document::new();
+    seed.add_paragraph("source");
+    let id = seed
+        .add_comment(
+            rdocx::RunRange {
+                start: rdocx::RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: rdocx::RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "note",
+        )
+        .unwrap();
+    let seed = seed.to_bytes().unwrap();
+    for point in [true, false] {
+        let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&seed)).unwrap();
+        let mut main =
+            String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+        for local in ["commentRangeStart", "commentRangeEnd"] {
+            main = main.replace(&format!(r#"<w:{local} w:id="{id}"/>"#), "");
+        }
+        if !point {
+            main = main.replace(&format!(r#"<w:commentReference w:id="{id}"/>"#), "");
+        }
+        package.set_part("/word/document.xml", main.into_bytes());
+        let path = workspace
+            .path
+            .join(if point { "point.docx" } else { "orphan.docx" });
+        package
+            .write_to(&mut fs::File::create(&path).unwrap())
+            .unwrap();
+        let before = fs::read(&path).unwrap();
+        let output = cli(&["comment", "list", path_text(&path), "--json"]);
+        assert_success(&output, "point/orphan list");
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["comments"][0]["anchor"], Value::Null);
+        assert_eq!(
+            value["comments"][0]["anchor_text"],
+            if point { json!("") } else { Value::Null }
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
+    }
+}
+
+#[test]
+fn comment_move_outputs_reopen_with_unchanged_thread() {
+    let workspace = TempWorkspace::new("comment-move");
+    let input = workspace.path.join("input.docx");
+    let output = workspace.path.join("output.docx");
+    let mut document = Document::new();
+    document.add_paragraph("SOURCE");
+    document.add_paragraph("TARGET TARGET");
+    let id = document
+        .add_comment_on_text(
+            "SOURCE",
+            0,
+            "Ada",
+            Some("A"),
+            "Review",
+            Some("2026-10-08T12:00:00Z"),
+        )
+        .unwrap();
+    document.reply_to(id, "Ben", "Reply").unwrap();
+    document.resolve_comment(id, true).unwrap();
+    document.save(&input).unwrap();
+    let before = fs::read(&input).unwrap();
+    let result = cli(&[
+        "comment",
+        "move",
+        path_text(&input),
+        &id.to_string(),
+        "--text",
+        "TARGET",
+        "--occurrence",
+        "1",
+        "-o",
+        path_text(&output),
+        "--json",
+    ]);
+    assert_success(&result, "move root comment");
+    let reopened = Document::open(&output).unwrap();
+    assert_eq!(
+        reopened.comment_anchor_text(id).unwrap().as_deref(),
+        Some("TARGET")
+    );
+    assert_eq!(reopened.comments().len(), 2);
+    assert_eq!(reopened.comments()[0].id(), id);
+    assert!(reopened.comments()[0].resolved());
+    assert_eq!(reopened.comments()[1].parent_id(), Some(id));
+    assert_eq!(fs::read(&input).unwrap(), before);
+}
+
+#[test]
+fn whole_story_outputs_validate_without_comment_orphans() {
+    let workspace = TempWorkspace::new("whole-story-ownership");
+    let mut document = Document::new();
+    document.add_paragraph("main retained");
+    document.set_header("old header");
+    let story = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|s| s.kind() == rdocx::StoryKind::Header)
+        .unwrap();
+    let location = document.story_items(&story).unwrap()[0].location().clone();
+    let root = document
+        .add_story_comment(
+            rdocx::StoryRunRange {
+                start: rdocx::StoryRunPosition {
+                    location: location.clone(),
+                    run_index: 0,
+                },
+                end: rdocx::StoryRunPosition {
+                    location,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "root",
+        )
+        .unwrap();
+    let reply = document.reply_to(root, "Ben", "reply").unwrap();
+    document.reply_to(reply, "Cyd", "grandchild").unwrap();
+    let before = document.to_bytes().unwrap();
+    document.try_set_header("new header").unwrap();
+    let valid = workspace.path.join("valid.docx");
+    document.save(&valid).unwrap();
+    assert_success(
+        &cli(&["validate", path_text(&valid)]),
+        "whole-story cleanup validate",
+    );
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(before)).unwrap();
+    package.set_part("/annotations/broken-ids.xml", b"<not-xml".to_vec());
+    package.content_types.add_override(
+        "/annotations/broken-ids.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsIds+xml",
+    );
+    package.get_or_create_part_rels("/word/document.xml").add(
+        "http://schemas.microsoft.com/office/2016/09/relationships/commentsIds",
+        "/annotations/broken-ids.xml",
+    );
+    let mut source = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut source).unwrap();
+    let mut document = Document::from_bytes(source.get_ref()).unwrap();
+    let before = document.to_bytes().unwrap();
+    assert!(document.try_set_header("refused").is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let refused = workspace.path.join("refused.docx");
+    document.save(&refused).unwrap();
+    let result = cli(&["validate", path_text(&refused)]);
+    assert!(!result.status.success());
 }

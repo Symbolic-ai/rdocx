@@ -332,6 +332,12 @@ pub struct CT_Shape {
     pub solid_fill: Option<String>,
     /// Paragraphs of the shape's text box, from `wps:txbx/w:txbxContent`.
     pub text: Vec<crate::text::CT_P>,
+    /// Authoritative parsed block body, including tables and modeled controls.
+    /// The paragraph-only projection is used for authored legacy shapes when absent.
+    pub text_body: Option<crate::document::CT_Body>,
+    /// Physical selected text-box owner ordinal in the source OPC part.
+    /// Assigned by the document projection, never by renderer traversal order.
+    pub source_text_box_owner: Option<usize>,
 }
 
 /// Parse the DrawingML held inside a captured `mc:AlternateContent` block.
@@ -344,7 +350,7 @@ pub struct CT_Shape {
 /// here must not be serialised again or the element ends up duplicated.
 pub fn parse_alternate_content(raw: &[u8], inherited_prefixes: &[String]) -> Option<CT_Drawing> {
     let mut reader = Reader::from_reader(raw);
-    reader.config_mut().trim_text(true);
+    reader.config_mut().trim_text(false);
     let mut buf = Vec::new();
     let mut in_choice = false;
     let mut prefixes = inherited_prefixes.to_vec();
@@ -591,6 +597,11 @@ impl CT_Anchor {
                 }
                 Ok(Event::Start(ref e)) => {
                     let ename = e.name();
+                    let is_word_text_box = {
+                        let (namespace, local) = reader.resolver().resolve_element(e.name());
+                        namespace_matches(&namespace, crate::namespace::W_NS, b"w")
+                            && local.as_ref() == b"txbxContent"
+                    };
                     if matches_local_name(ename.as_ref(), b"srcRect") {
                         source_rect = Some(parse_source_rect(e)?);
                         reader.read_to_end_into(ename, &mut Vec::new())?;
@@ -689,29 +700,11 @@ impl CT_Anchor {
                         let s = shape.get_or_insert_with(CT_Shape::default);
                         s.preset = preset;
                         s.solid_fill = solid_fill;
-                    } else if matches_local_name(ename.as_ref(), b"txbxContent") {
-                        // A shape's text box holds ordinary w:p paragraphs.
-                        let mut inner_buf = Vec::new();
-                        let mut paragraphs = Vec::new();
-                        loop {
-                            match reader.read_event_into(&mut inner_buf) {
-                                Ok(Event::Start(ref ie))
-                                    if matches_local_name(ie.name().as_ref(), b"p") =>
-                                {
-                                    paragraphs.extend(text_box_paragraph(reader, ie)?);
-                                }
-                                Ok(Event::End(ref ie))
-                                    if matches_local_name(ie.name().as_ref(), b"txbxContent") =>
-                                {
-                                    break;
-                                }
-                                Ok(Event::Eof) => break,
-                                Err(e) => return Err(e.into()),
-                                _ => {}
-                            }
-                            inner_buf.clear();
-                        }
-                        shape.get_or_insert_with(CT_Shape::default).text = paragraphs;
+                    } else if is_word_text_box {
+                        let body = text_box_body(reader, e)?;
+                        let shape = shape.get_or_insert_with(CT_Shape::default);
+                        shape.text = body.paragraphs().cloned().collect();
+                        shape.text_body = Some(body);
                     } else if matches_local_name(ename.as_ref(), b"blip") {
                         reader.read_to_end_into(ename, &mut Vec::new())?;
                     } else if canonical_wp_element(reader, e, b"docPr") {
@@ -1362,15 +1355,12 @@ fn canonical_wp_element(
     namespace_matches(&namespace, drawing_ns::WP, b"wp") && local.as_ref() == expected_local
 }
 
-/// Parse a text-box paragraph out of its anchor.
-///
-/// The paragraph is parsed on its own, so its start tag gets the bindings in
-/// scope here, on top of the scope `CT_P::from_xml` assumes. A run attribute
-/// under any prefix the part binds then resolves as it does in the body.
-fn text_box_paragraph(
+/// Project the complete selected text-box body with its inherited namespace scope.
+/// Drawing source bytes remain the serializer's authority.
+fn text_box_body(
     reader: &mut NsReader<&[u8]>,
     start: &BytesStart<'_>,
-) -> Result<Option<crate::text::CT_P>> {
+) -> Result<crate::document::CT_Body> {
     let mut bindings = Vec::new();
     for (prefix, namespace) in reader.resolver().bindings() {
         let prefix = match prefix {
@@ -1383,31 +1373,20 @@ fn text_box_paragraph(
     }
     let raw =
         crate::text::raw_with_external_bindings(&capture_ns_element(reader, start)?, &bindings)?;
-    let mut paragraph_reader = Reader::from_reader(raw.as_slice());
+    let mut body_reader = Reader::from_reader(raw.as_slice());
     let mut buffer = Vec::new();
-    loop {
-        match paragraph_reader.read_event_into(&mut buffer)? {
-            Event::Start(ref paragraph_start)
-                if matches_local_name(paragraph_start.name().as_ref(), b"p") =>
-            {
-                let prefixes = crate::numbering::word_prefixes_at(
-                    paragraph_start,
-                    &[
-                        "w".to_owned(),
-                        format!("\0r\0{}", crate::namespace::R_NS),
-                        format!("\0mc\0{}", crate::namespace::MC_NS),
-                    ],
-                )?;
-                return Ok(Some(crate::text::CT_P::from_xml_with_prefixes(
-                    &mut paragraph_reader,
-                    &prefixes,
-                )?));
-            }
-            Event::Eof => return Ok(None),
-            _ => {}
-        }
-        buffer.clear();
-    }
+    let Event::Start(root) = body_reader.read_event_into(&mut buffer)? else {
+        return Err(crate::error::OxmlError::InvalidValue(
+            "missing text-box body root".into(),
+        ));
+    };
+    let prefixes = crate::numbering::word_prefixes_at(&root, &["w".to_owned()])?;
+    crate::document::CT_Body::from_xml_with_prefixes_and_owner_bindings_until(
+        &mut body_reader,
+        &prefixes,
+        &bindings,
+        b"txbxContent",
+    )
 }
 
 fn capture_ns_element(reader: &mut NsReader<&[u8]>, start: &BytesStart<'_>) -> Result<Vec<u8>> {
@@ -1611,6 +1590,16 @@ impl CT_Drawing {
         reader: &mut Reader<&[u8]>,
         prefixes: &[String],
     ) -> Result<Self> {
+        let mut bindings = namespace_bindings(prefixes);
+        // Fragment callers can supply implicit canonical Word semantics.
+        // An explicit foreign rebinding removes that canonical prefix and
+        // therefore cannot acquire this projection-only namespace closure.
+        if prefixes.iter().any(|prefix| prefix == "w")
+            && !bindings.iter().any(|(prefix, _)| prefix == "w")
+        {
+            bindings.push(("w".to_owned(), crate::namespace::W_NS.to_owned()));
+        }
+
         let mut inline = None;
         let mut anchor = None;
         let mut buf = Vec::new();
@@ -1622,12 +1611,9 @@ impl CT_Drawing {
                     if matches_local_name(name.as_ref(), b"inline") {
                         // Capture full raw XML, then re-parse for structured fields
                         let raw = capture_element(reader, e)?;
-                        let scoped_raw = crate::text::raw_with_external_bindings(
-                            &raw,
-                            &namespace_bindings(prefixes),
-                        )?;
+                        let scoped_raw = crate::text::raw_with_external_bindings(&raw, &bindings)?;
                         let mut re_reader = NsReader::from_reader(scoped_raw.as_slice());
-                        re_reader.config_mut().trim_text(true);
+                        re_reader.config_mut().trim_text(false);
                         // Skip to the <wp:inline> start
                         let mut rbuf = Vec::new();
                         loop {
@@ -1653,12 +1639,9 @@ impl CT_Drawing {
                     } else if matches_local_name(name.as_ref(), b"anchor") {
                         // Capture full raw XML, then re-parse for structured fields
                         let raw = capture_element(reader, e)?;
-                        let scoped_raw = crate::text::raw_with_external_bindings(
-                            &raw,
-                            &namespace_bindings(prefixes),
-                        )?;
+                        let scoped_raw = crate::text::raw_with_external_bindings(&raw, &bindings)?;
                         let mut re_reader = NsReader::from_reader(scoped_raw.as_slice());
-                        re_reader.config_mut().trim_text(true);
+                        re_reader.config_mut().trim_text(false);
                         let mut rbuf = Vec::new();
                         loop {
                             match re_reader.read_event_into(&mut rbuf) {
@@ -2126,6 +2109,74 @@ mod tests {
         assert!(anchor.shape.is_some());
         assert!(anchor.embed_id.is_empty());
         assert!(anchor.link_id.is_none());
+    }
+
+    #[test]
+    fn direct_and_selected_drawing_sources_preserve_field_and_literal_whitespace() {
+        let body = concat!(
+            r#"<wps:wsp><wps:spPr><a:prstGeom prst="rect"/></wps:spPr><wps:txbx><w:txbxContent><w:p>"#,
+            r#"<w:r><w:t xml:space="preserve">  leading  internal  trailing  </w:t></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="begin" w:fldLock="1"/></w:r>"#,
+            r#"<w:r><w:instrText xml:space="preserve">  SEQ  Figure  </w:instrText></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t xml:space="preserve">  cached  result  </w:t></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p></w:txbxContent></wps:txbx></wps:wsp>"#,
+        );
+        for owner in ["inline", "anchor"] {
+            let raw = format!(
+                r#"<w:drawing xmlns:w="{}" xmlns:wp="{}" xmlns:a="{}" xmlns:wps="{}"><wp:{owner}><wp:extent cx="10" cy="20"/><wp:docPr id="9"/>{body}</wp:{owner}></w:drawing>"#,
+                crate::namespace::W_NS,
+                drawing_ns::WP,
+                drawing_ns::A,
+                "http://schemas.microsoft.com/office/word/2010/wordprocessingShape"
+            );
+            let mut reader = Reader::from_str(&raw);
+            let mut buffer = Vec::new();
+            let Event::Start(root) = reader.read_event_into(&mut buffer).unwrap() else {
+                unreachable!()
+            };
+            let prefixes = crate::numbering::word_prefixes_at(&root, &[]).unwrap();
+            let direct = CT_Drawing::from_xml_with_prefixes(&mut reader, &prefixes).unwrap();
+            let alternate = format!(
+                r#"<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice Requires="wps">{raw}</mc:Choice><mc:Fallback><w:r xmlns:w="{}"><w:t>UNSELECTED</w:t></w:r></mc:Fallback></mc:AlternateContent>"#,
+                crate::namespace::W_NS
+            );
+            let selected = parse_alternate_content(alternate.as_bytes(), &[]).unwrap();
+            assert_eq!(direct, selected);
+            for drawing in [direct, selected] {
+                let mut writer = Writer::new(Vec::new());
+                drawing.to_xml(&mut writer).unwrap();
+                let saved = String::from_utf8(writer.into_inner()).unwrap();
+                assert!(saved.contains(body), "{saved}");
+                assert!(!saved.contains("UNSELECTED"));
+                if let Some(anchor) = drawing.anchor {
+                    assert_eq!((anchor.extent_cx, anchor.extent_cy), (Emu(10), Emu(20)));
+                    let shape = anchor.shape.unwrap();
+                    assert_eq!(shape.preset.as_deref(), Some("rect"));
+                    let paragraph = &shape.text[0];
+                    assert_eq!(
+                        paragraph.text(),
+                        "  leading  internal  trailing    cached  result  "
+                    );
+                    let field = paragraph
+                        .runs()
+                        .into_iter()
+                        .flat_map(|run| &run.content)
+                        .find_map(|content| match content {
+                            crate::text::RunContent::Field(field) => Some(field),
+                            _ => None,
+                        })
+                        .unwrap();
+                    assert_eq!(field.instruction.raw, "SEQ  Figure");
+                    assert_eq!(field.cached_result, "  cached  result  ");
+                    assert_eq!(field.locked(), Some(true));
+                    assert!(
+                        std::str::from_utf8(field.source_replacement().unwrap().unwrap().0)
+                            .unwrap()
+                            .contains("  SEQ  Figure  ")
+                    );
+                }
+            }
+        }
     }
 
     #[test]

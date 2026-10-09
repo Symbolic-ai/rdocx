@@ -1631,29 +1631,35 @@ impl<'a> Cell<'a> {
         self.inner.text()
     }
 
-    /// Set the text of the first paragraph (replacing existing content).
+    /// Set the first paragraph's text while preserving its range anchors.
+    /// A refused unsafe paragraph edit leaves the cell unchanged. Use
+    /// [`Self::try_set_text`] to receive the refusal.
     pub fn set_text(&mut self, text: &str) {
-        use rdocx_oxml::table::CellContent;
-        // Find first paragraph or create one
-        let first_para = self.inner.content.iter_mut().find_map(|c| {
-            if let CellContent::Paragraph(p) = c {
-                Some(p)
+        let _ = self.try_set_text(text);
+    }
+
+    /// Set first-paragraph text through the checked, anchor-preserving edit.
+    pub fn try_set_text(&mut self, text: &str) -> Result<()> {
+        oxml_core::xml::reject_non_xml_characters("cell text", text)?;
+        if let Some(paragraph) = self.inner.content.iter_mut().find_map(|content| {
+            if let CellContent::Paragraph(paragraph) = content {
+                Some(paragraph)
             } else {
                 None
             }
-        });
-        if let Some(para) = first_para {
-            para.runs.clear();
-            if !text.is_empty() {
-                para.add_run(text);
-            }
+        }) {
+            Paragraph { inner: paragraph }.set_text(text)?;
         } else {
-            let mut p = CT_P::new();
-            if !text.is_empty() {
-                p.add_run(text);
+            let mut paragraph = CT_P::new();
+            Paragraph {
+                inner: &mut paragraph,
             }
-            self.inner.content.insert(0, CellContent::Paragraph(p));
+            .set_text(text)?;
+            self.inner
+                .content
+                .insert(0, CellContent::Paragraph(paragraph));
         }
+        Ok(())
     }
 
     /// Add a paragraph to the cell and return a mutable reference.
@@ -1696,21 +1702,26 @@ impl<'a> Cell<'a> {
         self.inner.content.push(CellContent::Paragraph(p));
     }
 
-    /// Remove the first empty paragraph from the cell.
+    /// Remove the first proven plain empty paragraph after adding its replacement.
     ///
-    /// OOXML creates a default empty paragraph when a cell is instantiated.
-    /// Call this before adding content to avoid a spurious blank line at the
-    /// top of the cell — mirrors the `add_html_block` behaviour in python-docx.
+    /// The final direct paragraph is retained. A paragraph carrying formatting,
+    /// markers, raw XML or wrapped content is retained because this borrowed cell
+    /// cannot establish its inherited namespace or package ownership.
     pub fn remove_first_empty_paragraph(&mut self) {
-        use rdocx_oxml::table::CellContent;
-        if let Some(pos) = self.inner.content.iter().position(|c| {
-            if let CellContent::Paragraph(p) = c {
-                p.text().trim().is_empty()
-            } else {
-                false
-            }
+        if self
+            .inner
+            .content
+            .iter()
+            .filter(|content| matches!(content, CellContent::Paragraph(_)))
+            .count()
+            <= 1
+        {
+            return;
+        }
+        if let Some(position) = self.inner.content.iter().position(|content| {
+            matches!(content, CellContent::Paragraph(paragraph) if paragraph == &CT_P::new())
         }) {
-            self.inner.content.remove(pos);
+            self.inner.content.remove(position);
         }
     }
 

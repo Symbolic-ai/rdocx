@@ -665,6 +665,13 @@ impl CT_Sdt {
         &self.revisions
     }
 
+    /// Mutate physical revision projection metadata on a layout-only clone.
+    /// This does not publish an edit or rewrite the producer's raw XML.
+    #[doc(hidden)]
+    pub fn physical_revisions_mut(&mut self) -> &mut [(usize, CT_Revision)] {
+        &mut self.revisions
+    }
+
     pub(crate) fn append_accepted_run_paths(
         &self,
         prefix: &mut Vec<AcceptedRunPathSegment>,

@@ -501,6 +501,7 @@ fn layout_text(
                 field_kind: None,
                 field_source: None,
                 note: None,
+                note_reference_source: None,
                 tab_aligned: None,
             })]),
         },
@@ -1427,6 +1428,7 @@ mod tests {
 
     fn layout_input(document: CT_Document) -> crate::LayoutInput {
         crate::LayoutInput {
+            sequence_snapshot: None,
             document,
             automatic_hyphenation: false,
             mirror_margins: false,
@@ -1434,11 +1436,16 @@ mod tests {
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
+            legacy_table_positioning: false,
+            modern_footnote_layout: false,
+            footnote_layout_like_word8: false,
             math_properties: None,
             note_defaults: [None, None],
             revision_view: crate::RevisionView::Accepted,
             styles: CT_Styles::new_default(),
             numbering: None,
+            story_part_names: Default::default(),
+            story_bodies: Default::default(),
             headers: HashMap::new(),
             footers: HashMap::new(),
             images: HashMap::new(),
@@ -1532,6 +1539,7 @@ mod tests {
                     field_kind: None,
                     field_source: None,
                     note: None,
+                    note_reference_source: None,
                 }),
                 InlineItem::Group {
                     width: subscript.width,

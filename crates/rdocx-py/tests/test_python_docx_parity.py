@@ -955,7 +955,9 @@ def test_issue_160_producer_matrix_across_operations_and_picture(tmp_path, trait
     refreshed = tmp_path / "refreshed.docx"
     fields.save(refreshed)
     footer = _matrix_part(refreshed, "word/footer1.xml").decode()
-    assert len(re.findall(r'fldCharType="separate"/>(?:</w:r><w:r>)?<w:t>([^<]*)</w:t>', footer)) == 2
+    assert _matrix_part(refreshed, "word/footer1.xml") == _matrix_part(source, "word/footer1.xml")
+    expected_caches = 0 if trait == "packed footer fields, no cached result" else 2
+    assert len(re.findall(r'fldCharType="separate"/>(?:</w:r><w:r>)?<w:t>([^<]*)</w:t>', footer)) == expected_caches
     assert rdocx.Document(source).to_pdf().startswith(b"%PDF")
     assert isinstance(_matrix_comparison_count(source, refreshed), int)
     assert _matrix_comparison_count(source, edited) == 2
@@ -1084,7 +1086,7 @@ def test_issue_158_complete_word_workflow(tmp_path):
     image_id = re.search(r'r:embed="([^"]+)"', drawing).group(1)
     document.replace_image(image_id, _matrix_png())
     assert document.image_data(image_id) == _matrix_png()
-    assert document.update_layout_backed_fields().updated_count == 2
+    assert document.update_layout_backed_fields().updated_count == 0
     assert document.rebuild_toc().entry_count == 21
     edited = tmp_path / "edited.docx"
     document.save(edited)

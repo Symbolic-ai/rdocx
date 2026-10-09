@@ -61,6 +61,7 @@ use oxml_core::custom_properties::{CustomProperties, CustomProperty};
 use rdocx_oxml::core_properties::CoreProperties;
 
 use crate::Length;
+use crate::comments::{StoryRunPosition, StoryRunRange};
 use crate::content_control::ContentControlRef;
 use crate::error::{Error, Result};
 use crate::paragraph::{Paragraph, ParagraphRef};
@@ -1014,6 +1015,14 @@ pub struct ReplacementCountMismatch {
     pub found: usize,
 }
 
+enum ScopedReplacementTarget<'a> {
+    Item(&'a ContentLocation),
+    Cell {
+        coordinates: (usize, usize, usize),
+        paragraph: Option<usize>,
+    },
+}
+
 /// An owned story range and the package dependencies it can reach.
 #[derive(Debug, Clone)]
 pub struct DocumentFragment {
@@ -1308,6 +1317,14 @@ impl ContentLocation {
 pub struct StoryItemRef<'a> {
     document: &'a Document,
     location: ContentLocation,
+}
+
+/// One exact owner slice used for generated-table discovery and cache edits.
+pub(crate) struct GeneratedStoryOwner {
+    pub(crate) story: StoryId,
+    pub(crate) range: std::ops::Range<usize>,
+    pub(crate) xml: Vec<u8>,
+    pub(crate) namespaces: BTreeMap<String, String>,
 }
 
 /// One owned story-item projection materialized from a single story inventory.
@@ -2063,6 +2080,7 @@ fn namespace_prefix(declaration_name: &str) -> String {
 
 #[derive(Debug)]
 struct NestedNamespaceOwner {
+    source: Range<usize>,
     local_name: String,
     declarations: Vec<(String, String)>,
     snapshot: LogicalOwnerSnapshot,
@@ -2820,6 +2838,7 @@ fn nested_modeled_namespace_owners(xml: &[u8]) -> Result<Vec<NestedNamespaceOwne
             marker_multiset_matches(&markers, &candidate_markers, true)
         });
         owners.push(NestedNamespaceOwner {
+            source: span.start..span.end,
             local_name: span.local_name.clone(),
             declarations,
             snapshot,
@@ -4716,7 +4735,7 @@ fn reserve_part_from_set(
     }
 }
 
-fn part_name_identity(part_name: &str) -> String {
+pub(crate) fn part_name_identity(part_name: &str) -> String {
     part_name.to_ascii_lowercase()
 }
 
@@ -5458,6 +5477,8 @@ fn bundle_relationship_precedes_story(rel_type: &str) -> bool {
 thread_local! {
     static LAYOUT_INVOCATIONS: Cell<usize> = const { Cell::new(0) };
     static FAIL_NEXT_HEADER_FOOTER_SERIALIZATION: Cell<bool> = const { Cell::new(false) };
+    static FAIL_NEXT_SCOPED_REOPEN: Cell<bool> = const { Cell::new(false) };
+    static FAIL_NEXT_STAGED_REOPEN: Cell<bool> = const { Cell::new(false) };
     static STORY_SOURCE_BUILDS: Cell<usize> = const { Cell::new(0) };
     static STORY_TEXT_PREFIX_BYTES: Cell<usize> = const { Cell::new(0) };
 }
@@ -5635,6 +5656,13 @@ struct StorySource<'a> {
     xml: Cow<'a, [u8]>,
 }
 
+pub(crate) struct TextBoxCacheParagraph {
+    pub(crate) location: ContentLocation,
+    pub(crate) xml: Vec<u8>,
+    pub(crate) owner_index: usize,
+    pub(crate) paragraph_index: usize,
+}
+
 #[derive(Clone)]
 struct StoryOwnerSpan {
     kind: StoryKind,
@@ -5652,6 +5680,108 @@ struct StoryItemSpan {
     complex_field: bool,
     complex_ancestors: Vec<usize>,
     sdt_context: Option<StorySdtContext>,
+}
+
+// Paired source events prove physical correspondence while permitting only
+// namespace declarations to differ. Non-namespace source remains exact.
+#[allow(clippy::type_complexity)] // Concrete physical map and changed namespace offsets form one proof.
+fn comment_namespace_source_boundaries(
+    canonical: &[u8],
+    restored: &[u8],
+) -> Result<Option<(BTreeMap<usize, usize>, Vec<usize>)>> {
+    let mut left = NsReader::from_reader(canonical);
+    let mut right = NsReader::from_reader(restored);
+    let mut boundaries = BTreeMap::new();
+    let mut changed_namespace_facts = Vec::new();
+    loop {
+        let left_start = left.buffer_position() as usize;
+        let right_start = right.buffer_position() as usize;
+        let a = left.read_event().map_err(|e| Error::Other(e.to_string()))?;
+        let b = right
+            .read_event()
+            .map_err(|e| Error::Other(e.to_string()))?;
+        let same = match (&a, &b) {
+            (Event::Start(a), Event::Start(b)) | (Event::Empty(a), Event::Empty(b)) => {
+                let attributes = |element: &BytesStart<'_>| -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+                    element
+                        .attributes()
+                        .filter_map(|attribute| match attribute {
+                            Ok(attribute)
+                                if attribute.key.as_ref() == b"xmlns"
+                                    || attribute.key.as_ref().starts_with(b"xmlns:") =>
+                            {
+                                None
+                            }
+                            Ok(attribute) => Some(Ok((
+                                attribute.key.as_ref().to_vec(),
+                                attribute.value.as_ref().to_vec(),
+                            ))),
+                            Err(error) => Some(Err(Error::Other(error.to_string()))),
+                        })
+                        .collect()
+                };
+                let a_attributes = attributes(a)?;
+                let b_attributes = attributes(b)?;
+                let same_namespaces = left.resolver().resolve_element(a.name()).0
+                    == right.resolver().resolve_element(b.name()).0
+                    && a.attributes()
+                        .filter_map(|attribute| attribute.ok())
+                        .filter(|attribute| {
+                            attribute.key.as_ref() != b"xmlns"
+                                && !attribute.key.as_ref().starts_with(b"xmlns:")
+                        })
+                        .all(|attribute| {
+                            left.resolver().resolve_attribute(attribute.key).0
+                                == right.resolver().resolve_attribute(attribute.key).0
+                        });
+                if !same_namespaces {
+                    changed_namespace_facts.push(left_start);
+                }
+                a.name() == b.name() && a_attributes == b_attributes
+            }
+            _ => a == b,
+        };
+        if !same {
+            return Ok(None);
+        }
+        boundaries.insert(left_start, right_start);
+        boundaries.insert(
+            left.buffer_position() as usize,
+            right.buffer_position() as usize,
+        );
+        if matches!(a, Event::Eof) {
+            break;
+        }
+    }
+    Ok(Some((boundaries, changed_namespace_facts)))
+}
+
+// Existing checked paragraph paths shared by discovery and rich projection.
+// Neither consumer invents a second index axis.
+fn story_range_paragraph_spans(
+    xml: &[u8],
+    owner: &StoryOwnerSpan,
+    story: &StoryId,
+) -> Result<Vec<(ContentLocation, Range<usize>)>> {
+    let mut paragraphs = Vec::new();
+    for (index, item) in scan_story_items(xml, owner)?.iter().enumerate() {
+        let spans = match item.kind {
+            StoryItemKind::Paragraph => vec![(vec![index], item.full.clone())],
+            StoryItemKind::ContentControl => scan_story_control_paragraphs(xml, item)?
+                .into_iter()
+                .enumerate()
+                .map(|(paragraph, span)| (vec![index, paragraph], span))
+                .collect(),
+            _ => continue,
+        };
+        for (path, span) in spans {
+            paragraphs.push((
+                ContentLocation::new(story.clone(), StoryItemKind::Paragraph, path),
+                span,
+            ));
+        }
+    }
+    Ok(paragraphs)
 }
 
 struct StoryLinkSpan {
@@ -5786,7 +5916,7 @@ fn modeled_word_child(parent: &[u8], child: &[u8]) -> bool {
         }
         b"ins" | b"del" | b"moveFrom" | b"moveTo" => matches!(
             child,
-            b"r" | b"hyperlink" | b"ins" | b"del" | b"moveFrom" | b"moveTo"
+            b"r" | b"sdt" | b"hyperlink" | b"ins" | b"del" | b"moveFrom" | b"moveTo"
         ),
         b"fldSimple" => child == b"r",
         _ => false,
@@ -5997,6 +6127,338 @@ fn story_word_prefixes_at(
     Ok(prefixes)
 }
 
+// Locate the selected reference's actual run without changing raw attributes.
+fn comment_reference_run_span(xml: &[u8], owner: &Range<usize>, id: i32) -> Result<Range<usize>> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut stack = Vec::<(bool, Vec<u8>, usize)>::new();
+    let mut found = Vec::new();
+    let mut buffer = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (ns, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(error.to_string()))?;
+        let word = word_element(&ns);
+        drop(ns);
+        match &event {
+            Event::Start(element) | Event::Empty(element) => {
+                if word
+                    && element.local_name().as_ref() == b"commentReference"
+                    && owner.contains(&before)
+                {
+                    let mut selected = false;
+                    for attr in element.attributes() {
+                        let attr = attr.map_err(|error| Error::Other(error.to_string()))?;
+                        let (ns, local) = reader.resolver().resolve_attribute(attr.key);
+                        if word_element(&ns) && local.as_ref() == b"id" {
+                            selected = attr
+                                .decoded_and_normalized_value(
+                                    XmlVersion::Implicit1_0,
+                                    reader.decoder(),
+                                )
+                                .map_err(|error| Error::Other(error.to_string()))?
+                                .parse::<i32>()
+                                .ok()
+                                == Some(id);
+                        }
+                    }
+                    if selected {
+                        let start = stack
+                            .iter()
+                            .rev()
+                            .find(|(word, name, _)| *word && name == b"r")
+                            .map(|(_, _, start)| *start)
+                            .ok_or_else(|| {
+                                Error::Other("comment reference has no source run".into())
+                            })?;
+                        found.push(start..story_element_end(xml, start)?);
+                    }
+                }
+                if matches!(event, Event::Start(_)) {
+                    stack.push((word, element.local_name().as_ref().to_vec(), before));
+                }
+            }
+            Event::End(_) => {
+                stack.pop();
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    if found.len() != 1 {
+        return Err(Error::Other(
+            "comment move requires one qualified reference run".into(),
+        ));
+    }
+    Ok(found.remove(0))
+}
+
+#[allow(clippy::type_complexity)] // Concrete edit spans, reference bytes and original run span.
+fn comment_move_source_edits(
+    xml: &[u8],
+    selected: &[Range<usize>],
+) -> Result<(Vec<Range<usize>>, Vec<u8>, Range<usize>)> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut stack = Vec::<(bool, Vec<u8>, usize)>::new();
+    let mut reference = None;
+    let mut controls = Vec::new();
+    let mut buffer = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (ns, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(error.to_string()))?;
+        let word = word_element(&ns);
+        drop(ns);
+        match &event {
+            Event::Start(element) | Event::Empty(element) => {
+                if selected.iter().any(|span| span.start == before) {
+                    for (_, _, start) in stack
+                        .iter()
+                        .filter(|(word, name, _)| *word && name == b"sdt")
+                    {
+                        let span = *start..story_element_end(xml, *start)?;
+                        if !controls.contains(&span) {
+                            controls.push(span);
+                        }
+                    }
+                    if word && element.local_name().as_ref() == b"commentReference" {
+                        let start = stack
+                            .iter()
+                            .rev()
+                            .find(|(word, name, _)| *word && name == b"r")
+                            .map(|(_, _, start)| *start)
+                            .ok_or_else(|| {
+                                Error::Other("comment reference has no source run".into())
+                            })?;
+                        if reference
+                            .replace(start..story_element_end(xml, start)?)
+                            .is_some()
+                        {
+                            return Err(Error::Other(
+                                "comment move has duplicate reference runs".into(),
+                            ));
+                        }
+                    }
+                }
+                if matches!(event, Event::Start(_)) {
+                    stack.push((word, element.local_name().as_ref().to_vec(), before));
+                }
+            }
+            Event::End(_) => {
+                stack.pop();
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    let reference_span = reference
+        .ok_or_else(|| Error::Other("comment move has no selected reference run".into()))?;
+    let scope = story_namespace_scope_at(xml, reference_span.start)?;
+    let reference = close_content_fragment_namespaces(&xml[reference_span.clone()], &scope)?;
+    // Only the selected direct reference and run properties travel. Other
+    // children retain their exact source sequence, even when visible text and
+    // opaque producer payload share this run with the reference.
+    let selected_reference = selected
+        .iter()
+        .find(|span| reference_span.contains(&span.start))
+        .ok_or_else(|| Error::Other("comment move reference source was not selected".into()))?;
+    let mut original_reader = quick_xml::Reader::from_reader(&xml[reference_span.clone()]);
+    original_reader
+        .read_event()
+        .map_err(|error| Error::Other(error.to_string()))?;
+    let original_open_end = original_reader.buffer_position() as usize;
+    let mut reader = NsReader::from_reader(reference.as_slice());
+    let mut depth = 0usize;
+    let mut reference_found = false;
+    let mut open_end = 0usize;
+    let mut close_start = 0usize;
+    let mut kept = Vec::new();
+    let mut mixed = false;
+    let mut properties_count = 0usize;
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (ns, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(error.to_string()))?;
+        let word = word_element(&ns);
+        drop(ns);
+        let after = reader.buffer_position() as usize;
+        match &event {
+            Event::Start(element) | Event::Empty(element) => {
+                if depth == 0 {
+                    open_end = after;
+                }
+                if depth == 1 {
+                    let end = if matches!(event, Event::Empty(_)) {
+                        after
+                    } else {
+                        story_element_end(&reference, before)?
+                    };
+                    let is_selected = before
+                        == selected_reference.start - reference_span.start + open_end
+                            - original_open_end;
+                    if is_selected && word && element.local_name().as_ref() == b"commentReference" {
+                        if reference_found {
+                            return Err(Error::Other("comment reference run is ambiguous".into()));
+                        }
+                        reference_found = true;
+                        kept.push(before..end);
+                    } else if word && element.local_name().as_ref() == b"rPr" {
+                        properties_count += 1;
+                        kept.push(before..end);
+                    } else {
+                        mixed = true;
+                    }
+                }
+                if matches!(event, Event::Start(_)) {
+                    depth += 1;
+                }
+            }
+            Event::End(_) => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    close_start = before;
+                }
+            }
+            Event::Text(text) if depth == 1 && !text.iter().all(u8::is_ascii_whitespace) => {
+                mixed = true;
+            }
+            Event::Comment(_) | Event::PI(_) if depth == 1 => {
+                mixed = true;
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    if !reference_found || properties_count > 1 || close_start == 0 {
+        return Err(Error::Other(
+            "comment reference is not a uniquely separable direct run child".into(),
+        ));
+    }
+    let mut transport = reference[..open_end].to_vec();
+    for span in kept {
+        transport.extend_from_slice(&reference[span]);
+    }
+    transport.extend_from_slice(&reference[close_start..]);
+    let mut edits = selected
+        .iter()
+        .filter(|span| !reference_span.contains(&span.start))
+        .cloned()
+        .collect::<Vec<_>>();
+    edits.push(if mixed {
+        selected_reference.clone()
+    } else {
+        reference_span.clone()
+    });
+    controls.sort_by_key(|span| std::cmp::Reverse(span.start));
+    for control in controls {
+        let mut fragment = xml[control.clone()].to_vec();
+        let mut contained = edits
+            .iter()
+            .filter(|span| control.start <= span.start && span.end <= control.end)
+            .cloned()
+            .collect::<Vec<_>>();
+        contained.sort_by_key(|span| span.start);
+        for span in contained.iter().rev() {
+            fragment.drain(span.start - control.start..span.end - control.start);
+        }
+        if pure_empty_google_comment_control(
+            &fragment,
+            &story_namespace_scope_at(xml, control.start)?,
+        )? {
+            edits.retain(|span| !(control.start <= span.start && span.end <= control.end));
+            edits.push(control);
+        }
+    }
+    edits.sort_by_key(|span| span.start);
+    if edits.windows(2).any(|pair| pair[0].end > pair[1].start) {
+        return Err(Error::Other("comment move edits overlap".into()));
+    }
+    Ok((edits, transport, reference_span))
+}
+
+fn pure_empty_google_comment_control(xml: &[u8], scope: &BTreeMap<String, String>) -> Result<bool> {
+    // An authored namespace declaration or any other root attribute is payload.
+    let mut raw_reader = quick_xml::Reader::from_reader(xml);
+    if !matches!(raw_reader.read_event(), Ok(Event::Start(ref root)) if root.attributes().next().is_none())
+    {
+        return Ok(false);
+    }
+    let closed = close_content_fragment_namespaces(xml, scope)?;
+    let mut reader = NsReader::from_reader(closed.as_slice());
+    let mut stack = Vec::<Vec<u8>>::new();
+    let mut tag = false;
+    let mut content = false;
+    let mut buffer = Vec::new();
+    loop {
+        let (ns, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(error.to_string()))?;
+        let word = word_element(&ns);
+        drop(ns);
+        match &event {
+            Event::Start(element) | Event::Empty(element) => {
+                let name = element.local_name().as_ref().to_vec();
+                let parent = stack.last().map(Vec::as_slice);
+                let allowed = word
+                    && matches!(
+                        (parent, name.as_slice()),
+                        (None, b"sdt")
+                            | (Some(b"sdt"), b"sdtPr" | b"sdtContent")
+                            | (Some(b"sdtPr"), b"tag")
+                            | (Some(b"sdtContent"), b"p")
+                    );
+                if !allowed {
+                    return Ok(false);
+                }
+                if name == b"sdtContent" {
+                    if content {
+                        return Ok(false);
+                    }
+                    content = true;
+                }
+                for attr in element.attributes() {
+                    let attr = attr.map_err(|error| Error::Other(error.to_string()))?;
+                    if stack.is_empty()
+                        && (attr.key.as_ref() == b"xmlns"
+                            || attr.key.as_ref().starts_with(b"xmlns:"))
+                    {
+                        continue;
+                    }
+                    let (ns, local) = reader.resolver().resolve_attribute(attr.key);
+                    if name != b"tag" || !word_element(&ns) || local.as_ref() != b"val" || tag {
+                        return Ok(false);
+                    }
+                    tag = attr
+                        .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                        .map_err(|error| Error::Other(error.to_string()))?
+                        .starts_with("goog_rdk_");
+                    if !tag {
+                        return Ok(false);
+                    }
+                }
+                if matches!(event, Event::Start(_)) {
+                    stack.push(name);
+                }
+            }
+            Event::End(_) => {
+                stack.pop();
+            }
+            Event::Text(text) if text.iter().all(u8::is_ascii_whitespace) => {}
+            Event::Eof => break,
+            _ => return Ok(false),
+        }
+        buffer.clear();
+    }
+    Ok(tag && content)
+}
+
 fn story_element_end(xml: &[u8], start: usize) -> Result<usize> {
     let fragment = xml
         .get(start..)
@@ -6097,19 +6559,20 @@ fn story_namespace_scopes_at(
         {
             Event::Start(element) => {
                 let mut scope = scopes.last().cloned().unwrap_or_default();
-                update_story_namespace_scope(&mut scope, &element)?;
+                // Excerpts retain their own declarations on the original elements.
+                // A sibling sequence inherits only the context outside its first element.
                 if requested.contains(&before) {
                     found.insert(before, scope.clone());
                     if found.len() == requested.len() {
                         return Ok(found);
                     }
                 }
+                update_story_namespace_scope(&mut scope, &element)?;
                 scopes.push(scope);
             }
-            Event::Empty(element) => {
+            Event::Empty(_) => {
                 if requested.contains(&before) {
-                    let mut scope = scopes.last().cloned().unwrap_or_default();
-                    update_story_namespace_scope(&mut scope, &element)?;
+                    let scope = scopes.last().cloned().unwrap_or_default();
                     found.insert(before, scope);
                     if found.len() == requested.len() {
                         return Ok(found);
@@ -6181,32 +6644,72 @@ fn scan_story_items_with_scope(
     Ok(items)
 }
 
-fn local_story_item(
+fn scoped_story_item(
+    xml: &[u8],
     item: &StoryItemSpan,
-    source_start: usize,
-    closed_len: usize,
-    added: usize,
-) -> StoryItemSpan {
-    let local = |position: usize| {
-        if position == source_start {
-            0
-        } else {
-            position - source_start + added
+    scope: &BTreeMap<String, String>,
+) -> Result<(Vec<u8>, StoryItemSpan, usize)> {
+    let (closed, added, scan) = if item.complex_field {
+        // A complex field spans sibling runs. Bind their shared context on an
+        // inert envelope, leaving every source byte and local declaration intact.
+        let original = xml.get(item.scan.clone()).ok_or_else(|| {
+            Error::Other("complex story field lies outside its source part".to_owned())
+        })?;
+        let mut closed = b"<rdocx_story_excerpt".to_vec();
+        for (prefix, namespace) in scope {
+            closed.extend_from_slice(b" xmlns");
+            if !prefix.is_empty() {
+                closed.push(b':');
+                closed.extend_from_slice(prefix.as_bytes());
+            }
+            closed.extend_from_slice(b"=\"");
+            closed.extend_from_slice(quick_xml::escape::escape(namespace).as_bytes());
+            closed.push(b'"');
         }
+        closed.push(b'>');
+        let added = closed.len();
+        closed.extend_from_slice(original);
+        let end = closed.len();
+        closed.extend_from_slice(b"</rdocx_story_excerpt>");
+        (closed, added, added..end)
+    } else {
+        let (closed, added) = scoped_story_fragment(xml, item.scan.clone(), scope)?;
+        let end = closed.len();
+        (closed, added, 0..end)
     };
-    StoryItemSpan {
+    let source_len = item
+        .scan
+        .end
+        .checked_sub(item.scan.start)
+        .ok_or_else(|| Error::Other("story item has an inverted scan span".to_owned()))?;
+    let local = |position: usize| -> Result<usize> {
+        if !item.complex_field && position == item.scan.start {
+            return Ok(0);
+        }
+        position
+            .checked_sub(item.scan.start)
+            .filter(|relative| *relative <= source_len)
+            .and_then(|relative| relative.checked_add(added))
+            .ok_or_else(|| Error::Other("story item lies outside its scan span".to_owned()))
+    };
+    let full = local(item.full.start)?..local(item.full.end)?;
+    if full.start > full.end {
+        return Err(Error::Other(
+            "story item has an inverted source span".to_owned(),
+        ));
+    }
+    let local = StoryItemSpan {
         kind: item.kind,
-        full: local(item.full.start)..local(item.full.end),
-        scan: 0..closed_len,
+        full,
+        scan,
         direct_owner_child: item.direct_owner_child,
         complex_field: item.complex_field,
-        complex_ancestors: item
-            .complex_ancestors
-            .iter()
-            .map(|ancestor| local(*ancestor))
-            .collect(),
+        // Ancestors gate typed discovery in scan_story_items. Neither excerpt
+        // scanner consumes them, and an external ancestor has no local offset.
+        complex_ancestors: Vec::new(),
         sdt_context: item.sdt_context,
-    }
+    };
+    Ok((closed, local, added))
 }
 
 fn story_item_text_with_scope(
@@ -6214,8 +6717,7 @@ fn story_item_text_with_scope(
     item: &StoryItemSpan,
     scope: &BTreeMap<String, String>,
 ) -> Result<Option<String>> {
-    let (closed, added) = scoped_story_fragment(xml, item.scan.clone(), scope)?;
-    let local = local_story_item(item, item.scan.start, closed.len(), added);
+    let (closed, local, _) = scoped_story_item(xml, item, scope)?;
     story_item_text(&closed, &local)
 }
 
@@ -6224,24 +6726,34 @@ fn scan_story_item_links_with_scope(
     item: &StoryItemSpan,
     scope: &BTreeMap<String, String>,
 ) -> Result<Vec<StoryLinkSpan>> {
-    let (closed, added) = scoped_story_fragment(xml, item.scan.clone(), scope)?;
-    let local = local_story_item(item, item.scan.start, closed.len(), added);
+    let (closed, local, added) = scoped_story_item(xml, item, scope)?;
     let links = scan_story_item_links(&closed, &local)?;
-    let map = |position: usize| {
-        if position == 0 {
-            item.scan.start
-        } else {
-            item.scan.start + position - added
+    let map = |position: usize| -> Result<usize> {
+        if !item.complex_field && position == 0 {
+            return Ok(item.scan.start);
         }
+        position
+            .checked_sub(added)
+            .and_then(|relative| item.scan.start.checked_add(relative))
+            .filter(|source| item.scan.start <= *source && *source <= item.scan.end)
+            .ok_or_else(|| Error::Other("story hyperlink lies outside its source span".to_owned()))
     };
-    Ok(links
+    links
         .into_iter()
-        .map(|link| StoryLinkSpan {
-            full: map(link.full.start)..map(link.full.end),
-            rel_id: link.rel_id,
-            anchor: link.anchor,
+        .map(|link| {
+            let full = map(link.full.start)?..map(link.full.end)?;
+            if full.start > full.end {
+                return Err(Error::Other(
+                    "story hyperlink has an inverted source span".to_owned(),
+                ));
+            }
+            Ok(StoryLinkSpan {
+                full,
+                rel_id: link.rel_id,
+                anchor: link.anchor,
+            })
         })
-        .collect())
+        .collect()
 }
 
 /// Scan one story's hyperlinks in physical source order, each paired with the
@@ -7264,7 +7776,11 @@ fn restart_merges_continued_below(table: &mut CT_Tbl, row_index: usize) -> Resul
     Ok(())
 }
 
-fn set_story_source_xml(document: &mut Document, part_name: &str, xml: Vec<u8>) -> Result<()> {
+pub(crate) fn set_story_source_xml(
+    document: &mut Document,
+    part_name: &str,
+    xml: Vec<u8>,
+) -> Result<()> {
     if part_name == document.doc_part_name {
         // The main-part story source is canonical XML. It drops a root
         // default namespace and every body declaration, and binds the root
@@ -7302,6 +7818,10 @@ fn set_story_source_xml(document: &mut Document, part_name: &str, xml: Vec<u8>) 
         document.footnotes = rdocx_oxml::footnotes::CT_Footnotes::from_xml(&xml)?;
         document.package.set_part(part_name, xml);
         document.footnotes_dirty = false;
+    } else if document.glossary_part_name.as_deref() == Some(part_name) {
+        document.glossary = Some(rdocx_oxml::glossary::CT_GlossaryDocument::from_xml(&xml)?);
+        document.package.set_part(part_name, xml);
+        document.glossary_dirty = false;
     } else {
         document.package.set_part(part_name, xml);
     }
@@ -8237,6 +8757,419 @@ fn paired_story_owners(
         .collect())
 }
 
+// Anchor capture uses trim_text(true). Apply precisely that parser projection
+// to the original span, while retaining element names, attributes and order.
+fn drawing_capture_key(xml: &[u8]) -> Result<Vec<u8>> {
+    let mut reader = quick_xml::Reader::from_reader(xml);
+    reader.config_mut().trim_text(true);
+    let mut writer = quick_xml::Writer::new(Vec::new());
+    let mut buffer = Vec::new();
+    loop {
+        let event = reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("drawing capture scan failed: {error}")))?;
+        if matches!(event, Event::Eof) {
+            break;
+        }
+        writer
+            .write_event(event)
+            .map_err(|error| Error::Other(error.to_string()))?;
+        buffer.clear();
+    }
+    Ok(writer.into_inner())
+}
+
+/// Bind modeled selected anchors to actual physical story owners before shaping.
+fn bind_text_box_source_owners(
+    body: &mut rdocx_oxml::document::CT_Body,
+    xml: &[u8],
+    root_kind: StoryKind,
+    scope: Range<usize>,
+) -> Result<()> {
+    let owners = scan_story_owners(xml, root_kind)?;
+    let mut anchors = Vec::new();
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("text-box owner scan failed: {error}")))?;
+        if let Event::Start(element) = event {
+            if story_namespace(&namespace) == StoryNamespace::WordDrawing
+                && element.local_name().as_ref() == b"anchor"
+                && scope.contains(&before)
+            {
+                let end = story_element_end(xml, before)?;
+                let contained = owners
+                    .iter()
+                    .filter(|owner| {
+                        owner.kind == StoryKind::TextBox
+                            && before <= owner.full.start
+                            && owner.full.end <= end
+                    })
+                    .collect::<Vec<_>>();
+                // Nested anchors own their own boxes. This anchor's direct box
+                // is the first selected owner in its captured source span.
+                anchors.push((
+                    drawing_capture_key(&xml[before..end])?,
+                    contained.first().map(|owner| owner.owner_index),
+                    false,
+                ));
+            }
+        } else if matches!(event, Event::Eof) {
+            break;
+        }
+        buffer.clear();
+    }
+    prepare_physical_story_projection(body, &mut anchors)
+}
+
+pub(crate) fn prepare_physical_story_projection(
+    body: &mut rdocx_oxml::document::CT_Body,
+    anchors: &mut [(Vec<u8>, Option<usize>, bool)],
+) -> Result<()> {
+    fn consume_raw(raw: &[u8], anchors: &mut [(Vec<u8>, Option<usize>, bool)]) -> Result<()> {
+        let captured = drawing_capture_key(raw)?;
+        let mut reader = quick_xml::Reader::from_reader(captured.as_slice());
+        let mut buffer = Vec::new();
+        loop {
+            let before = reader.buffer_position() as usize;
+            let event = reader
+                .read_event_into(&mut buffer)
+                .map_err(|error| Error::Other(error.to_string()))?;
+            if let Event::Start(element) = &event
+                && element.local_name().as_ref() == b"anchor"
+            {
+                let end = story_element_end(&captured, before)?;
+                let key = &captured[before..end];
+                if let Some((_, _, used)) = anchors
+                    .iter_mut()
+                    .find(|(source, _, used)| !*used && source == key)
+                {
+                    *used = true;
+                }
+            }
+            if matches!(event, Event::Eof) {
+                break;
+            }
+            buffer.clear();
+        }
+        Ok(())
+    }
+    fn drawing(
+        value: &mut rdocx_oxml::drawing::CT_Drawing,
+        anchors: &mut [(Vec<u8>, Option<usize>, bool)],
+    ) -> Result<()> {
+        let Some(anchor) = value.anchor.as_mut() else {
+            return Ok(());
+        };
+        let Some(shape) = anchor.shape.as_mut() else {
+            return Ok(());
+        };
+        shape.source_text_box_owner = if let Some(raw) = &anchor.raw_xml {
+            let key = drawing_capture_key(raw)?;
+            anchors
+                .iter_mut()
+                .find(|(source, _, used)| !*used && *source == key)
+                .and_then(|(_, owner, used)| {
+                    *used = true;
+                    *owner
+                })
+        } else {
+            None
+        };
+        shape_content(shape, anchors)
+    }
+    fn shape_content(
+        shape: &mut rdocx_oxml::drawing::CT_Shape,
+        anchors: &mut [(Vec<u8>, Option<usize>, bool)],
+    ) -> Result<()> {
+        if let Some(body) = &mut shape.text_body {
+            body_content(&mut body.content, anchors)?;
+        } else {
+            for p in &mut shape.text {
+                paragraph(p, anchors)?;
+            }
+        }
+        Ok(())
+    }
+    fn selected_raw(
+        raw: &[u8],
+        selected: &mut rdocx_oxml::drawing::CT_Drawing,
+        anchors: &mut [(Vec<u8>, Option<usize>, bool)],
+    ) -> Result<()> {
+        let selected_key = selected
+            .anchor
+            .as_ref()
+            .and_then(|anchor| anchor.raw_xml.as_deref())
+            .map(drawing_capture_key)
+            .transpose()?;
+        let captured = drawing_capture_key(raw)?;
+        let mut reader = quick_xml::Reader::from_reader(captured.as_slice());
+        let mut buffer = Vec::new();
+        let mut bound = false;
+        loop {
+            let before = reader.buffer_position() as usize;
+            let event = reader
+                .read_event_into(&mut buffer)
+                .map_err(|error| Error::Other(error.to_string()))?;
+            if let Event::Start(element) = &event
+                && element.local_name().as_ref() == b"anchor"
+            {
+                let end = story_element_end(&captured, before)?;
+                let key = &captured[before..end];
+                let owner = anchors
+                    .iter_mut()
+                    .find(|(source, _, used)| !*used && source == key)
+                    .and_then(|(_, owner, used)| {
+                        *used = true;
+                        *owner
+                    });
+                if !bound && owner.is_some() && selected_key.as_deref() == Some(key) {
+                    if let Some(shape) = selected
+                        .anchor
+                        .as_mut()
+                        .and_then(|anchor| anchor.shape.as_mut())
+                    {
+                        shape.source_text_box_owner = owner;
+                        shape_content(shape, anchors)?;
+                    }
+                    bound = true;
+                    let name = element.name().as_ref().to_vec();
+                    reader
+                        .read_to_end_into(quick_xml::name::QName(&name), &mut Vec::new())
+                        .map_err(|error| Error::Other(error.to_string()))?;
+                }
+            }
+            if matches!(event, Event::Eof) {
+                break;
+            }
+            buffer.clear();
+        }
+        if !bound
+            && let Some(shape) = selected
+                .anchor
+                .as_mut()
+                .and_then(|anchor| anchor.shape.as_mut())
+        {
+            shape.source_text_box_owner = None;
+        }
+        Ok(())
+    }
+    fn run(value: &mut CT_R, anchors: &mut [(Vec<u8>, Option<usize>, bool)]) -> Result<()> {
+        let properties = usize::from(value.properties.is_some());
+        let mut selected_index = 0;
+        let mut children = value
+            .extra_xml
+            .iter()
+            .enumerate()
+            .filter_map(|(index, _)| {
+                let encoded = value.extra_xml_positions.get(index).copied();
+                if encoded.is_some_and(CT_R::raw_child_is_root_attributes) {
+                    return None;
+                }
+                let selected = if encoded.is_some_and(CT_R::raw_child_has_alternate_content_drawing)
+                {
+                    let index = selected_index;
+                    selected_index += 1;
+                    Some(index)
+                } else {
+                    None
+                };
+                Some((
+                    encoded.map_or(properties + value.content.len(), CT_R::raw_child_position),
+                    0u8,
+                    index,
+                    selected,
+                ))
+            })
+            .chain(
+                value
+                    .content
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, content)| {
+                        matches!(content, RunContent::Drawing(_)).then_some((
+                            properties + index,
+                            1u8,
+                            index,
+                            None,
+                        ))
+                    }),
+            )
+            .collect::<Vec<_>>();
+        children.sort_unstable();
+        for (_, kind, index, selected) in children {
+            if kind == 1 {
+                if let RunContent::Drawing(value) = &mut value.content[index] {
+                    drawing(value, anchors)?;
+                }
+            } else if let Some(selected) =
+                selected.and_then(|index| value.alt_drawings.get_mut(index))
+            {
+                selected_raw(&value.extra_xml[index], selected, anchors)?;
+            } else {
+                consume_raw(&value.extra_xml[index], anchors)?;
+            }
+        }
+        Ok(())
+    }
+    fn paragraph(value: &mut CT_P, anchors: &mut [(Vec<u8>, Option<usize>, bool)]) -> Result<()> {
+        // Consume every physical revision owner before selecting accepted runs.
+        // Projection metadata is installed in place, never serialized/reparsed.
+        for boundary in 0..=value.runs.len() {
+            let mut owners = value
+                .content_controls
+                .iter()
+                .enumerate()
+                .filter(|(_, (at, _, _, _))| *at == boundary)
+                .map(|(index, (_, slot, _, _))| (1u8, *slot, 0u8, index))
+                .chain(
+                    value
+                        .revisions
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, (at, _, _))| *at == boundary)
+                        .map(|(index, (_, slot, _))| {
+                            let (order, slot) = if let Some(link_index) =
+                                rdocx_oxml::text::hyperlink_revision_index(*slot)
+                            {
+                                match value.hyperlinks.get(link_index) {
+                                    Some(link) if link.preserved_raw_before.is_some() => {
+                                        (1, link.preserved_raw_before.unwrap())
+                                    }
+                                    Some(link) if boundary == link.run_end => (0, 0),
+                                    _ => (2, 0),
+                                }
+                            } else {
+                                (1, *slot)
+                            };
+                            (order, slot, 1u8, index)
+                        }),
+                )
+                .collect::<Vec<_>>();
+            for (raw_slot, (index, (at, _))) in value
+                .extra_xml
+                .iter()
+                .enumerate()
+                .filter(|(_, (at, _))| *at == boundary)
+                .enumerate()
+            {
+                let projected = value
+                    .revisions
+                    .iter()
+                    .any(|(position, slot, _)| position == at && *slot == raw_slot)
+                    || value.hyperlinks.iter().any(|link| {
+                        link.run_start == boundary && link.preserved_raw_before == Some(raw_slot)
+                    });
+                if !projected {
+                    owners.push((1, raw_slot, 2, index));
+                }
+            }
+            owners.sort_unstable();
+            for (_, _, kind, index) in owners {
+                if kind == 1 {
+                    if let Some(p) = value.revisions[index].2.physical_content_paragraph_mut()? {
+                        paragraph(p, anchors)?;
+                    }
+                } else if kind == 0 {
+                    control(&mut value.content_controls[index].3, anchors)?;
+                } else {
+                    consume_raw(&value.extra_xml[index].1, anchors)?;
+                }
+            }
+            if let Some(value) = value.runs.get_mut(boundary) {
+                run(value, anchors)?;
+            }
+        }
+        Ok(())
+    }
+    fn control(value: &mut CT_Sdt, anchors: &mut [(Vec<u8>, Option<usize>, bool)]) -> Result<()> {
+        for boundary in 0..=value.content.len() {
+            for (_, revision) in value
+                .physical_revisions_mut()
+                .iter_mut()
+                .filter(|(at, _)| *at == boundary)
+            {
+                if let Some(p) = revision.physical_content_paragraph_mut()? {
+                    paragraph(p, anchors)?;
+                }
+            }
+            if let Some(content) = value.content.get_mut(boundary) {
+                match content {
+                    SdtContent::Paragraph(p) => paragraph(p, anchors)?,
+                    SdtContent::Run(value) => run(value, anchors)?,
+                    SdtContent::Table(value) => table(value, anchors)?,
+                    SdtContent::Row(value) => row(value, anchors)?,
+                    SdtContent::Cell(value) => cell(value, anchors)?,
+                    SdtContent::ContentControl(value) => control(value, anchors)?,
+                    SdtContent::RawXml(raw) => consume_raw(raw, anchors)?,
+                }
+            }
+        }
+        Ok(())
+    }
+    fn table(value: &mut CT_Tbl, anchors: &mut [(Vec<u8>, Option<usize>, bool)]) -> Result<()> {
+        for boundary in 0..=value.rows.len() {
+            for (_, _, value) in value
+                .content_controls
+                .iter_mut()
+                .filter(|(at, _, _)| *at == boundary)
+            {
+                control(value, anchors)?;
+            }
+            if let Some(value) = value.rows.get_mut(boundary) {
+                row(value, anchors)?;
+            }
+        }
+        Ok(())
+    }
+    fn row(value: &mut CT_Row, anchors: &mut [(Vec<u8>, Option<usize>, bool)]) -> Result<()> {
+        for boundary in 0..=value.cells.len() {
+            for (_, _, value) in value
+                .content_controls
+                .iter_mut()
+                .filter(|(at, _, _)| *at == boundary)
+            {
+                control(value, anchors)?;
+            }
+            if let Some(value) = value.cells.get_mut(boundary) {
+                cell(value, anchors)?;
+            }
+        }
+        Ok(())
+    }
+    fn cell(value: &mut CT_Tc, anchors: &mut [(Vec<u8>, Option<usize>, bool)]) -> Result<()> {
+        for content in &mut value.content {
+            match content {
+                CellContent::Paragraph(value) => paragraph(value, anchors)?,
+                CellContent::Table(value) => table(value, anchors)?,
+                CellContent::ContentControl(value) => control(value, anchors)?,
+            }
+        }
+        Ok(())
+    }
+    fn body_content(
+        values: &mut [BodyContent],
+        anchors: &mut [(Vec<u8>, Option<usize>, bool)],
+    ) -> Result<()> {
+        for value in values {
+            match value {
+                BodyContent::Paragraph(value) => paragraph(value, anchors)?,
+                BodyContent::Table(value) => table(value, anchors)?,
+                BodyContent::ContentControl(value) => control(value, anchors)?,
+                BodyContent::RawXml(raw) => consume_raw(raw, anchors)?,
+            }
+        }
+        Ok(())
+    }
+    let mut candidate = body.clone();
+    body_content(&mut candidate.content, anchors)?;
+    *body = candidate;
+    Ok(())
+}
+
 fn structural_fingerprint(xml: &[u8]) -> Result<u64> {
     const OFFSET: u64 = 0xcbf29ce484222325;
     const PRIME: u64 = 0x100000001b3;
@@ -8392,7 +9325,24 @@ fn scan_story_control_paragraphs(xml: &[u8], control: &StoryItemSpan) -> Result<
                 }
                 stack.push((is_word, name, before));
             }
-            Event::Empty(_) => {}
+            Event::Empty(element) => {
+                let direct_content = stack
+                    .last()
+                    .is_some_and(|(word, parent, _)| *word && parent.as_slice() == b"sdtContent");
+                let owning_control = stack
+                    .iter()
+                    .rev()
+                    .find(|(word, local, _)| *word && local.as_slice() == b"sdt");
+                if before >= control.full.start
+                    && before < control.full.end
+                    && is_word
+                    && element.local_name().as_ref() == b"p"
+                    && direct_content
+                    && owning_control.is_some_and(|(_, _, start)| *start == control.full.start)
+                {
+                    paragraphs.push(before..after);
+                }
+            }
             Event::End(_) => {
                 stack.pop();
             }
@@ -12163,10 +13113,12 @@ impl Document {
             visit_body_paragraphs_mut(&mut self.document.body.content, &mut |paragraph| {
                 let _ = paragraph.remap_authored_bookmark_ids(&remap);
             });
-            for (old, new) in remap {
-                self.identifiers.authored_bookmark_ids.remove(&old);
-                self.identifiers.authored_bookmark_ids.insert(new);
+            for old in remap.keys() {
+                self.identifiers.authored_bookmark_ids.remove(old);
             }
+            self.identifiers
+                .authored_bookmark_ids
+                .extend(remap.values());
         }
         self.canonicalize_toc_bookmark_ids()?;
         Ok(())
@@ -13830,6 +14782,13 @@ impl Document {
 
     pub(crate) fn prepare_and_reopen_staged(mut self) -> Result<Self> {
         self.prepare_staged_package()?;
+        #[cfg(test)]
+        if FAIL_NEXT_STAGED_REOPEN.replace(false) {
+            return self.reopen_prepared_staged_with_limits(PackageReadLimits {
+                max_entries: 0,
+                ..PackageReadLimits::UNBOUNDED
+            });
+        }
         self.reopen_prepared_staged()
     }
 
@@ -14727,6 +15686,96 @@ impl Document {
         Ok(())
     }
 
+    pub(crate) fn generated_table_paragraph_positions(
+        &self,
+    ) -> Result<Vec<(ContentLocation, std::ops::Range<usize>)>> {
+        let mut result = Vec::new();
+        for story in self.stories()? {
+            if story.kind == StoryKind::Comment {
+                continue;
+            }
+            let (source, _) = self.story_source_and_owner(&story)?;
+            let xml = self
+                .package
+                .get_part(&source.part_name)
+                .unwrap_or(source.xml.as_ref());
+            let owner = scan_story_owners(xml, source.root_kind)?
+                .into_iter()
+                .find(|owner| owner.kind == story.kind && owner.owner_index == story.owner_index)
+                .ok_or_else(|| {
+                    Error::Other(
+                        "generated paragraph owner disappeared from retained source".into(),
+                    )
+                })?;
+            for (index, item) in scan_story_items(xml, &owner)?.iter().enumerate() {
+                let spans = match item.kind {
+                    StoryItemKind::Paragraph => vec![(vec![index], item.full.clone())],
+                    StoryItemKind::ContentControl => scan_story_control_paragraphs(xml, item)?
+                        .into_iter()
+                        .enumerate()
+                        .map(|(paragraph, span)| (vec![index, paragraph], span))
+                        .collect(),
+                    _ => continue,
+                };
+                for (path, range) in spans {
+                    let location =
+                        ContentLocation::new(story.clone(), StoryItemKind::Paragraph, path);
+                    self.story_range_paragraph_source(&location)?;
+                    result.push((location, range));
+                }
+            }
+        }
+        result.sort_by_key(|(location, range)| {
+            (location.story().part_name().to_owned(), range.start)
+        });
+        Ok(result)
+    }
+
+    /// Exact physical story-owner content, from the existing checked inventory.
+    pub(crate) fn generated_table_story_sources(&self) -> Result<Vec<GeneratedStoryOwner>> {
+        let mut result = Vec::new();
+        let mut seen = HashSet::new();
+        for source in self.story_sources()? {
+            let xml = if source.part_name == self.doc_part_name {
+                self.package
+                    .get_part(&source.part_name)
+                    .unwrap_or(source.xml.as_ref())
+            } else {
+                source.xml.as_ref()
+            };
+            for owner in scan_story_owners(xml, source.root_kind)? {
+                if matches!(owner.kind, StoryKind::Comment | StoryKind::TableCell)
+                    || !seen.insert((owner.kind, source.part_name.clone(), owner.owner_index))
+                {
+                    continue;
+                }
+                let mut reader = quick_xml::Reader::from_reader(&xml[owner.full.clone()]);
+                let mut buffer = Vec::new();
+                let start = match reader.read_event_into(&mut buffer).map_err(|error| {
+                    Error::Other(format!("story owner start scan failed: {error}"))
+                })? {
+                    Event::Start(_) => owner.full.start + reader.buffer_position() as usize,
+                    Event::Empty(_) => continue,
+                    _ => return Err(Error::Other("story owner has no start element".into())),
+                };
+                let end = story_owner_content_end(xml, &owner)?;
+                let scope = story_namespace_scope_at(xml, start)?;
+                result.push(GeneratedStoryOwner {
+                    story: StoryId {
+                        kind: owner.kind,
+                        part_name: source.part_name.clone(),
+                        owner_index: owner.owner_index,
+                        fingerprint: owner.fingerprint,
+                    },
+                    range: start..end,
+                    xml: xml.to_vec(),
+                    namespaces: scope,
+                });
+            }
+        }
+        Ok(result)
+    }
+
     fn story_sources(&self) -> Result<Vec<StorySource<'_>>> {
         #[cfg(test)]
         STORY_SOURCE_BUILDS.set(STORY_SOURCE_BUILDS.get() + 1);
@@ -15074,14 +16123,19 @@ impl Document {
             StoryKind::Body => {
                 match (self.document.body.content.get_mut(paragraph_slot), ordinal) {
                     (Some(BodyContent::Paragraph(paragraph)), None) => Ok(paragraph),
-                    (Some(BodyContent::ContentControl(control)), Some(mut remaining)) => {
-                        nth_paragraph_in_control(control, &mut remaining).ok_or_else(|| {
-                            Error::Other(format!(
-                                "comment content control has no paragraph {}",
-                                ordinal.unwrap_or_default()
-                            ))
+                    (Some(BodyContent::ContentControl(control)), Some(ordinal)) => control
+                        .content
+                        .iter_mut()
+                        .filter_map(|child| match child {
+                            SdtContent::Paragraph(paragraph) => Some(paragraph),
+                            _ => None,
                         })
-                    }
+                        .nth(ordinal)
+                        .ok_or_else(|| {
+                            Error::Other(format!(
+                                "comment content control has no paragraph {ordinal}"
+                            ))
+                        }),
                     _ => Err(Error::Other("comment body paragraph is missing".to_owned())),
                 }
             }
@@ -15118,11 +16172,38 @@ impl Document {
         }
     }
 
+    /// Insert a checked run through its physical story paragraph owner.
+    pub(crate) fn insert_story_run_staged(
+        &mut self,
+        position: &crate::StoryRunPosition,
+        run: CT_R,
+    ) -> Result<()> {
+        let (source, item) = self.story_range_paragraph_source(&position.location)?;
+        if item.kind != StoryItemKind::Paragraph {
+            return Err(Error::Other(
+                "field insertion needs a paragraph location".into(),
+            ));
+        }
+        let part_name = source.part_name.clone();
+        let mut xml = source.xml.into_owned();
+        let scope = story_namespace_scope_at(&xml, item.full.start)?;
+        let closed = close_content_fragment_namespaces(&xml[item.full.clone()], &scope)?;
+        let mut paragraph = CT_P::from_xml_fragment(&closed)?;
+        paragraph
+            .insert_accepted_run(position.run_index, run)
+            .map_err(|error| Error::Other(format!("field insertion boundary: {error}")))?;
+        let replacement = serialize_content_fragment(BodyContent::Paragraph(paragraph))?;
+        let replacement = close_content_fragment_namespaces(&replacement, &scope)?;
+        xml.splice(item.full, replacement);
+        set_story_source_xml(self, &part_name, xml)
+    }
+
     pub(crate) fn anchor_story_range(
         &mut self,
         range: &crate::comments::StoryRunRange,
         anchor: RangeAnchor<'_>,
         label: &str,
+        endpoint_probe: bool,
     ) -> Result<()> {
         let start = &range.start.location;
         let end = &range.end.location;
@@ -15143,7 +16224,10 @@ impl Document {
                     ))
                     .is_ok_and(|(_, control)| !control.direct_owner_child)
         });
-        if start.story.kind() == StoryKind::Body
+        // Multiple paragraphs must be qualified before either endpoint changes
+        // the owner's fingerprint. The raw path below publishes both spans once.
+        if start == end
+            && start.story.kind() == StoryKind::Body
             && (start.index_path.len() == 2 || end.index_path.len() == 2)
             && !nested_body_control
         {
@@ -15250,14 +16334,326 @@ impl Document {
             let xml = close_content_fragment_namespaces(&xml, &scope)?;
             updated.splice(span, xml);
         }
+        let updated = match anchor {
+            RangeAnchor::Comment(id) if !endpoint_probe => {
+                self.comment_move_source_with_namespaces(&part_name, updated, id, false)?
+            }
+            _ => updated,
+        };
         set_story_source_xml(self, &part_name, updated)
     }
 
-    pub(crate) fn remove_story_range_markers(
+    /// Stage a comment move using physical source edits, then bind the surviving
+    /// destination paragraphs and accepted run boundaries to their new owners.
+    pub(crate) fn move_comment_story_range(
         &mut self,
         entry: &crate::comments::StoryRangeRef,
-        move_comment_reference: bool,
+        target: &StoryRunRange,
+        id: i32,
     ) -> Result<()> {
+        // Validate both endpoints before any source is removed. The probe never
+        // publishes its synthesized reference or changes the requested axis.
+        let mut probe = self.clone_for_staging();
+        probe.anchor_story_range(target, RangeAnchor::Comment(id), "comment", true)?;
+        let endpoints = [&target.start, &target.end]
+            .map(|position| {
+                let (source, paragraph) = self.story_range_paragraph_source(&position.location)?;
+                Ok((source.part_name.clone(), paragraph.full.start))
+            })
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
+        let (part_name, xml, selected) = self.story_range_marker_spans(entry, true)?;
+        let (edits, reference, reference_span) = comment_move_source_edits(&xml, &selected)?;
+        let mut reference_axis = None;
+        for (location, _) in self.story_range_paragraphs()? {
+            if location.story != entry.range().start.location.story {
+                continue;
+            }
+            let (source, paragraph) = self.story_range_paragraph_source(&location)?;
+            if !paragraph.full.contains(&reference_span.start) {
+                continue;
+            }
+            let scope = story_namespace_scope_at(source.xml.as_ref(), paragraph.full.start)?;
+            let raw =
+                close_content_fragment_namespaces(&source.xml[paragraph.full.clone()], &scope)?;
+            let paragraph_model = CT_P::from_xml_fragment(&raw)?;
+            let indices = paragraph_model
+                .accepted_run_paths()
+                .iter()
+                .enumerate()
+                .filter_map(|(index, path)| {
+                    paragraph_model
+                        .accepted_run(path)
+                        .filter(|run| {
+                            run.content.iter().any(|content| {
+                                matches!(content,
+                        RunContent::CommentReference { id: found, .. } if *found == id)
+                            })
+                        })
+                        .map(|_| index)
+                })
+                .collect::<Vec<_>>();
+            if indices.len() != 1 || reference_axis.is_some() {
+                return Err(Error::Other(
+                    "comment reference has no unique accepted run boundary".into(),
+                ));
+            }
+            reference_axis = Some((paragraph.full.start, indices[0]));
+        }
+        let (reference_paragraph, reference_index) = reference_axis.ok_or_else(|| {
+            Error::Other("comment reference is outside the supported accepted run axis".into())
+        })?;
+        let map_offset = |offset: usize| -> Result<usize> {
+            if edits.iter().any(|span| span.contains(&offset)) {
+                return Err(Error::Other(
+                    "comment move destination is inside a removed marker-only owner".into(),
+                ));
+            }
+            Ok(offset
+                - edits
+                    .iter()
+                    .filter(|span| span.end <= offset)
+                    .map(|span| span.len())
+                    .sum::<usize>())
+        };
+        let mut updated = xml;
+        for span in edits.iter().rev() {
+            updated.drain(span.clone());
+        }
+        let updated = self.comment_move_source_with_namespaces(&part_name, updated, id, true)?;
+        set_story_source_xml(self, &part_name, updated)?;
+        let stories = self.stories()?;
+        let rebase = |position: &StoryRunPosition,
+                      endpoint: &(String, usize)|
+         -> Result<StoryRunPosition> {
+            let original = position.location.story();
+            let story = stories
+                .iter()
+                .find(|story| {
+                    story.kind == original.kind
+                        && story.part_name == original.part_name
+                        && story.owner_index == original.owner_index
+                })
+                .ok_or_else(|| Error::Other("comment move destination story disappeared".into()))?;
+            let expected = if endpoint.0 == part_name {
+                map_offset(endpoint.1)?
+            } else {
+                endpoint.1
+            };
+            let (source, owner) = self.story_source_and_owner(story)?;
+            let mut found = None;
+            for (index, item) in scan_story_items(source.xml.as_ref(), &owner)?
+                .iter()
+                .enumerate()
+            {
+                let paths = match item.kind {
+                    StoryItemKind::Paragraph => vec![(vec![index], item.full.start)],
+                    StoryItemKind::ContentControl => {
+                        scan_story_control_paragraphs(source.xml.as_ref(), item)?
+                            .iter()
+                            .enumerate()
+                            .map(|(child, span)| (vec![index, child], span.start))
+                            .collect()
+                    }
+                    _ => Vec::new(),
+                };
+                for (path, offset) in paths {
+                    if offset == expected {
+                        if found.is_some() {
+                            return Err(Error::Other("ambiguous comment move destination".into()));
+                        }
+                        found = Some(path);
+                    }
+                }
+            }
+            let path = found.ok_or_else(|| {
+                Error::Other("comment move destination paragraph disappeared".into())
+            })?;
+            let removed_before_boundary = endpoint.0 == part_name
+                && endpoint.1 == reference_paragraph
+                && position.run_index > reference_index
+                && edits.iter().any(|span| {
+                    span.start <= reference_span.start && reference_span.end <= span.end
+                });
+            Ok(StoryRunPosition {
+                location: ContentLocation::new(story.clone(), StoryItemKind::Paragraph, path),
+                run_index: position.run_index - usize::from(removed_before_boundary),
+            })
+        };
+        let rebound = StoryRunRange {
+            start: rebase(&target.start, &endpoints[0])?,
+            end: rebase(&target.end, &endpoints[1])?,
+        };
+        self.anchor_story_range(&rebound, RangeAnchor::Comment(id), "comment", false)?;
+        // Replace only the uniquely synthesized selected reference run. The
+        // original run carries its namespace closure, formatting and raw attrs.
+        self.restore_comment_reference_run(id, reference)
+    }
+
+    pub(crate) fn remove_comment_source_for_move(
+        &mut self,
+        entry: &crate::comments::StoryRangeRef,
+    ) -> Result<Vec<u8>> {
+        let (part, xml, selected) = self.story_range_marker_spans(entry, true)?;
+        let (edits, reference, _) = comment_move_source_edits(&xml, &selected)?;
+        let mut updated = xml;
+        for span in edits.iter().rev() {
+            updated.drain(span.clone());
+        }
+        let updated = self.comment_move_source_with_namespaces(
+            &part,
+            updated,
+            match entry.kind() {
+                crate::comments::StoryRangeKind::Comment { id } => *id,
+                _ => return Err(Error::Other("expected comment move source".into())),
+            },
+            true,
+        )?;
+        set_story_source_xml(self, &part, updated)?;
+        Ok(reference)
+    }
+
+    pub(crate) fn restore_comment_reference_run(
+        &mut self,
+        id: i32,
+        reference: Vec<u8>,
+    ) -> Result<()> {
+        let ranges = self.story_ranges()?;
+        let matching = ranges
+            .iter()
+            .filter(|entry| {
+                matches!(entry.kind(),
+            crate::comments::StoryRangeKind::Comment { id: found } if *found == id)
+            })
+            .collect::<Vec<_>>();
+        if matching.len() != 1 {
+            return Err(Error::Other(
+                "moved comment has no unique destination range".into(),
+            ));
+        }
+        let (source, owner) =
+            self.story_source_and_owner(matching[0].range().end.location.story())?;
+        let part = source.part_name.clone();
+        let span = comment_reference_run_span(source.xml.as_ref(), &owner.full, id)?;
+        let mut xml = source.xml.into_owned();
+        xml.splice(span, reference);
+        let xml = self.comment_move_source_with_namespaces(&part, xml, id, false)?;
+        set_story_source_xml(self, &part, xml)
+    }
+
+    // Source discovery retains the established canonical fingerprint axis.
+    // Before a move replaces that source, replay its original qualified nested
+    // declarations so the replacement does not erase preserved raw aliases.
+    fn comment_move_source_with_namespaces(
+        &self,
+        part: &str,
+        xml: Vec<u8>,
+        id: i32,
+        source_removal: bool,
+    ) -> Result<Vec<u8>> {
+        if part != self.doc_part_name {
+            return Ok(xml);
+        }
+        let original = self
+            .package
+            .get_part(part)
+            .ok_or_else(|| Error::Other("comment move main source is missing".into()))?;
+        // Apply the same proved source edits to the original namespace authority.
+        // Whole transported runs disappear, while mixed source runs keep their
+        // declarations and every non-reference child in their original order.
+        let mut remaining_source = original.to_vec();
+        if source_removal {
+            let selected = crate::comments::comment_source_markers(original)?
+                .into_iter()
+                .filter(|marker| marker.id == id)
+                .map(|marker| marker.span)
+                .collect::<Vec<_>>();
+            if selected.len() != 3 {
+                return Err(Error::Other(
+                    "comment move original source lacks one qualified pair and reference".into(),
+                ));
+            }
+            let (edits, _, _) = comment_move_source_edits(original, &selected)?;
+            for span in edits.into_iter().rev() {
+                remaining_source.drain(span);
+            }
+        }
+        let original = remaining_source.as_slice();
+        let mut owners = nested_modeled_namespace_owners(original)?;
+        let original_spans = modeled_owner_spans(original)?;
+        let spans = modeled_owner_spans(&xml)?;
+        for owner in &mut owners {
+            let has_pair = |source: &[u8], span: &ModeledOwnerSpan| -> Result<bool> {
+                let mut scope = span
+                    .bindings
+                    .iter()
+                    .map(|(name, uri)| (namespace_prefix(name), uri.clone()))
+                    .collect::<BTreeMap<_, _>>();
+                for (name, uri) in &owner.declarations {
+                    let prefix = namespace_prefix(name);
+                    scope.insert(prefix, uri.clone());
+                }
+                let closed =
+                    close_content_fragment_namespaces(&source[span.start..span.end], &scope)?;
+                Ok(CT_P::comment_range_text_from_source(&closed, id)?.is_some())
+            };
+            let mut original_selected = false;
+            for span in original_spans
+                .iter()
+                .filter(|span| span.local_name == owner.local_name)
+            {
+                let markers = candidate_namespace_owner_markers(
+                    &original[span.start..span.end],
+                    &owner.declarations,
+                    &span.bindings,
+                    &owner.markers,
+                )?;
+                if marker_multiset_matches(&owner.markers, &markers, true)
+                    && has_pair(original, span)?
+                {
+                    original_selected = true;
+                }
+            }
+            let mut matching = Vec::new();
+            for span in spans
+                .iter()
+                .filter(|span| span.local_name == owner.local_name)
+            {
+                let markers = candidate_namespace_owner_markers(
+                    &xml[span.start..span.end],
+                    &owner.declarations,
+                    &span.bindings,
+                    &owner.markers,
+                )?;
+                if marker_multiset_matches(&owner.markers, &markers, true) {
+                    matching.push(span);
+                }
+            }
+            let selected = matching
+                .iter()
+                .map(|span| has_pair(&xml, span))
+                .collect::<Result<Vec<_>>>()?;
+            if original_selected || selected.iter().any(|selected| *selected) {
+                let [span] = matching.as_slice() else {
+                    return Err(Error::Other(
+                        "comment move has ambiguous retained namespace owner".into(),
+                    ));
+                };
+                owner.snapshot = logical_owner_snapshot(
+                    &xml[span.start..span.end],
+                    &span.bindings,
+                    &owner.declarations,
+                )?;
+            }
+        }
+        replay_nested_namespace_declarations(&xml, &owners)
+    }
+
+    fn story_range_marker_spans(
+        &self,
+        entry: &crate::comments::StoryRangeRef,
+        move_comment_reference: bool,
+    ) -> Result<(String, Vec<u8>, Vec<Range<usize>>)> {
         use crate::comments::StoryRangeKind;
         let (source, owner) = self.story_source_and_owner(entry.range().start.location.story())?;
         let part_name = source.part_name.clone();
@@ -15296,7 +16692,7 @@ impl Document {
         reader.config_mut().trim_text(false);
         let mut ranges = Vec::new();
         let mut ordinal = 0usize;
-        let mut stack = Vec::<(bool, Vec<u8>)>::new();
+        let mut stack = Vec::<(bool, Vec<u8>, usize)>::new();
         let mut buffer = Vec::new();
         loop {
             let before = reader.buffer_position() as usize;
@@ -15306,23 +16702,19 @@ impl Document {
             let is_word = word_element(&namespace);
             drop(namespace);
             let after = reader.buffer_position() as usize;
-            let hidden = stack.iter().any(|(word, name)| {
+            let hidden = stack.iter().any(|(word, name, start)| {
                 *word
                     && matches!(
                         name.as_slice(),
-                        b"del"
-                            | b"moveFrom"
-                            | b"txbxContent"
-                            | b"smartTag"
-                            | b"customXml"
-                            | b"fldSimple"
+                        b"del" | b"moveFrom" | b"smartTag" | b"customXml" | b"fldSimple"
                     )
+                    || *word && name == b"txbxContent" && *start > owner.full.start
             });
             if let Event::End(_) = &event {
                 stack.pop();
             }
             if let Event::Start(element) = &event {
-                stack.push((is_word, element.local_name().as_ref().to_vec()));
+                stack.push((is_word, element.local_name().as_ref().to_vec(), before));
             }
             let element = match &event {
                 Event::Start(element) | Event::Empty(element)
@@ -15426,7 +16818,16 @@ impl Document {
                 ranges.len()
             )));
         }
-        let mut updated = xml.to_vec();
+        Ok((part_name, xml.to_vec(), ranges))
+    }
+
+    pub(crate) fn remove_story_range_markers(
+        &mut self,
+        entry: &crate::comments::StoryRangeRef,
+        move_comment_reference: bool,
+    ) -> Result<()> {
+        let (part_name, mut updated, ranges) =
+            self.story_range_marker_spans(entry, move_comment_reference)?;
         for range in ranges.into_iter().rev() {
             updated.splice(range, []);
         }
@@ -15530,34 +16931,309 @@ impl Document {
             .collect())
     }
 
+    pub(crate) fn patch_story_paragraph_field_sources(
+        &mut self,
+        location: &ContentLocation,
+        replacements: &[(Vec<u8>, Vec<u8>)],
+    ) -> Result<()> {
+        // Earlier writes may have changed the owning story's fingerprint.
+        // Refresh only that fingerprint, keeping its physical part and ordinal.
+        let mut location = location.clone();
+        location.story = self
+            .stories()?
+            .into_iter()
+            .find(|story| {
+                story.kind == location.story.kind
+                    && story.part_name == location.story.part_name
+                    && story.owner_index == location.story.owner_index
+            })
+            .ok_or_else(|| {
+                Error::Other("field cache owner disappeared during staging".to_owned())
+            })?;
+        let (source, paragraph) = self.story_range_paragraph_source(&location)?;
+        let part_name = source.part_name.clone();
+        let mut xml = source.xml.into_owned();
+        let mut edits = Vec::new();
+        let mut cursor = 0;
+        for (original, replacement) in replacements {
+            if original.is_empty() {
+                return Err(Error::Other("empty field source identity".to_owned()));
+            }
+            let offset = crate::field::find_typed_field_source(
+                &xml,
+                paragraph.full.start,
+                paragraph.full.end,
+                original,
+                cursor,
+            )?
+            .ok_or_else(|| {
+                Error::Other("field source no longer belongs to its checked paragraph".to_owned())
+            })?;
+            let start = paragraph.full.start + offset;
+            cursor = offset + original.len();
+            edits.push((start..(start + original.len()), replacement));
+        }
+        for (range, replacement) in edits.into_iter().rev() {
+            xml.splice(range, replacement.iter().copied());
+        }
+        set_story_source_xml(self, &part_name, xml)?;
+        self.invalidate_layout();
+        Ok(())
+    }
+
+    pub(crate) fn text_box_cache_paragraphs(&self) -> Result<Vec<TextBoxCacheParagraph>> {
+        let mut result = Vec::new();
+        let mut seen = HashSet::new();
+        for (location, xml) in self.story_range_paragraphs()? {
+            if !matches!(
+                location.story.kind,
+                StoryKind::TextBox | StoryKind::TableCell
+            ) {
+                continue;
+            }
+            let (source, paragraph) = self.story_range_paragraph_source(&location)?;
+            let text_box = scan_story_owners(source.xml.as_ref(), source.root_kind)?
+                .into_iter()
+                .filter(|owner| {
+                    owner.kind == StoryKind::TextBox
+                        && owner.full.start <= paragraph.full.start
+                        && owner.full.end >= paragraph.full.end
+                })
+                .min_by_key(|owner| owner.full.len());
+            if let Some(text_box) = text_box
+                && seen.insert((
+                    source.part_name.clone(),
+                    paragraph.full.start,
+                    paragraph.full.end,
+                ))
+            {
+                result.push(TextBoxCacheParagraph {
+                    location,
+                    xml,
+                    owner_index: text_box.owner_index,
+                    paragraph_index: paragraph.full.start,
+                });
+            }
+        }
+        result.sort_by(|left, right| {
+            (
+                left.location.story.part_name.as_str(),
+                left.owner_index,
+                left.paragraph_index,
+            )
+                .cmp(&(
+                    right.location.story.part_name.as_str(),
+                    right.owner_index,
+                    right.paragraph_index,
+                ))
+        });
+        let mut ordinals = HashMap::<(String, usize), usize>::new();
+        for paragraph in &mut result {
+            let ordinal = ordinals
+                .entry((
+                    paragraph.location.story.part_name.clone(),
+                    paragraph.owner_index,
+                ))
+                .or_default();
+            paragraph.paragraph_index = *ordinal;
+            *ordinal += 1;
+        }
+        Ok(result)
+    }
+
+    /// Snapshot one checked range paragraph, including a paragraph within a block control.
+    /// This does not expand the ordinary story-item inventory.
+    #[doc(hidden)]
+    pub fn story_range_paragraph_snapshot(
+        &self,
+        location: &ContentLocation,
+    ) -> Result<StoryItemSnapshot> {
+        let (source, item) = self.story_range_paragraph_source(location)?;
+        let scope = story_namespace_scope_at(source.xml.as_ref(), item.full.start)?;
+        let xml = close_content_fragment_namespaces(&source.xml.as_ref()[item.full], &scope)?;
+        let text = CT_P::from_xml_fragment(&xml)?.accepted_text();
+        let containing = if let [control, _] = location.index_path() {
+            ContentLocation::new(
+                location.story().clone(),
+                StoryItemKind::ContentControl,
+                vec![*control],
+            )
+        } else {
+            location.clone()
+        };
+        let direct_body_index = StoryItemRef {
+            document: self,
+            location: containing,
+        }
+        .direct_body_index()?;
+        Ok(StoryItemSnapshot {
+            location: location.clone(),
+            direct_body_index,
+            direct_child: location.index_path().len() == 1,
+            text: Some(text),
+            xml,
+        })
+    }
+
+    // Guard the unique newly placed pair against the actual main source after
+    // existing namespace replay. Only this unpublished candidate's document part
+    // is flushed, leaving pending comment models and identifier state untouched.
+    pub(crate) fn comment_literal_range_text(&mut self, id: i32) -> Result<Option<String>> {
+        let xml = self.comment_move_source_with_namespaces(
+            &self.doc_part_name,
+            self.document.to_xml()?,
+            id,
+            false,
+        )?;
+        let part = self.doc_part_name.clone();
+        set_story_source_xml(self, &part, xml)?;
+        self.flush_document_to_package()?;
+        let source = self.package.get_part(&self.doc_part_name).ok_or_else(|| {
+            Error::Other("comment literal guard has no main document source".into())
+        })?;
+        Ok(CT_P::comment_range_text_from_source(source, id)?)
+    }
+
+    // Keep canonical locations and fingerprints while restoring only the proved
+    // namespace context used by rich comment projection. Physical event offsets
+    // qualify every owner before a restored declaration can reinterpret a name.
+    fn namespace_restored_main_source(&self) -> Result<Vec<u8>> {
+        let canonical = self.document.to_xml()?;
+        let original = self
+            .package
+            .get_part(&self.doc_part_name)
+            .ok_or_else(|| Error::Other("rich comment projection has no main source".into()))?;
+        let mut namespace_owners = nested_modeled_namespace_owners(original)?;
+        if namespace_owners.is_empty() {
+            return Ok(canonical);
+        }
+        let canonical_spans = modeled_owner_spans(&canonical)?;
+        let mut needed = Vec::new();
+        for owner in namespace_owners.drain(..) {
+            let original_scope = story_namespace_scope_at(original, owner.source.start)?;
+            let original_owner = close_content_fragment_namespaces(
+                &original[owner.source.clone()],
+                &original_scope,
+            )?;
+            let mut redundant = 0;
+            for target in canonical_spans.iter().filter(|span| {
+                span.local_name == owner.local_name
+                    && owner
+                        .declarations
+                        .iter()
+                        .all(|declaration| span.declarations.contains(declaration))
+            }) {
+                let scope = story_namespace_scope_at(&canonical, target.start)?;
+                let target_owner = close_content_fragment_namespaces(
+                    &canonical[target.start..target.end],
+                    &scope,
+                )?;
+                // Full owner payload, names and attributes prove the unique
+                // source counterpart. Only redundant namespace declarations may
+                // differ, with every resolved namespace fact still identical.
+                if let Some((_, changed)) =
+                    comment_namespace_source_boundaries(&original_owner, &target_owner)?
+                    && changed.is_empty()
+                {
+                    redundant += 1;
+                }
+            }
+            if redundant != 1 {
+                needed.push(owner);
+            }
+        }
+        let restored = replay_nested_namespace_declarations(&canonical, &needed)?;
+        if restored == canonical {
+            return Ok(canonical);
+        }
+        let (boundaries, _) = comment_namespace_source_boundaries(&canonical, &restored)?
+            .ok_or_else(|| {
+                Error::Other("rich comment namespace replay changed physical source".into())
+            })?;
+        let owners = scan_story_owners(&canonical, StoryKind::Body)?;
+        let restored_owners = scan_story_owners(&restored, StoryKind::Body)?;
+        if owners.len() != restored_owners.len()
+            || owners.iter().any(|owner| {
+                !restored_owners.iter().any(|other| {
+                    other.kind == owner.kind
+                        && other.owner_index == owner.owner_index
+                        && boundaries.get(&owner.full.start) == Some(&other.full.start)
+                        && boundaries.get(&owner.full.end) == Some(&other.full.end)
+                })
+            })
+        {
+            return Err(Error::Other(
+                "rich comment namespace replay changes story ownership".into(),
+            ));
+        }
+        Ok(restored)
+    }
+
+    pub(crate) fn comment_story_range_paragraphs(&self) -> Result<Vec<(ContentLocation, Vec<u8>)>> {
+        let mut paragraphs = self.story_range_paragraphs()?;
+        let canonical = self.document.to_xml()?;
+        let restored = self.namespace_restored_main_source()?;
+        if restored == canonical {
+            return Ok(paragraphs);
+        }
+        let (boundaries, _) = comment_namespace_source_boundaries(&canonical, &restored)?
+            .ok_or_else(|| {
+                Error::Other("rich comment namespace replay changed physical source".into())
+            })?;
+        let owners = scan_story_owners(&canonical, StoryKind::Body)?;
+        let mut paragraph_spans = HashMap::new();
+        for owner in &owners {
+            let story = StoryId {
+                kind: owner.kind,
+                part_name: self.doc_part_name.clone(),
+                owner_index: owner.owner_index,
+                fingerprint: owner.fingerprint,
+            };
+            for (location, span) in story_range_paragraph_spans(&canonical, owner, &story)? {
+                if paragraph_spans.insert(location, span).is_some() {
+                    return Err(Error::Other(
+                        "rich comment has duplicate physical paragraph path".into(),
+                    ));
+                }
+            }
+        }
+        let scopes = story_namespace_scopes_at(
+            &restored,
+            paragraph_spans
+                .values()
+                .filter_map(|span| boundaries.get(&span.start).copied()),
+        )?;
+        for (location, xml) in &mut paragraphs {
+            if location.story.part_name != self.doc_part_name {
+                continue;
+            }
+            let span = paragraph_spans.get(location).ok_or_else(|| {
+                Error::Other("rich comment paragraph has no checked physical path".into())
+            })?;
+            let start = *boundaries.get(&span.start).ok_or_else(|| {
+                Error::Other("rich comment paragraph has no physical namespace boundary".into())
+            })?;
+            let end = *boundaries.get(&span.end).ok_or_else(|| {
+                Error::Other("rich comment paragraph has no physical namespace boundary".into())
+            })?;
+            let scope = scopes.get(&start).ok_or_else(|| {
+                Error::Other("rich comment paragraph namespace scope was not inventoried".into())
+            })?;
+            *xml = close_content_fragment_namespaces(&restored[start..end], scope)?;
+        }
+        Ok(paragraphs)
+    }
+
     pub(crate) fn story_range_paragraphs(&self) -> Result<Vec<(ContentLocation, Vec<u8>)>> {
         let mut paragraphs = Vec::new();
         for (story_index, story) in self.stories()?.into_iter().enumerate() {
             let (source, owner) = self.story_source_and_owner(&story)?;
             let source_xml = source.xml.as_ref();
-            for (index, item) in scan_story_items(source_xml, &owner)?.iter().enumerate() {
-                let spans = match item.kind {
-                    StoryItemKind::Paragraph => vec![(vec![index], item.full.clone())],
-                    StoryItemKind::ContentControl => {
-                        scan_story_control_paragraphs(source_xml, item)?
-                            .into_iter()
-                            .enumerate()
-                            .map(|(paragraph_index, span)| (vec![index, paragraph_index], span))
-                            .collect()
-                    }
-                    _ => continue,
-                };
-                for (path, span) in spans {
-                    let scope = story_namespace_scope_at(source_xml, span.start)?;
-                    let order = span.start;
-                    let xml = close_content_fragment_namespaces(&source_xml[span], &scope)?;
-                    paragraphs.push((
-                        story_index,
-                        order,
-                        ContentLocation::new(story.clone(), StoryItemKind::Paragraph, path),
-                        xml,
-                    ));
-                }
+            for (location, span) in story_range_paragraph_spans(source_xml, &owner, &story)? {
+                let scope = story_namespace_scope_at(source_xml, span.start)?;
+                let order = span.start;
+                let xml = close_content_fragment_namespaces(&source_xml[span], &scope)?;
+                paragraphs.push((story_index, order, location, xml));
             }
         }
         paragraphs.sort_by_key(|(story_index, offset, _, _)| (*story_index, *offset));
@@ -16785,6 +18461,10 @@ impl Document {
         let part_name = source.part_name.clone();
         let source_xml = source.xml.into_owned();
         let item = validated_direct_content_item(&source_xml, &owner, location)?;
+        let namespace_scope = story_namespace_scope_at(&source_xml, item.full.start)?;
+        let closed =
+            close_content_fragment_namespaces(&source_xml[item.full.clone()], &namespace_scope)?;
+        Self::refuse_commented_fragment(&closed)?;
         if owner.kind == StoryKind::TableCell
             && item.kind == StoryItemKind::Paragraph
             && direct_story_content_items(&source_xml, &owner)?
@@ -16803,7 +18483,7 @@ impl Document {
             source_part_name: Some(part_name.clone()),
             source_story_kind: Some(location.story.kind),
             source_owner_index: Some(location.story.owner_index),
-            namespace_scope: story_namespace_scope_at(&source_xml, item.full.start)?,
+            namespace_scope,
         };
         reject_section_owning_content_fragment(&fragment)?;
         validate_fragment_relationships(&candidate, &location.story, &fragment)?;
@@ -17404,6 +19084,96 @@ impl Document {
         self.note_story(StoryKind::Endnote, id)
     }
 
+    /// Omit review state only within transferred body content and its selected notes.
+    pub(crate) fn omit_glossary_selected_body_comments(
+        &mut self,
+        include_final_section_properties: bool,
+    ) -> Result<Vec<u8>> {
+        let part = self.doc_part_name.clone();
+        let mut xml = self
+            .package
+            .get_part(&part)
+            .ok_or_else(|| Error::Other("fragment main source disappeared".into()))?
+            .to_vec();
+        let owner = scan_story_owners(&xml, StoryKind::Body)?
+            .into_iter()
+            .find(|owner| owner.kind == StoryKind::Body)
+            .ok_or_else(|| Error::Other("document fragment has no main body".into()))?;
+        let start = direct_story_content_items(&xml, &owner)?
+            .first()
+            .map(|item| item.full.start)
+            .ok_or_else(|| Error::Other("document fragment main body is empty".into()))?;
+        let end = story_owner_content_end(&xml, &owner)?;
+        let selected = package_authoritative_body_fragment(&xml, false, &BTreeMap::new())?;
+        self.omit_glossary_fragment_note_comments(&part, &selected)?;
+        let omitted = Self::omit_comment_markers(&selected)?;
+        if include_final_section_properties {
+            for item in scan_story_items(&xml, &owner)? {
+                if item.direct_owner_child
+                    && item.kind == StoryItemKind::PreservedNode
+                    && content_fragment_root_is_section_properties(&xml, &item)?
+                {
+                    let scope = story_namespace_scope_at(&xml, item.full.start)?;
+                    let section =
+                        close_content_fragment_namespaces(&xml[item.full.clone()], &scope)?;
+                    self.omit_glossary_fragment_note_comments(&part, &section)?;
+                    xml.splice(item.full, Self::omit_comment_markers(&section)?);
+                    break;
+                }
+            }
+        }
+        xml.splice(start..end, omitted);
+        set_story_source_xml(self, &part, xml.clone())?;
+        Ok(xml)
+    }
+
+    /// Omit only selected note review markers before glossary dependency capture.
+    pub(crate) fn omit_glossary_fragment_note_comments(
+        &mut self,
+        source_part: &str,
+        selected: &[u8],
+    ) -> Result<()> {
+        let mut pending = crate::field::fragment_note_references(selected)?;
+        let mut seen = HashSet::new();
+        while let Some((kind, id)) = pending.pop() {
+            if !seen.insert((kind, id)) {
+                continue;
+            }
+            let relationship_type = match kind {
+                StoryKind::Footnote => rel_types::FOOTNOTES,
+                StoryKind::Endnote => rel_types::ENDNOTES,
+                _ => return Err(Error::Other("invalid glossary note dependency kind".into())),
+            };
+            if part_name_identity(source_part) != part_name_identity(&self.doc_part_name)
+                && self
+                    .package
+                    .get_part_rels(source_part)
+                    .iter()
+                    .flat_map(|rels| &rels.items)
+                    .any(|relationship| relationship.rel_type == relationship_type)
+            {
+                return Err(Error::Other(format!(
+                    "cannot project glossary-local {kind:?} {id} through main numeric note ownership"
+                )));
+            }
+            let story = self.note_story(kind, id)?.ok_or_else(|| {
+                Error::Other(format!(
+                    "glossary fragment {kind:?} {id} has no proved main note owner"
+                ))
+            })?;
+            let (source, owner) = self.story_source_and_owner(&story)?;
+            let part = source.part_name;
+            let mut xml = source.xml.into_owned();
+            let scope = story_namespace_scope_at(&xml, owner.full.start)?;
+            let note = close_content_fragment_namespaces(&xml[owner.full.clone()], &scope)?;
+            pending.extend(crate::field::fragment_note_references(&note)?);
+            let omitted = Self::omit_comment_markers(&note)?;
+            xml.splice(owner.full, omitted);
+            set_story_source_xml(self, &part, xml)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn fragment_note_dependency(
         &self,
         kind: StoryKind,
@@ -17421,6 +19191,104 @@ impl Document {
             source.part_name,
             close_content_fragment_namespaces(&xml[owner.full], &scope)?,
         ))
+    }
+
+    pub(crate) fn fragment_comment_dependency(&self, id: i32) -> Result<(String, Vec<u8>)> {
+        let part = self.comments_part_name.as_ref().ok_or_else(|| {
+            Error::Other("REF f annotation has no relationship-owned comments part".into())
+        })?;
+        let comments = self
+            .comments
+            .as_ref()
+            .ok_or_else(|| Error::Other("REF f annotation has no source definitions".into()))?;
+        let matching = comments
+            .comments
+            .iter()
+            .enumerate()
+            .filter(|(_, comment)| comment.id == id)
+            .collect::<Vec<_>>();
+        if matching.len() != 1 {
+            return Err(Error::Other(
+                "REF f annotation source ID is missing or ambiguous".into(),
+            ));
+        }
+        let owners = self
+            .stories()?
+            .into_iter()
+            .filter(|story| story.kind == StoryKind::Comment && story.part_name == *part)
+            .collect::<Vec<_>>();
+        if owners.len() != comments.comments.len() {
+            return Err(Error::Other(
+                "REF f annotation owner inventory differs from its definitions".into(),
+            ));
+        }
+        let (source, owner) = self.story_source_and_owner(&owners[matching[0].0])?;
+        let scope = story_namespace_scope_at(source.xml.as_ref(), owner.full.start)?;
+        Ok((
+            source.part_name,
+            close_content_fragment_namespaces(&source.xml.as_ref()[owner.full], &scope)?,
+        ))
+    }
+
+    pub(crate) fn publish_fragment_comment_staged(
+        &mut self,
+        part: &str,
+        xml: Vec<u8>,
+        replace_id: Option<i32>,
+    ) -> Result<()> {
+        if self.comments_part_name.as_deref() != Some(part) {
+            return Err(Error::Other(
+                "REF f annotation copy has a different relationship owner".into(),
+            ));
+        }
+        let source = self
+            .package
+            .get_part(part)
+            .ok_or_else(|| Error::Other("REF f destination comments part is missing".into()))?;
+        let updated = if let Some(id) = replace_id {
+            let matching = self
+                .comments
+                .as_ref()
+                .ok_or_else(|| {
+                    Error::Other("REF f cached annotation definitions are absent".into())
+                })?
+                .comments
+                .iter()
+                .enumerate()
+                .filter(|(_, comment)| comment.id == id)
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>();
+            if matching.len() != 1 {
+                return Err(Error::Other(
+                    "REF f cached annotation owner is missing or ambiguous".into(),
+                ));
+            }
+            let owners = self
+                .stories()?
+                .into_iter()
+                .filter(|story| story.kind == StoryKind::Comment && story.part_name == part)
+                .collect::<Vec<_>>();
+            if owners.len() != self.comments.as_ref().unwrap().comments.len() {
+                return Err(Error::Other(
+                    "REF f cached annotation physical owners differ from their definitions".into(),
+                ));
+            }
+            let (owner_source, owner) = self.story_source_and_owner(&owners[matching[0]])?;
+            if owner_source.part_name != part {
+                return Err(Error::Other(
+                    "REF f cached annotation has a different relationship owner".into(),
+                ));
+            }
+            let mut updated = source.to_vec();
+            updated.splice(owner.full, xml);
+            updated
+        } else {
+            append_story_fragments_to_root(source, b"comments", b"comment", &[xml])?
+        };
+        self.comments = Some(rdocx_oxml::comments::CT_Comments::from_xml(&updated)?);
+        self.package.set_part(part, updated);
+        self.comments_dirty = false;
+        Ok(())
     }
 
     pub(crate) fn ensure_fragment_note_part_staged(&mut self, kind: StoryKind) -> Result<String> {
@@ -17459,11 +19327,12 @@ impl Document {
         Ok(part)
     }
 
-    pub(crate) fn append_fragment_note_staged(
+    pub(crate) fn publish_fragment_note_staged(
         &mut self,
         kind: StoryKind,
         part_name: &str,
         note_xml: Vec<u8>,
+        replace_id: Option<i32>,
     ) -> Result<()> {
         let source = self.package.get_part(part_name).ok_or_else(|| {
             Error::Other(format!(
@@ -17475,7 +19344,23 @@ impl Document {
             StoryKind::Endnote => (b"endnotes".as_slice(), b"endnote".as_slice()),
             _ => return Err(Error::Other("invalid fragment note story kind".to_owned())),
         };
-        let updated = append_story_fragments_to_root(source, root, item, &[note_xml])?;
+        let updated = if let Some(id) = replace_id {
+            let story = self.note_story(kind, id)?.ok_or_else(|| {
+                Error::Other("REF f cached note replacement owner is absent".into())
+            })?;
+            let (owner_source, owner) = self.story_source_and_owner(&story)?;
+            if owner_source.part_name != part_name {
+                return Err(Error::Other(
+                    "REF f cached note replacement has a different relationship owner".into(),
+                ));
+            }
+            let mut updated = source.to_vec();
+            updated.splice(owner.full, note_xml);
+            rdocx_oxml::footnotes::CT_Footnotes::from_xml(&updated)?;
+            updated
+        } else {
+            append_story_fragments_to_root(source, root, item, &[note_xml])?
+        };
         self.package.set_part(part_name, updated);
         Ok(())
     }
@@ -17662,6 +19547,7 @@ impl Document {
         let document_part = candidate.doc_part_name.clone();
         set_story_source_xml(&mut candidate, &document_part, without_references)?;
         set_story_source_xml(&mut candidate, &part_name, notes_xml)?;
+        candidate.reconcile_comment_removal(self)?;
         let reopened = candidate.prepare_and_reopen_staged()?;
         self.commit_staged_mutation(reopened);
         Ok(())
@@ -17995,9 +19881,32 @@ impl Document {
         }
         table.rows.remove(row_index);
         validate_table_topology(table)?;
+        candidate.reconcile_comment_removal(self)?;
         let reopened = candidate.prepare_and_reopen_staged()?;
         self.commit_staged_mutation(reopened);
         Ok(true)
+    }
+
+    /// Set one body's table cell text through a checked package transaction.
+    #[doc(hidden)]
+    pub fn try_set_cell_text(
+        &mut self,
+        table: usize,
+        row: usize,
+        cell: usize,
+        text: &str,
+    ) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        candidate
+            .table_mut(table)
+            .ok_or_else(|| Error::Other(format!("table index {table} is out of range")))?
+            .cell(row, cell)
+            .ok_or_else(|| Error::Other(format!("cell {row}:{cell} is out of range")))?
+            .try_set_text(text)?;
+        candidate.reconcile_comment_removal(self)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
     }
 
     /// Freshen the document-wide identities carried by a copied table row.
@@ -18206,28 +20115,41 @@ impl Document {
     /// A direct body paragraph has its one-segment story item path. A
     /// paragraph inside a block content control, which has no story item of
     /// its own, has a two-segment path: the control's story item index, then
-    /// the paragraph's position among the control's paragraphs. Only
-    /// [`Self::add_story_comment`] accepts the two-segment form. Returns
-    /// `None` when the index is out of range.
+    /// the paragraph's position among the control's paragraphs. Comment
+    /// operations and scoped literal replacement accept this form. Returns
+    /// `None` when the index is out of range or the paragraph belongs to a
+    /// nested control or table beyond this two-segment path.
     pub fn paragraph_story_location(
         &self,
         paragraph_index: usize,
     ) -> Result<Option<ContentLocation>> {
-        let mut remaining = paragraph_index;
-        let mut target = None;
-        for (slot, child) in self.document.body.content.iter().enumerate() {
-            let count = match child {
-                BodyContent::Paragraph(_) => 1,
-                BodyContent::ContentControl(control) => paragraph_count_in_control(control),
-                BodyContent::Table(_) | BodyContent::RawXml(_) => 0,
-            };
-            if remaining < count {
-                let ordinal = matches!(child, BodyContent::ContentControl(_)).then_some(remaining);
-                target = Some((slot, ordinal));
-                break;
-            }
-            remaining -= count;
-        }
+        let Some(paragraph) = self.paragraph(paragraph_index) else {
+            return Ok(None);
+        };
+        let selected = paragraph.inner;
+        // A facade handle counts recursively. The checked two-segment path
+        // counts only paragraphs directly owned by the outer block control.
+        let target = self
+            .document
+            .body
+            .content
+            .iter()
+            .enumerate()
+            .find_map(|(slot, child)| match child {
+                BodyContent::Paragraph(paragraph) if std::ptr::eq(paragraph, selected) => {
+                    Some((slot, None))
+                }
+                BodyContent::ContentControl(control) => control
+                    .content
+                    .iter()
+                    .filter_map(|child| match child {
+                        SdtContent::Paragraph(paragraph) => Some(paragraph),
+                        _ => None,
+                    })
+                    .position(|paragraph| std::ptr::eq(paragraph, selected))
+                    .map(|ordinal| (slot, Some(ordinal))),
+                _ => None,
+            });
         let Some((slot, ordinal)) = target else {
             return Ok(None);
         };
@@ -18263,10 +20185,24 @@ impl Document {
 
     /// Remove the content at the given body index.
     ///
-    /// Returns `true` if an element was removed, `false` if the index was out of bounds.
+    /// Returns false when the index is absent or safe removal is refused.
+    /// Use [`Self::try_remove_content`] to distinguish a refusal from an absent index.
     pub fn remove_content(&mut self, index: usize) -> bool {
-        self.invalidate_layout();
-        self.document.body.remove(index).is_some()
+        self.try_remove_content(index).unwrap_or(false)
+    }
+
+    /// Remove a direct body child and its wholly owned comment threads.
+    /// Partial comment cuts and unprovable companion ownership fail atomically.
+    pub fn try_remove_content(&mut self, index: usize) -> Result<bool> {
+        if index >= self.document.body.content.len() {
+            return Ok(false);
+        }
+        let mut candidate = self.clone_for_staging();
+        candidate.document.body.remove(index);
+        candidate.reconcile_comment_removal(self)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(true)
     }
 
     // ---- Image support ----
@@ -18564,8 +20500,9 @@ impl Document {
     /// Resolve the public reader projection for one numbering level.
     ///
     /// `has_unmodeled_properties` reports extra XML or attributes attached to
-    /// this numbering instance, definition, or level. Modeled producer metadata
-    /// and raw preservation overlays for level properties are not reported.
+    /// this numbering instance, definition, or level, excluding retained XML
+    /// namespace declarations. Modeled producer metadata and raw preservation
+    /// overlays for level properties are not reported.
     pub fn numbering_level(&self, num_id: u32, level: u32) -> Option<NumberingLevel<'_>> {
         if num_id == 0 {
             return None;
@@ -18611,11 +20548,14 @@ impl Document {
             template_code: level.template_code.as_deref(),
             tentative: level.tentative,
             has_unmodeled_properties: !instance.extra_xml.is_empty()
-                || !instance.extra_attributes.is_empty()
                 || !definition.extra_xml.is_empty()
-                || !definition.extra_attributes.is_empty()
                 || !level.extra_xml.is_empty()
-                || !level.extra_attributes.is_empty(),
+                || instance
+                    .extra_attributes
+                    .iter()
+                    .chain(&definition.extra_attributes)
+                    .chain(&level.extra_attributes)
+                    .any(|(name, _)| name != "xmlns" && !name.starts_with("xmlns:")),
             has_paragraph_presentation: level.ppr.as_ref().is_some_and(|properties| {
                 Self::has_list_paragraph_presentation(level.ilvl, properties)
             }),
@@ -18791,44 +20731,72 @@ impl Document {
     /// Creates a header part with the given text and references it from
     /// the section properties.
     pub fn set_header(&mut self, text: &str) {
+        self.try_set_header(text)
+            .expect("an in-memory document can install a header");
+    }
+
+    /// Replace the header atomically, refusing unsafe comment removal.
+    pub fn try_set_header(&mut self, text: &str) -> Result<()> {
         let mut candidate = self.clone_for_staging();
         candidate.invalidate_layout();
-        candidate
-            .set_header_footer_part(text, true, HdrFtrType::Default)
-            .expect("an in-memory document can install a header");
+        candidate.set_header_footer_part(text, true, HdrFtrType::Default)?;
+        candidate.reconcile_comment_removal(self)?;
+        candidate.clone_for_staging().prepare_and_reopen_staged()?;
         self.commit_staged_mutation(candidate);
+        Ok(())
     }
 
     /// Set the default footer text.
     pub fn set_footer(&mut self, text: &str) {
+        self.try_set_footer(text)
+            .expect("an in-memory document can install a footer");
+    }
+
+    /// Replace the footer atomically, refusing unsafe comment removal.
+    pub fn try_set_footer(&mut self, text: &str) -> Result<()> {
         let mut candidate = self.clone_for_staging();
         candidate.invalidate_layout();
-        candidate
-            .set_header_footer_part(text, false, HdrFtrType::Default)
-            .expect("an in-memory document can install a footer");
+        candidate.set_header_footer_part(text, false, HdrFtrType::Default)?;
+        candidate.reconcile_comment_removal(self)?;
+        candidate.clone_for_staging().prepare_and_reopen_staged()?;
         self.commit_staged_mutation(candidate);
+        Ok(())
     }
 
     /// Set the first-page header text.
     pub fn set_first_page_header(&mut self, text: &str) {
+        self.try_set_first_page_header(text)
+            .expect("an in-memory document can install a first page header");
+    }
+
+    /// Replace the first page header atomically, refusing unsafe comment removal.
+    pub fn try_set_first_page_header(&mut self, text: &str) -> Result<()> {
         let mut candidate = self.clone_for_staging();
         candidate.invalidate_layout();
         candidate.set_different_first_page(true);
-        candidate
-            .set_header_footer_part(text, true, HdrFtrType::First)
-            .expect("an in-memory document can install a first-page header");
+        candidate.set_header_footer_part(text, true, HdrFtrType::First)?;
+        candidate.reconcile_comment_removal(self)?;
+        candidate.clone_for_staging().prepare_and_reopen_staged()?;
         self.commit_staged_mutation(candidate);
+        Ok(())
     }
 
     /// Set the first-page footer text.
     pub fn set_first_page_footer(&mut self, text: &str) {
+        self.try_set_first_page_footer(text)
+            .expect("an in-memory document can install a first page footer");
+    }
+
+    /// Replace the first page footer atomically, refusing unsafe comment removal.
+    pub fn try_set_first_page_footer(&mut self, text: &str) -> Result<()> {
         let mut candidate = self.clone_for_staging();
         candidate.invalidate_layout();
         candidate.set_different_first_page(true);
-        candidate
-            .set_header_footer_part(text, false, HdrFtrType::First)
-            .expect("an in-memory document can install a first-page footer");
+        candidate.set_header_footer_part(text, false, HdrFtrType::First)?;
+        candidate.reconcile_comment_removal(self)?;
+        candidate.clone_for_staging().prepare_and_reopen_staged()?;
         self.commit_staged_mutation(candidate);
+        Ok(())
     }
 
     /// Get the default header text, if set.
@@ -18873,6 +20841,13 @@ impl Document {
                 HdrFtrType::Default,
             )
             .expect("an in-memory document can install a header image");
+        candidate
+            .reconcile_comment_removal(self)
+            .expect("whole-story replacement cannot remove partial or malformed comment ownership");
+        candidate
+            .clone_for_staging()
+            .prepare_and_reopen_staged()
+            .expect("whole-story replacement package preflight failed");
         self.commit_staged_mutation(candidate);
     }
 
@@ -19206,6 +21181,13 @@ impl Document {
                 HdrFtrType::Default,
             )
             .expect("an in-memory document can install a footer image");
+        candidate
+            .reconcile_comment_removal(self)
+            .expect("whole-story replacement cannot remove partial or malformed comment ownership");
+        candidate
+            .clone_for_staging()
+            .prepare_and_reopen_staged()
+            .expect("whole-story replacement package preflight failed");
         self.commit_staged_mutation(candidate);
     }
 
@@ -19230,6 +21212,13 @@ impl Document {
         candidate
             .set_raw_hdr_ftr_with_images(header_xml, images, true, hdr_type)
             .expect("raw header package preflight failed");
+        candidate
+            .reconcile_comment_removal(self)
+            .expect("whole-story replacement cannot remove partial or malformed comment ownership");
+        candidate
+            .clone_for_staging()
+            .prepare_and_reopen_staged()
+            .expect("whole-story replacement package preflight failed");
         self.commit_staged_mutation(candidate);
     }
 
@@ -19245,6 +21234,13 @@ impl Document {
         candidate
             .set_raw_hdr_ftr_with_images(footer_xml, images, false, hdr_type)
             .expect("raw footer package preflight failed");
+        candidate
+            .reconcile_comment_removal(self)
+            .expect("whole-story replacement cannot remove partial or malformed comment ownership");
+        candidate
+            .clone_for_staging()
+            .prepare_and_reopen_staged()
+            .expect("whole-story replacement package preflight failed");
         self.commit_staged_mutation(candidate);
     }
 
@@ -19274,6 +21270,13 @@ impl Document {
                 HdrFtrType::Default,
             )
             .expect("an in-memory document can install a header background image");
+        candidate
+            .reconcile_comment_removal(self)
+            .expect("whole-story replacement cannot remove partial or malformed comment ownership");
+        candidate
+            .clone_for_staging()
+            .prepare_and_reopen_staged()
+            .expect("whole-story replacement package preflight failed");
         self.commit_staged_mutation(candidate);
     }
 
@@ -19298,6 +21301,13 @@ impl Document {
                 HdrFtrType::First,
             )
             .expect("an in-memory document can install a first-page header image");
+        candidate
+            .reconcile_comment_removal(self)
+            .expect("whole-story replacement cannot remove partial or malformed comment ownership");
+        candidate
+            .clone_for_staging()
+            .prepare_and_reopen_staged()
+            .expect("whole-story replacement package preflight failed");
         self.commit_staged_mutation(candidate);
     }
 
@@ -20576,7 +22586,7 @@ impl Document {
         Ok(references)
     }
 
-    fn word_story_part_names(&self) -> Vec<String> {
+    pub(crate) fn word_story_part_names(&self) -> Vec<String> {
         let mut story_parts = vec![self.doc_part_name.clone()];
         if let Some(relationships) = self.package.get_part_rels(&self.doc_part_name) {
             story_parts.extend(
@@ -21503,6 +23513,7 @@ impl Document {
         let mut candidate = self.clone_for_staging();
         candidate.flush_to_package()?;
         let story = candidate.install_empty_section_story(section_index, kind, hdr_type)?;
+        candidate.reconcile_comment_removal(self)?;
         let reopened = candidate.prepare_and_reopen_staged()?;
         let result = reopened
             .section_story(section_index, kind, hdr_type)?
@@ -21532,6 +23543,7 @@ impl Document {
             Some(relationship_id),
         )?;
         candidate.prune_unreachable_authored_section_stories(&removed)?;
+        candidate.reconcile_comment_removal(self)?;
         let reopened = candidate.prepare_and_reopen_staged()?;
         let result = reopened
             .section_story(section_index, kind, hdr_type)?
@@ -21554,6 +23566,7 @@ impl Document {
         let removed =
             candidate.set_direct_section_story_reference(section_index, kind, hdr_type, None)?;
         candidate.prune_unreachable_authored_section_stories(&removed)?;
+        candidate.reconcile_comment_removal(self)?;
         let reopened = candidate.prepare_and_reopen_staged()?;
         self.commit_staged_mutation(reopened);
         Ok(())
@@ -21592,6 +23605,7 @@ impl Document {
             Some(relationship_id),
         )?;
         candidate.prune_unreachable_authored_section_stories(&removed)?;
+        candidate.reconcile_comment_removal(self)?;
         let reopened = candidate.prepare_and_reopen_staged()?;
         let result = reopened
             .section_story(section_index, kind, hdr_type)?
@@ -21611,6 +23625,7 @@ impl Document {
         let mut candidate = self.clone_for_staging();
         candidate.flush_to_package()?;
         candidate.install_empty_section_story(section_index, kind, hdr_type)?;
+        candidate.reconcile_comment_removal(self)?;
         let reopened = candidate.prepare_and_reopen_staged()?;
         let result = reopened
             .section_story(section_index, kind, hdr_type)?
@@ -21868,6 +23883,7 @@ impl Document {
         let mut candidate = self.clone_for_staging();
         let removed_references = candidate.remove_section_in_place(index)?;
         candidate.prune_unreachable_authored_section_stories(&removed_references)?;
+        candidate.reconcile_comment_removal(self)?;
         let reopened = candidate.prepare_and_reopen_staged()?;
         self.commit_staged_mutation(reopened);
         Ok(())
@@ -22091,6 +24107,75 @@ impl Document {
             .collect::<HashSet<_>>();
         let opaque_ids = self.opaque_relationship_ids_from_serialized_story(&modeled_ids)?;
         active_ids.extend(opaque_ids.iter().map(String::as_str));
+        // Imported producer parts stay in the package. Retire only their qualified
+        // marker spans when no modeled, inherited or opaque physical use survives.
+        let retired_targets = removed
+            .iter()
+            .map(|reference| {
+                let relationship = self
+                    .package
+                    .get_part_rels(&self.doc_part_name)
+                    .and_then(|rels| rels.items.iter().find(|rel| rel.id == reference.rel_id))
+                    .ok_or_else(|| {
+                        Error::Other(format!(
+                            "retired section relationship {} is missing",
+                            reference.rel_id
+                        ))
+                    })?;
+                if !relationship_is_internal(relationship)
+                    || !matches!(
+                        relationship.rel_type.as_str(),
+                        rel_types::HEADER | rel_types::FOOTER
+                    )
+                {
+                    return Err(Error::Other(
+                        "retired section relationship is not an internal story".into(),
+                    ));
+                }
+                Ok(OpcPackage::resolve_rel_target(
+                    &self.doc_part_name,
+                    &relationship.target,
+                ))
+            })
+            .collect::<Result<HashSet<_>>>()?;
+        for target in retired_targets {
+            let identity = part_name_identity(&target);
+            let mut used = false;
+            for (owner, relationships) in &self.package.part_rels {
+                for relationship in &relationships.items {
+                    if !relationship_is_internal(relationship)
+                        || part_name_identity(&OpcPackage::resolve_rel_target(
+                            owner,
+                            &relationship.target,
+                        )) != identity
+                    {
+                        continue;
+                    }
+                    if part_name_identity(owner) == part_name_identity(&self.doc_part_name) {
+                        used |= active_ids.contains(relationship.id.as_str());
+                    } else {
+                        let xml = self.package.get_part(owner).ok_or_else(|| {
+                            Error::Other(format!(
+                                "cannot prove incoming section-story ownership from missing {owner}"
+                            ))
+                        })?;
+                        if !xml_relationship_ids_in_order(xml)?.contains(&relationship.id) {
+                            return Err(Error::Other(format!(
+                                "cannot prove opaque incoming section-story relationship {} from {owner}",
+                                relationship.id
+                            )));
+                        }
+                        used = true;
+                    }
+                }
+            }
+            if !used && let Some(xml) = self.package.get_part(&target) {
+                let omitted = Self::omit_comment_markers(xml)?;
+                if omitted != xml {
+                    set_story_source_xml(self, &target, omitted)?;
+                }
+            }
+        }
         let removable_ids = removed
             .iter()
             .map(|reference| reference.rel_id.as_str())
@@ -24718,6 +26803,338 @@ impl Document {
         Ok(count)
     }
 
+    /// Replace literal text only within one checked paragraph, table or block control.
+    /// Matching retains run formatting and never crosses paragraph or wrapper boundaries.
+    /// Count mismatch and preparation failures leave the complete document unchanged.
+    pub fn try_replace_text_at(
+        &mut self,
+        location: &ContentLocation,
+        placeholder: &str,
+        replacement: &str,
+        expected: Option<usize>,
+    ) -> Result<std::result::Result<usize, ReplacementCountMismatch>> {
+        self.try_replace_scoped(
+            ScopedReplacementTarget::Item(location),
+            placeholder,
+            replacement,
+            expected,
+        )
+    }
+
+    /// Replace text in exactly one physical body table cell or one of its paragraphs.
+    /// Whole-cell scope includes supported nested tables and controls.
+    #[doc(hidden)]
+    pub fn try_replace_text_in_cell(
+        &mut self,
+        cell: (usize, usize, usize),
+        paragraph: Option<usize>,
+        placeholder: &str,
+        replacement: &str,
+        expected: Option<usize>,
+    ) -> Result<std::result::Result<usize, ReplacementCountMismatch>> {
+        self.try_replace_scoped(
+            ScopedReplacementTarget::Cell {
+                coordinates: cell,
+                paragraph,
+            },
+            placeholder,
+            replacement,
+            expected,
+        )
+    }
+
+    fn try_replace_scoped(
+        &mut self,
+        target: ScopedReplacementTarget<'_>,
+        placeholder: &str,
+        replacement: &str,
+        expected: Option<usize>,
+    ) -> Result<std::result::Result<usize, ReplacementCountMismatch>> {
+        oxml_core::xml::reject_non_xml_characters("replacement text", replacement)?;
+        let mut candidate = self.clone_for_staging();
+        let (story, path, paragraph) = match target {
+            ScopedReplacementTarget::Item(location) => {
+                if location.is_end
+                    || !matches!(
+                        location.item_kind,
+                        StoryItemKind::Paragraph
+                            | StoryItemKind::Table
+                            | StoryItemKind::ContentControl
+                    )
+                {
+                    return Err(Error::Other("scoped replacement requires an existing paragraph, table or content control".into()));
+                }
+                candidate.story_range_paragraph_source(location)?;
+                (location.story.clone(), Some(location.clone()), None)
+            }
+            ScopedReplacementTarget::Cell {
+                coordinates: (table, row, cell),
+                paragraph,
+            } => {
+                let selected = candidate
+                    .table(table)
+                    .and_then(|t| t.cell(row, cell).map(|c| c.inner as *const CT_Tc))
+                    .ok_or_else(|| {
+                        Error::Other(format!("cell {table}:{row}:{cell} is out of range"))
+                    })?;
+                let xml = candidate.document.to_xml()?;
+                let owners = scan_story_owners(&xml, StoryKind::Body)?;
+                let mut found = None;
+                for owner in owners
+                    .iter()
+                    .filter(|owner| owner.kind == StoryKind::TableCell)
+                {
+                    let (content, mut ordinal) = modeled_main_cell_route(&xml, owner)?;
+                    let modeled = match candidate.document.body.content.get_mut(content) {
+                        Some(BodyContent::Table(t)) => nth_cell_in_table(t, &mut ordinal),
+                        Some(BodyContent::ContentControl(c)) => {
+                            nth_cell_in_control(c, &mut ordinal)
+                        }
+                        _ => None,
+                    };
+                    if modeled.is_some_and(|c| std::ptr::eq(selected, c)) {
+                        found = Some(StoryId {
+                            kind: owner.kind,
+                            part_name: candidate.doc_part_name.clone(),
+                            owner_index: owner.owner_index,
+                            fingerprint: owner.fingerprint,
+                        });
+                        break;
+                    }
+                }
+                (
+                    found.ok_or_else(|| {
+                        Error::Other("cell has no checked physical story owner".into())
+                    })?,
+                    None,
+                    paragraph,
+                )
+            }
+        };
+        // Flush only the private candidate before choosing the preserved physical span.
+        candidate.prepare_staged_package()?;
+        let (canonical, canonical_owner) = candidate.story_source_and_owner(&story)?;
+        let (source, owner) = candidate.fragment_story_source_and_owner(&story)?;
+        let canonical_owners = scan_story_owners(&canonical.xml, canonical.root_kind)?;
+        let actual_owners = scan_story_owners(&source.xml, source.root_kind)?;
+        if canonical_owners
+            .iter()
+            .map(|o| (o.kind, o.owner_index))
+            .collect::<Vec<_>>()
+            != actual_owners
+                .iter()
+                .map(|o| (o.kind, o.owner_index))
+                .collect::<Vec<_>>()
+        {
+            return Err(Error::Other(
+                "scoped replacement namespace context changes physical ownership".into(),
+            ));
+        }
+        let (canonical_span, span) = if let Some(location) = path {
+            let canonical_items = scan_story_items(&canonical.xml, &canonical_owner)?;
+            let index = location.index_path[0];
+            let selected = canonical_items.get(index).ok_or(StoryError::OutOfBounds {
+                index,
+                len: canonical_items.len(),
+            })?;
+            if !selected.direct_owner_child {
+                return Err(Error::Other(
+                    "scoped replacement requires a block owner item".into(),
+                ));
+            }
+            let canonical_direct = direct_story_content_items(&canonical.xml, &canonical_owner)?;
+            let actual_direct = direct_story_content_items(&source.xml, &owner)?;
+            let slot = canonical_direct
+                .iter()
+                .position(|item| item.full == selected.full)
+                .ok_or_else(|| {
+                    Error::Other("scoped replacement has no direct physical slot".into())
+                })?;
+            let item = actual_direct.get(slot).ok_or(StoryError::OutOfBounds {
+                index: slot,
+                len: actual_direct.len(),
+            })?;
+            if item.kind != selected.kind {
+                return Err(StoryError::KindMismatch {
+                    expected: selected.kind,
+                    actual: item.kind,
+                }
+                .into());
+            }
+            if let [_, ordinal] = location.index_path.as_slice() {
+                let canonical_paragraphs = scan_story_control_paragraphs(&canonical.xml, selected)?;
+                let paragraphs = scan_story_control_paragraphs(&source.xml, item)?;
+                let select = |paragraphs: &[Range<usize>]| {
+                    paragraphs
+                        .get(*ordinal)
+                        .cloned()
+                        .ok_or(StoryError::OutOfBounds {
+                            index: *ordinal,
+                            len: paragraphs.len(),
+                        })
+                };
+                (select(&canonical_paragraphs)?, select(&paragraphs)?)
+            } else {
+                (selected.full.clone(), item.full.clone())
+            }
+        } else {
+            (canonical_owner.full.clone(), owner.full.clone())
+        };
+        if source.part_name == candidate.doc_part_name {
+            candidate.prove_scoped_main_source(
+                &canonical.xml,
+                canonical_span,
+                &source.xml,
+                span.clone(),
+            )?;
+        } else if canonical.xml != source.xml || canonical_span != span {
+            return Err(Error::Other(
+                "scoped related-story source correspondence changed".into(),
+            ));
+        }
+        let part = source.part_name.clone();
+        let mut xml = source.xml.into_owned();
+        let scope = story_namespace_scope_at(&xml, span.start)?;
+        let mut raw = close_content_fragment_namespaces(&xml[span.clone()], &scope)?;
+        let count = rdocx_oxml::placeholder::try_replace_in_block(
+            &mut raw,
+            paragraph,
+            placeholder,
+            replacement,
+        )?;
+        if let Some(expected) = expected
+            && count != expected
+        {
+            return Ok(Err(ReplacementCountMismatch {
+                index: 0,
+                placeholder: placeholder.into(),
+                expected,
+                found: count,
+            }));
+        }
+        if count == 0 {
+            return Ok(Ok(0));
+        }
+        xml.splice(span, raw);
+        set_story_source_xml(&mut candidate, &part, xml)?;
+        candidate.prepare_staged_package()?;
+        let limits = PackageReadLimits::UNBOUNDED;
+        #[cfg(test)]
+        let limits = if FAIL_NEXT_SCOPED_REOPEN.replace(false) {
+            PackageReadLimits {
+                max_entries: 0,
+                ..limits
+            }
+        } else {
+            limits
+        };
+        let reopened = candidate.reopen_prepared_staged_with_limits(limits)?;
+        self.commit_staged_mutation(reopened);
+        Ok(Ok(count))
+    }
+
+    // A private model probe distinguishes physical positions even when siblings
+    // contain identical text. Producer normalization is allowed, raw output is
+    // still edited only at the proved retained span.
+    fn prove_scoped_main_source(
+        &self,
+        canonical: &[u8],
+        canonical_span: Range<usize>,
+        original: &[u8],
+        retained_span: Range<usize>,
+    ) -> Result<()> {
+        let restored = self.namespace_restored_main_source()?;
+        let (boundaries, _) = comment_namespace_source_boundaries(canonical, &restored)?
+            .ok_or_else(|| {
+                Error::Other("scoped canonical namespace source changed payload".into())
+            })?;
+        let start = *boundaries.get(&canonical_span.start).ok_or_else(|| {
+            Error::Other("scoped start has no physical namespace boundary".into())
+        })?;
+        let end = *boundaries
+            .get(&canonical_span.end)
+            .ok_or_else(|| Error::Other("scoped end has no physical namespace boundary".into()))?;
+        // One typed serialization establishes the same canonical defaults and
+        // root namespace inventory on both sides before model comparison.
+        let normalize = |xml: &[u8]| -> Result<CT_Document> {
+            Ok(CT_Document::from_xml(
+                &CT_Document::from_xml(xml)?.to_xml()?,
+            )?)
+        };
+        let baseline = normalize(original)?;
+        if normalize(&self.document.to_xml()?)? != baseline || normalize(&restored)? != baseline {
+            return Err(Error::Other(
+                "scoped source has no equivalent checked model projection".into(),
+            ));
+        }
+        let mut identity = 0usize;
+        let marker = loop {
+            let marker = format!("rdocxScopedPositionProof{identity}");
+            if !original
+                .windows(marker.len())
+                .any(|bytes| bytes == marker.as_bytes())
+                && !restored
+                    .windows(marker.len())
+                    .any(|bytes| bytes == marker.as_bytes())
+            {
+                break marker;
+            }
+            identity = identity
+                .checked_add(1)
+                .ok_or_else(|| Error::Other("scoped source proof identity exhausted".into()))?;
+        };
+        let scope = story_namespace_scope_at(&restored, start)?;
+        let selected_closed = close_content_fragment_namespaces(&restored[start..end], &scope)?;
+        let mut reader = NsReader::from_reader(selected_closed.as_slice());
+        let (namespace, event) = reader
+            .read_resolved_event()
+            .map_err(|error| Error::Other(error.to_string()))?;
+        let root = match event {
+            Event::Start(element) | Event::Empty(element) => element,
+            _ => return Err(Error::Other("scoped source proof has no root".into())),
+        };
+        if !word_element(&namespace) {
+            return Err(Error::Other(
+                "scoped source proof needs a qualified Word block".into(),
+            ));
+        }
+        let paragraph =
+            format!(r#"<w:p xmlns:w="{WORD_NAMESPACE}"><w:r><w:t>{marker}</w:t></w:r></w:p>"#);
+        let sentinel = match root.local_name().as_ref() {
+            b"p" => paragraph,
+            b"tbl" => format!(
+                r#"<w:tbl xmlns:w="{WORD_NAMESPACE}"><w:tr><w:tc>{paragraph}</w:tc></w:tr></w:tbl>"#
+            ),
+            b"tc" => format!(r#"<w:tc xmlns:w="{WORD_NAMESPACE}">{paragraph}</w:tc>"#),
+            b"sdt" => format!(
+                r#"<w:sdt xmlns:w="{WORD_NAMESPACE}"><w:sdtPr/><w:sdtContent>{paragraph}</w:sdtContent></w:sdt>"#
+            ),
+            _ => return Err(Error::Other("unsupported scoped source proof kind".into())),
+        };
+        let mut checked_probe = restored;
+        checked_probe.splice(start..end, sentinel.bytes());
+        let mut retained_probe = original.to_vec();
+        retained_probe.splice(retained_span, sentinel.bytes());
+        let checked_model = normalize(&checked_probe)?;
+        let retained_model = normalize(&retained_probe)?;
+        let occurrences = |model: &CT_Document| -> Result<usize> {
+            Ok(model
+                .to_xml()?
+                .windows(marker.len())
+                .filter(|bytes| *bytes == marker.as_bytes())
+                .count())
+        };
+        if occurrences(&checked_model)? != 1
+            || occurrences(&retained_model)? != 1
+            || checked_model != retained_model
+        {
+            return Err(Error::Other(
+                "scoped selection does not identify the same physical source".into(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Replace multiple placeholders at once. Returns total replacements.
     ///
     /// Cheaper than calling [`Self::replace_text`] per entry: the document is
@@ -24932,21 +27349,7 @@ impl Document {
     fn header_footer_rel_ids_for_layout(&self) -> HashSet<String> {
         let even_headers_enabled = self.even_headers_enabled();
         let mut rel_ids = HashSet::new();
-        let sections = self
-            .document
-            .body
-            .content
-            .iter()
-            .filter_map(|content| match content {
-                BodyContent::Paragraph(paragraph) => paragraph
-                    .properties
-                    .as_ref()
-                    .and_then(|properties| properties.sect_pr.as_ref()),
-                BodyContent::Table(_) | BodyContent::ContentControl(_) | BodyContent::RawXml(_) => {
-                    None
-                }
-            })
-            .chain(self.document.body.sect_pr.iter());
+        let sections = rdocx_layout::engine::document_sections(&self.document);
         for section in sections {
             for reference in section.header_refs.iter().chain(&section.footer_refs) {
                 if reference.hdr_ftr_type != HdrFtrType::Even || even_headers_enabled {
@@ -25927,11 +28330,38 @@ impl Document {
     }
 
     /// Build a LayoutInput from the document's current state.
-    fn build_layout_input(&self) -> rdocx_layout::LayoutInput {
+    fn layout_story_body(&self, story: &StoryId) -> Result<rdocx_oxml::document::CT_Body> {
+        let (source, owner) = self.story_source_and_owner(story)?;
+        let xml = source.xml.as_ref();
+        let mut projected = br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>"#.to_vec();
+        for item in direct_story_content_items(xml, &owner)? {
+            let scope = story_namespace_scope_at(xml, item.full.start)?;
+            projected.extend(close_content_fragment_namespaces(&xml[item.full], &scope)?);
+        }
+        projected.extend(b"</w:body></w:document>");
+        Ok(rdocx_oxml::document::CT_Document::from_xml(&projected)?.body)
+    }
+
+    pub(crate) fn build_layout_input(&self) -> rdocx_layout::LayoutInput {
+        let modern_compatibility = self.settings.as_ref().is_some_and(|settings| {
+            settings.compatibility_settings().iter().any(|setting| {
+                setting.name == "compatibilityMode"
+                    && setting.uri == "http://schemas.microsoft.com/office/word"
+                    && setting
+                        .value
+                        .trim()
+                        .parse::<u32>()
+                        .is_ok_and(|mode| mode >= 15)
+            })
+        });
         use oxml_opc::relationship::rel_types;
         use rdocx_layout::{ImageData, LayoutInput};
         use std::collections::HashMap;
 
+        let mut story_part_names = HashMap::from([(
+            rdocx_layout::WordStory::Document,
+            self.doc_part_name.clone(),
+        )]);
         let mut headers: HashMap<String, CT_HdrFtr> = HashMap::new();
         let mut footers: HashMap<String, CT_HdrFtr> = HashMap::new();
         let mut images: HashMap<String, ImageData> = HashMap::new();
@@ -25983,6 +28413,12 @@ impl Document {
                         if let Some(xml) = self.package.get_part(&part_name)
                             && let Ok(hf) = CT_HdrFtr::from_xml(xml)
                         {
+                            story_part_names.insert(
+                                rdocx_layout::WordStory::Header {
+                                    relationship_id: rel.id.clone(),
+                                },
+                                part_name.clone(),
+                            );
                             headers.insert(rel.id.clone(), hf);
                         }
                         insert_part_images(&mut images, &rel.id, &part_name);
@@ -25998,6 +28434,12 @@ impl Document {
                         if let Some(xml) = self.package.get_part(&part_name)
                             && let Ok(hf) = CT_HdrFtr::from_xml(xml)
                         {
+                            story_part_names.insert(
+                                rdocx_layout::WordStory::Footer {
+                                    relationship_id: rel.id.clone(),
+                                },
+                                part_name.clone(),
+                            );
                             footers.insert(rel.id.clone(), hf);
                         }
                         insert_part_images(&mut images, &rel.id, &part_name);
@@ -26051,6 +28493,14 @@ impl Document {
                             OpcPackage::resolve_rel_target(&self.doc_part_name, &rel.target);
                         if let Some(xml) = self.package.get_part(&part_name) {
                             footnotes = rdocx_oxml::footnotes::CT_Footnotes::from_xml(xml).ok();
+                            if let Some(stream) = &footnotes {
+                                for note in &stream.footnotes {
+                                    story_part_names.insert(
+                                        rdocx_layout::WordStory::Footnote { id: note.id },
+                                        part_name.clone(),
+                                    );
+                                }
+                            }
                         }
                     }
                     t if t == rel_types::ENDNOTES => {
@@ -26061,6 +28511,14 @@ impl Document {
                             OpcPackage::resolve_rel_target(&self.doc_part_name, &rel.target);
                         if let Some(xml) = self.package.get_part(&part_name) {
                             endnotes = rdocx_oxml::footnotes::CT_Footnotes::from_xml(xml).ok();
+                            if let Some(stream) = &endnotes {
+                                for note in &stream.footnotes {
+                                    story_part_names.insert(
+                                        rdocx_layout::WordStory::Endnote { id: note.id },
+                                        part_name.clone(),
+                                    );
+                                }
+                            }
                         }
                     }
                     _ => {}
@@ -26123,7 +28581,144 @@ impl Document {
             &footers.keys().cloned().collect(),
         );
 
+        if let Some(story) = self.stories().ok().and_then(|stories| {
+            stories
+                .into_iter()
+                .find(|story| story.kind == StoryKind::Body)
+        }) && let Ok((source, owner)) = self.story_source_and_owner(&story)
+            && bind_text_box_source_owners(
+                &mut document.body,
+                source.xml.as_ref(),
+                source.root_kind,
+                owner.full,
+            )
+            .is_err()
+        {
+            // Binding is atomic. Unresolved physical owners retain their caches.
+        }
+
+        let mut story_bodies = HashMap::new();
+        if let Ok(stories) = self.stories() {
+            for (identity, part_name) in &story_part_names {
+                let kind = match identity {
+                    rdocx_layout::WordStory::Header { .. } => StoryKind::Header,
+                    rdocx_layout::WordStory::Footer { .. } => StoryKind::Footer,
+                    rdocx_layout::WordStory::Footnote { .. } => StoryKind::Footnote,
+                    rdocx_layout::WordStory::Endnote { .. } => StoryKind::Endnote,
+                    _ => continue,
+                };
+                let story = match identity {
+                    rdocx_layout::WordStory::Footnote { id } => {
+                        self.footnote_story(*id).ok().flatten()
+                    }
+                    rdocx_layout::WordStory::Endnote { id } => {
+                        self.endnote_story(*id).ok().flatten()
+                    }
+                    _ => stories
+                        .iter()
+                        .find(|story| story.kind == kind && &story.part_name == part_name)
+                        .cloned(),
+                };
+                if let Some(story) = story
+                    && let Ok(mut body) = self.layout_story_body(&story)
+                {
+                    if let Ok((source, owner)) = self.story_source_and_owner(&story)
+                        && bind_text_box_source_owners(
+                            &mut body,
+                            source.xml.as_ref(),
+                            source.root_kind,
+                            owner.full,
+                        )
+                        .is_err()
+                    {
+                        // The unbound authoritative projection remains renderable.
+                    }
+                    story_bodies.insert(identity.clone(), body);
+                }
+            }
+        }
+
+        // Rendering may consume a sole effects-only default without changing
+        // either authored style part or merging the effects style catalogue.
+        let mut layout_styles = self.styles.clone();
+        if layout_styles.get_default(StyleType::Table).is_none() {
+            let effects = self.package.get_part_rels(&self.doc_part_name).and_then(|rels| {
+                let mut candidates = rels.items.iter().filter(|rel| {
+                    rel.rel_type == "http://schemas.microsoft.com/office/2007/relationships/stylesWithEffects"
+                        && relationship_is_internal(rel)
+                });
+                let rel = candidates.next()?;
+                if candidates.next().is_some() {
+                    return None;
+                }
+                let target = OpcPackage::resolve_rel_target(&self.doc_part_name, &rel.target);
+                let xml = self.package.get_part(&target)?;
+                let parsed = CT_Styles::from_xml(xml).ok()?;
+                let mut style_ids = std::collections::HashSet::new();
+                if !parsed.styles.iter().all(|style| style_ids.insert(&style.style_id)) {
+                    return None;
+                }
+                // The general projection omits empty style owners. Reject an
+                // effects catalogue whose physical owners are not all modeled,
+                // rather than accepting an invisible duplicate or default.
+                let mut reader = NsReader::from_reader(xml);
+                let mut buffer = Vec::new();
+                let mut depth = 0usize;
+                let mut root_seen = false;
+                let mut style_count = 0usize;
+                loop {
+                    let (namespace, event) = reader.read_resolved_event_into(&mut buffer).ok()?;
+                    let word = matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == WORD_NAMESPACE.as_bytes());
+                    let starts_scope = matches!(&event, Event::Start(_));
+                    match event {
+                        Event::Start(element) | Event::Empty(element) => {
+                            if depth == 0 {
+                                if root_seen || !word || element.local_name().as_ref() != b"styles" {
+                                    return None;
+                                }
+                                root_seen = true;
+                            } else if depth == 1 && word && element.local_name().as_ref() == b"style" {
+                                style_count += 1;
+                            }
+                            // Empty events do not open an ownership level.
+                            if starts_scope {
+                                depth += 1;
+                            }
+                        }
+                        Event::End(_) => depth = depth.checked_sub(1)?,
+                        Event::DocType(_) => return None,
+                        Event::Text(text) if depth == 0 && !text.iter().all(u8::is_ascii_whitespace) => return None,
+                        Event::Eof => break,
+                        _ => {}
+                    }
+                    buffer.clear();
+                }
+                (root_seen && depth == 0 && style_count == parsed.styles.len()).then_some(parsed)
+            });
+            if let Some(effects) = effects {
+                let mut defaults = effects
+                    .styles
+                    .iter()
+                    .filter(|style| style.style_type == StyleType::Table && style.is_default);
+                if let Some(default) = defaults.next()
+                    && !default.style_id.is_empty()
+                    && defaults.next().is_none()
+                    && default.based_on.is_none()
+                    && layout_styles.get_by_id(&default.style_id).is_none()
+                    && effects
+                        .styles
+                        .iter()
+                        .filter(|style| style.style_id == default.style_id)
+                        .count()
+                        == 1
+                {
+                    layout_styles.styles.push(default.clone());
+                }
+            }
+        }
+
         LayoutInput {
+            sequence_snapshot: None,
             revision_view: rdocx_layout::RevisionView::Accepted,
             document,
             automatic_hyphenation: self
@@ -26134,17 +28729,18 @@ impl Document {
                 .settings
                 .as_ref()
                 .and_then(CT_Settings::default_tab_stop),
-            clamp_tabs_past_margin: self.settings.as_ref().is_some_and(|settings| {
-                settings.compatibility_settings().iter().any(|setting| {
-                    setting.name == "compatibilityMode"
-                        && setting.uri == "http://schemas.microsoft.com/office/word"
-                        && setting
-                            .value
-                            .trim()
-                            .parse::<u32>()
-                            .is_ok_and(|mode| mode >= 15)
+            clamp_tabs_past_margin: modern_compatibility,
+            legacy_table_positioning: !modern_compatibility,
+            modern_footnote_layout: modern_compatibility,
+            footnote_layout_like_word8: self
+                .settings
+                .as_ref()
+                .and_then(|settings| {
+                    settings.compatibility_option(
+                        rdocx_oxml::settings::CompatibilityOption::FootnoteLayoutLikeWW8,
+                    )
                 })
-            }),
+                .unwrap_or(false),
             mirror_margins: self
                 .settings
                 .as_ref()
@@ -26178,8 +28774,10 @@ impl Document {
                     .and_then(CT_Settings::endnote_properties)
                     .cloned(),
             ],
-            styles: self.styles.clone(),
+            styles: layout_styles,
             numbering: self.numbering.clone(),
+            story_part_names,
+            story_bodies,
             headers,
             footers,
             images,
@@ -26685,28 +29283,7 @@ fn materialize_header_footer_inheritance(
             }
         }
     };
-    for content in &mut document.body.content {
-        if let BodyContent::Paragraph(paragraph) = content
-            && let Some(section) = paragraph
-                .properties
-                .as_mut()
-                .and_then(|properties| properties.sect_pr.as_mut())
-        {
-            inherit(
-                &mut section.header_refs,
-                &mut effective_headers,
-                available_headers,
-                even_headers_enabled,
-            );
-            inherit(
-                &mut section.footer_refs,
-                &mut effective_footers,
-                available_footers,
-                false,
-            );
-        }
-    }
-    if let Some(section) = document.body.sect_pr.as_mut() {
+    let mut apply = |section: &mut CT_SectPr| {
         inherit(
             &mut section.header_refs,
             &mut effective_headers,
@@ -26719,6 +29296,49 @@ fn materialize_header_footer_inheritance(
             available_footers,
             false,
         );
+    };
+    // Match document_sections: only main-story paragraphs and block controls
+    // end sections. A paragraph in a table cell does not end a body section.
+    fn control_sections(control: &mut CT_Sdt) -> Vec<&mut CT_SectPr> {
+        let mut sections = Vec::new();
+        for content in &mut control.content {
+            match content {
+                SdtContent::Paragraph(paragraph) => {
+                    if let Some(section) = paragraph
+                        .properties
+                        .as_mut()
+                        .and_then(|properties| properties.sect_pr.as_mut())
+                    {
+                        sections.push(section);
+                    }
+                }
+                SdtContent::ContentControl(control) => sections.extend(control_sections(control)),
+                _ => {}
+            }
+        }
+        sections
+    }
+    for content in &mut document.body.content {
+        match content {
+            BodyContent::Paragraph(paragraph) => {
+                if let Some(section) = paragraph
+                    .properties
+                    .as_mut()
+                    .and_then(|properties| properties.sect_pr.as_mut())
+                {
+                    apply(section);
+                }
+            }
+            BodyContent::ContentControl(control) => {
+                for section in control_sections(control) {
+                    apply(section);
+                }
+            }
+            BodyContent::Table(_) | BodyContent::RawXml(_) => {}
+        }
+    }
+    if let Some(section) = document.body.sect_pr.as_mut() {
+        apply(section);
     }
 }
 
@@ -28368,6 +30988,30 @@ mod tests {
         "ab67b50393fc5258f7a3e9719344639d665feccc2615b13cab1915ea9a84566b";
 
     #[test]
+    fn pagination_update_publishes_one_atomic_candidate() {
+        let mut document = Document::new();
+        for name in ["PAGE", "NUMPAGES", "SECTION", "SECTIONPAGES"] {
+            document
+                .add_paragraph("")
+                .add_run("")
+                .add_field(name, "OLD")
+                .unwrap();
+        }
+        document.set_header("physical header");
+        document.to_bytes().unwrap();
+        LAYOUT_INVOCATIONS.set(0);
+        let report = document.update_layout_backed_fields().unwrap();
+        assert_eq!(report.updated_count(), 4);
+        assert_eq!(LAYOUT_INVOCATIONS.get(), 1);
+        let saved = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&saved).unwrap();
+        let evaluations = reopened
+            .evaluate_fields(&crate::field::FieldEvaluationContext::default())
+            .unwrap();
+        assert!(evaluations.iter().all(|field| field.cached_result == "1"));
+    }
+
+    #[test]
     fn python_story_inventory_scales_linearly() {
         for paragraph_count in [64, 128] {
             let mut document = Document::new();
@@ -28389,6 +31033,116 @@ mod tests {
             STORY_SOURCE_BUILDS.set(0);
             assert!(document.story_link_snapshots().unwrap().is_empty());
             assert_eq!(STORY_SOURCE_BUILDS.get(), 1);
+        }
+    }
+
+    #[test]
+    fn story_excerpt_scope_preserves_single_root_local_declarations() {
+        let xml = format!(
+            r#"<q:document xmlns:q="{WORD_NAMESPACE}" xmlns:x="urn:ancestor"><q:body><q:p xmlns:x="{WORD_NAMESPACE}"><x:r><x:t>local</x:t></x:r></q:p><q:p xmlns:x="urn:empty"/></q:body></q:document>"#
+        );
+        let start = xml.find("<q:p ").unwrap();
+        let empty = xml.find(r#"<q:p xmlns:x="urn:empty"/>"#).unwrap();
+        let scopes = story_namespace_scopes_at(xml.as_bytes(), [start, empty]).unwrap();
+        assert_eq!(scopes[&start]["x"], "urn:ancestor");
+        assert_eq!(scopes[&empty]["x"], "urn:ancestor");
+        let end = start + xml[start..].find("</q:p>").unwrap() + "</q:p>".len();
+        let (closed, _) =
+            scoped_story_fragment(xml.as_bytes(), start..end, &scopes[&start]).unwrap();
+        let item = StoryItemSpan {
+            kind: StoryItemKind::Paragraph,
+            full: start..end,
+            scan: start..end,
+            direct_owner_child: true,
+            complex_field: false,
+            complex_ancestors: Vec::new(),
+            sdt_context: None,
+        };
+        assert_eq!(
+            story_item_text_with_scope(xml.as_bytes(), &item, &scopes[&start])
+                .unwrap()
+                .as_deref(),
+            Some("local")
+        );
+        assert!(
+            String::from_utf8(closed)
+                .unwrap()
+                .contains(&format!(r#"xmlns:x="{WORD_NAMESPACE}""#))
+        );
+        assert_eq!(
+            story_namespace_scope_at(xml.as_bytes(), start).unwrap()["x"],
+            WORD_NAMESPACE
+        );
+    }
+
+    #[test]
+    fn complex_field_excerpt_link_offsets_preserve_exact_source_bytes() {
+        // This tests the private projection mechanism. Public typed discovery
+        // deliberately does not admit a hyperlink wrapper inside a field span.
+        let field = concat!(
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+            r#"<w:r><w:instrText> PAGE </w:instrText></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+            r#"<w:hyperlink r:id="rIdActual"><w:r><w:t>7</w:t></w:r></w:hyperlink>"#,
+            r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+        );
+        for (word_prefix, rel_prefix, first_local) in
+            [("w", "r", false), ("q", "rel", false), ("q", "rel", true)]
+        {
+            let mut field = field
+                .replace("w:", &format!("{word_prefix}:"))
+                .replace("r:id", &format!("{rel_prefix}:id"));
+            if first_local {
+                field = field.replacen(
+                    &format!("<{word_prefix}:r>"),
+                    &format!(r#"<{word_prefix}:r xmlns:{rel_prefix}="urn:first-run">"#),
+                    1,
+                );
+            }
+            let xml = format!(
+                r#"<{word_prefix}:document xmlns:{word_prefix}="{WORD_NAMESPACE}" xmlns:{rel_prefix}="{}" xmlns:x="urn:producer&amp;escaped"><{word_prefix}:body><{word_prefix}:p><{word_prefix}:hyperlink {rel_prefix}:id="rIdBefore"><{word_prefix}:r><{word_prefix}:t>before</{word_prefix}:t></{word_prefix}:r></{word_prefix}:hyperlink>{field}<{word_prefix}:hyperlink {word_prefix}:anchor="after"><{word_prefix}:r><{word_prefix}:t>after</{word_prefix}:t></{word_prefix}:r></{word_prefix}:hyperlink></{word_prefix}:p></{word_prefix}:body></{word_prefix}:document>"#,
+                drawing_ns::R
+            );
+            let start = xml.find(&field).unwrap();
+            let end = start + field.len();
+            let item = StoryItemSpan {
+                kind: StoryItemKind::Field,
+                full: start + field.find('>').unwrap() + 1
+                    ..end - format!("</{word_prefix}:r>").len(),
+                scan: start..end,
+                direct_owner_child: false,
+                complex_field: true,
+                complex_ancestors: vec![0],
+                sdt_context: None,
+            };
+            let scope = story_namespace_scopes_at(xml.as_bytes(), [start])
+                .unwrap()
+                .remove(&start)
+                .unwrap();
+            let (closed, local, _) = scoped_story_item(xml.as_bytes(), &item, &scope).unwrap();
+            assert_eq!(&closed[local.scan.clone()], field.as_bytes());
+            assert_eq!(
+                &closed[local.full.clone()],
+                &xml.as_bytes()[item.full.clone()]
+            );
+            assert!(local.complex_ancestors.is_empty());
+            assert_eq!(
+                story_item_text_with_scope(xml.as_bytes(), &item, &scope)
+                    .unwrap()
+                    .as_deref(),
+                Some("7")
+            );
+            let links = scan_story_item_links_with_scope(xml.as_bytes(), &item, &scope).unwrap();
+            assert_eq!(links.len(), 1);
+            let expected = format!(
+                r#"<{word_prefix}:hyperlink {rel_prefix}:id="rIdActual"><{word_prefix}:r><{word_prefix}:t>7</{word_prefix}:t></{word_prefix}:r></{word_prefix}:hyperlink>"#
+            );
+            assert_eq!(&xml.as_bytes()[links[0].full.clone()], expected.as_bytes());
+            assert_eq!(links[0].full.start, xml.find(&expected).unwrap());
+            assert_eq!(links[0].rel_id.as_deref(), Some("rIdActual"));
+            let mut invalid = item.clone();
+            invalid.full.start = start - 1;
+            assert!(scoped_story_item(xml.as_bytes(), &invalid, &scope).is_err());
         }
     }
 
@@ -35668,10 +38422,10 @@ mod tests {
 
         let mut table = doc.add_table(1, 1);
         let mut cell = table.cell(0, 0).expect("cell");
-        cell.remove_first_empty_paragraph();
         cell.add_paragraph("")
             .add_hyperlink("table link", &relationship_id)
             .bold(true);
+        cell.remove_first_empty_paragraph();
 
         let bytes = doc.to_bytes().unwrap();
         let reopened = Document::from_bytes(&bytes).unwrap();
@@ -37220,6 +39974,191 @@ mod tests {
                 .format,
             NumberingFormat::None
         );
+    }
+
+    #[test]
+    fn numbering_level_namespace_declarations_do_not_report_unmodeled_properties() {
+        let mut mismatches = Vec::new();
+        for owner in ["abstractNum", "lvl", "num"] {
+            for (name, value) in [
+                ("xmlns:w", WORD_NAMESPACE),
+                ("xmlns:q", WORD_NAMESPACE),
+                ("xmlns", "urn:producer:default"),
+                ("xmlns:producer", "urn:producer"),
+            ] {
+                let mut source = Document::new();
+                let num_id = source.add_list_definition(&[ListLevel::bullet()]);
+                let definition_id = source.numbering.as_ref().unwrap().nums[0].abstract_num_id;
+                let declaration = format!(r#" {name}="{value}""#);
+                let xml = format!(
+                    r#"<q:numbering xmlns:q="{WORD_NAMESPACE}"><q:abstractNum q:abstractNumId="{definition_id}"{}><q:lvl q:ilvl="0"{}><q:numFmt q:val="bullet"/><q:lvlText q:val="•"/></q:lvl></q:abstractNum><q:num q:numId="{num_id}"{}><q:abstractNumId q:val="{definition_id}"/></q:num></q:numbering>"#,
+                    if owner == "abstractNum" {
+                        &declaration
+                    } else {
+                        ""
+                    },
+                    if owner == "lvl" { &declaration } else { "" },
+                    if owner == "num" { &declaration } else { "" },
+                );
+                let bytes = replace_numbering_xml(&mut source, xml.into_bytes());
+                let mut imported = Document::from_bytes(&bytes).unwrap();
+                let saved = imported.to_bytes().unwrap();
+                let reopened = Document::from_bytes(&saved).unwrap();
+
+                for document in [&imported, &reopened] {
+                    let level = document.numbering_level(num_id, 0).unwrap();
+                    assert_eq!(level.format, NumberingFormat::Bullet, "{owner}: {name}");
+                    assert_eq!(level.start, 1, "{owner}: {name}");
+                    assert_eq!(level.suffix, ListLevelSuffix::Tab, "{owner}: {name}");
+                    if level.has_unmodeled_properties {
+                        mismatches.push(format!("{owner}: {name}"));
+                    }
+                    let numbering = document.numbering.as_ref().unwrap();
+                    let attributes = match owner {
+                        "abstractNum" => &numbering.abstract_nums[0].extra_attributes,
+                        "lvl" => &numbering.abstract_nums[0].levels[0].extra_attributes,
+                        "num" => &numbering.nums[0].extra_attributes,
+                        _ => unreachable!(),
+                    };
+                    assert!(attributes.contains(&(name.to_owned(), value.to_owned())));
+                }
+            }
+        }
+        assert!(
+            mismatches.is_empty(),
+            "namespace-only reader cases: {mismatches:?}"
+        );
+    }
+
+    #[test]
+    fn numbering_level_unknown_attributes_and_xml_remain_unmodeled_after_reopen() {
+        for owner in ["abstractNum", "lvl", "num"] {
+            for attribute in [
+                r#" producer:flag="kept""#,
+                r#" producer:xmlns="kept""#,
+                r#" xmlnsLike="kept""#,
+            ] {
+                let mut source = Document::new();
+                let num_id = source.add_list_definition(&[ListLevel::bullet()]);
+                let definition_id = source.numbering.as_ref().unwrap().nums[0].abstract_num_id;
+                let xml = format!(
+                    r#"<w:numbering xmlns:w="{WORD_NAMESPACE}"><w:abstractNum w:abstractNumId="{definition_id}" xmlns:producer="urn:producer"{}><w:lvl w:ilvl="0" xmlns:producer="urn:producer"{}><w:numFmt w:val="bullet"/><producer:fact producer:flag="kept"/></w:lvl></w:abstractNum><w:num w:numId="{num_id}" xmlns:producer="urn:producer"{}><w:abstractNumId w:val="{definition_id}"/></w:num></w:numbering>"#,
+                    if owner == "abstractNum" {
+                        attribute
+                    } else {
+                        ""
+                    },
+                    if owner == "lvl" { attribute } else { "" },
+                    if owner == "num" { attribute } else { "" },
+                );
+                let bytes = replace_numbering_xml(&mut source, xml.into_bytes());
+                let mut imported = Document::from_bytes(&bytes).unwrap();
+                // Check the attribute independently of the retained child.
+                let raw_children = std::mem::take(
+                    &mut imported.numbering.as_mut().unwrap().abstract_nums[0].levels[0].extra_xml,
+                );
+                assert!(
+                    imported
+                        .numbering_level(num_id, 0)
+                        .unwrap()
+                        .has_unmodeled_properties
+                );
+                imported.numbering.as_mut().unwrap().abstract_nums[0].levels[0].extra_xml =
+                    raw_children.clone();
+                let saved = imported.to_bytes().unwrap();
+                let reopened = Document::from_bytes(&saved).unwrap();
+                assert!(
+                    reopened
+                        .numbering_level(num_id, 0)
+                        .unwrap()
+                        .has_unmodeled_properties
+                );
+                let before = imported.numbering.as_ref().unwrap();
+                let after = reopened.numbering.as_ref().unwrap();
+                assert_eq!(
+                    before.abstract_nums[0].extra_attributes,
+                    after.abstract_nums[0].extra_attributes
+                );
+                assert_eq!(
+                    before.abstract_nums[0].levels[0].extra_attributes,
+                    after.abstract_nums[0].levels[0].extra_attributes
+                );
+                assert_eq!(
+                    before.nums[0].extra_attributes,
+                    after.nums[0].extra_attributes
+                );
+                assert_eq!(raw_children, after.abstract_nums[0].levels[0].extra_xml);
+            }
+        }
+
+        let mut source = Document::new();
+        let num_id = source.add_list_definition(&[ListLevel::bullet()]);
+        let definition_id = source.numbering.as_ref().unwrap().nums[0].abstract_num_id;
+        let xml = format!(
+            r#"<w:numbering xmlns:w="{WORD_NAMESPACE}" xmlns:q="{WORD_NAMESPACE}"><w:abstractNum w:abstractNumId="{definition_id}"><w:lvl w:ilvl="0" xmlns:q="urn:foreign" q:ilvl="7"><w:numFmt w:val="bullet"/></w:lvl></w:abstractNum><w:num w:numId="{num_id}"><w:abstractNumId w:val="{definition_id}"/></w:num></w:numbering>"#
+        );
+        let bytes = replace_numbering_xml(&mut source, xml.into_bytes());
+        let mut imported = Document::from_bytes(&bytes).unwrap();
+        assert!(
+            imported
+                .numbering_level(num_id, 0)
+                .unwrap()
+                .has_unmodeled_properties
+        );
+        let saved = imported.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&saved).unwrap();
+        assert!(
+            reopened
+                .numbering_level(num_id, 0)
+                .unwrap()
+                .has_unmodeled_properties
+        );
+        assert_eq!(
+            imported.numbering.as_ref().unwrap().abstract_nums[0].levels[0].extra_attributes,
+            reopened.numbering.as_ref().unwrap().abstract_nums[0].levels[0].extra_attributes,
+        );
+    }
+
+    #[test]
+    fn numbering_level_raw_children_remain_unmodeled_on_each_owner() {
+        for owner in ["abstractNum", "lvl", "num"] {
+            let mut source = Document::new();
+            let num_id = source.add_list_definition(&[ListLevel::bullet()]);
+            let definition_id = source.numbering.as_ref().unwrap().nums[0].abstract_num_id;
+            let payload = r#"<producer:fact producer:flag="kept"><producer:inner>opaque payload</producer:inner></producer:fact>"#;
+            let xml = format!(
+                r#"<w:numbering xmlns:w="{WORD_NAMESPACE}"><w:abstractNum w:abstractNumId="{definition_id}" xmlns:producer="urn:producer"><w:lvl w:ilvl="0" xmlns:producer="urn:producer"><w:numFmt w:val="bullet"/>{}</w:lvl>{}</w:abstractNum><w:num w:numId="{num_id}" xmlns:producer="urn:producer"><w:abstractNumId w:val="{definition_id}"/>{}</w:num></w:numbering>"#,
+                if owner == "lvl" { payload } else { "" },
+                if owner == "abstractNum" { payload } else { "" },
+                if owner == "num" { payload } else { "" },
+            );
+            let bytes = replace_numbering_xml(&mut source, xml.into_bytes());
+            let mut imported = Document::from_bytes(&bytes).unwrap();
+            let saved = imported.to_bytes().unwrap();
+            let reopened = Document::from_bytes(&saved).unwrap();
+            let before = imported.numbering.as_ref().unwrap();
+            let after = reopened.numbering.as_ref().unwrap();
+            let before_children = match owner {
+                "abstractNum" => &before.abstract_nums[0].extra_xml,
+                "lvl" => &before.abstract_nums[0].levels[0].extra_xml,
+                "num" => &before.nums[0].extra_xml,
+                _ => unreachable!(),
+            };
+            let after_children = match owner {
+                "abstractNum" => &after.abstract_nums[0].extra_xml,
+                "lvl" => &after.abstract_nums[0].levels[0].extra_xml,
+                "num" => &after.nums[0].extra_xml,
+                _ => unreachable!(),
+            };
+            assert_eq!(before_children, after_children, "{owner}");
+            assert_eq!(before_children.len(), 1, "{owner}");
+            assert_eq!(before_children[0].1, payload.as_bytes(), "{owner}");
+            for document in [&imported, &reopened] {
+                let level = document.numbering_level(num_id, 0).unwrap();
+                assert_eq!(level.format, NumberingFormat::Bullet, "{owner}");
+                assert!(level.has_unmodeled_properties, "{owner}");
+            }
+        }
     }
 
     #[test]
@@ -39223,5 +42162,124 @@ mod odttf_tests {
             "{error}"
         );
         assert_eq!(destination.to_bytes().unwrap(), before);
+    }
+    #[test]
+    fn scoped_source_probe_distinguishes_identical_sibling_positions_and_publishes_nothing() {
+        let mut document = Document::new();
+        document.add_paragraph("identical");
+        document.add_paragraph("identical");
+        document.prepare_staged_package().unwrap();
+        let canonical = document.document.to_xml().unwrap();
+        let original = document
+            .package
+            .get_part(&document.doc_part_name)
+            .unwrap()
+            .to_vec();
+        let owner = scan_story_owners(&canonical, StoryKind::Body)
+            .unwrap()
+            .into_iter()
+            .find(|o| o.kind == StoryKind::Body)
+            .unwrap();
+        let items = direct_story_content_items(&canonical, &owner).unwrap();
+        let retained_owner = scan_story_owners(&original, StoryKind::Body)
+            .unwrap()
+            .into_iter()
+            .find(|o| o.kind == StoryKind::Body)
+            .unwrap();
+        let retained = direct_story_content_items(&original, &retained_owner).unwrap();
+        assert!(
+            document
+                .prove_scoped_main_source(
+                    &canonical,
+                    items[0].full.clone(),
+                    &original,
+                    retained[0].full.clone()
+                )
+                .is_ok()
+        );
+        assert!(
+            document
+                .prove_scoped_main_source(
+                    &canonical,
+                    items[0].full.clone(),
+                    &original,
+                    retained[1].full.clone()
+                )
+                .is_err()
+        );
+        assert_eq!(
+            document.package.get_part(&document.doc_part_name),
+            Some(original.as_slice())
+        );
+    }
+
+    #[test]
+    fn scoped_replacement_preparation_failures_leave_models_and_package_unchanged() {
+        use std::io::Cursor;
+        let mut source =
+            Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
+        source.add_paragraph("Version");
+        let mut package = OpcPackage::from_reader(Cursor::new(source.to_bytes().unwrap())).unwrap();
+        let relationships = package.get_or_create_part_rels("/word/document.xml");
+        relationships
+            .items
+            .retain(|relationship| relationship.rel_type != rel_types::STYLES);
+        relationships.add_with_id(&format!("rId{}", u32::MAX), "urn:producer", "producer.bin");
+        package.parts.remove(DEFAULT_STYLES_PART);
+        package.content_types.overrides.remove(DEFAULT_STYLES_PART);
+        let mut bytes = Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+        let location = document.paragraph_story_location(0).unwrap().unwrap();
+        let model = document.document.clone();
+        let mut before = Cursor::new(Vec::new());
+        document.package.write_to(&mut before).unwrap();
+        let result = document.try_replace_text_at(&location, "Version", "Release", Some(1));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("styles relationship allocation failed")
+        );
+        assert_eq!(document.document, model);
+        let mut after = Cursor::new(Vec::new());
+        document.package.write_to(&mut after).unwrap();
+        assert_eq!(after.into_inner(), before.into_inner());
+    }
+    #[test]
+    fn scoped_replacement_final_reopen_failure_discards_the_complete_candidate() {
+        let mut document = Document::new();
+        document.add_paragraph("Version");
+        document.add_paragraph("Version");
+        let location = document.paragraph_story_location(0).unwrap().unwrap();
+        let before = document.to_bytes().unwrap();
+        let model = document.document.clone();
+        FAIL_NEXT_SCOPED_REOPEN.set(true);
+        let result = document.try_replace_text_at(&location, "Version", "Release", Some(1));
+        let missed_boundary = FAIL_NEXT_SCOPED_REOPEN.replace(false);
+        assert!(
+            !missed_boundary,
+            "final reopen boundary must have been reached"
+        );
+        assert!(result.unwrap_err().to_string().contains("entry count"));
+        assert_eq!(document.document, model);
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+    #[test]
+    fn whole_story_final_reopen_and_preparation_failures_discard_candidates() {
+        let mut document = Document::new();
+        document.add_paragraph("live");
+        document.set_header("original");
+        let before = document.to_bytes().unwrap();
+        let model = document.document.clone();
+        FAIL_NEXT_STAGED_REOPEN.set(true);
+        let result = document.try_set_first_page_header("new");
+        let missed = FAIL_NEXT_STAGED_REOPEN.replace(false);
+        assert!(!missed, "actual final reopen boundary reached");
+        assert!(result.unwrap_err().to_string().contains("entry count"));
+        assert_eq!(document.document, model);
+        assert_eq!(document.to_bytes().unwrap(), before);
+        assert!(document.try_set_header("invalid \u{1}").is_err());
+        assert_eq!(document.to_bytes().unwrap(), before);
     }
 }

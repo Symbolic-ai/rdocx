@@ -243,6 +243,45 @@ impl PyParagraph {
 
 #[pymethods]
 impl PyParagraph {
+    /// Replace literal text within this paragraph, retaining run formatting.
+    #[pyo3(signature = (old, new, *, expect = None))]
+    fn replace_text(
+        &self,
+        py: Python<'_>,
+        old: &str,
+        new: &str,
+        expect: Option<usize>,
+    ) -> PyResult<usize> {
+        let location = self.validate(py)?;
+        let mut document = self.document.borrow_mut(py);
+        match location {
+            ParagraphLocation::Body(index) => {
+                let location = document
+                    .inner
+                    .paragraph_story_location(index)
+                    .map_err(|error| crate::rdocx_to_pyerr(py, error))?
+                    .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
+                document.scoped_replacement(py, |document| {
+                    document.try_replace_text_at(&location, old, new, expect)
+                })
+            }
+            ParagraphLocation::Cell {
+                table,
+                row,
+                cell,
+                paragraph,
+            } => document.scoped_replacement(py, |document| {
+                document.try_replace_text_in_cell(
+                    (table, row, cell),
+                    Some(paragraph),
+                    old,
+                    new,
+                    expect,
+                )
+            }),
+        }
+    }
+
     #[getter]
     fn text(&self, py: Python<'_>) -> PyResult<String> {
         let location = self.validate(py)?;

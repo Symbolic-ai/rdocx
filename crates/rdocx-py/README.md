@@ -47,6 +47,9 @@ with open("report.pdf", "wb") as output:
   resolved, retargeted, or removed in any story.
 - Paragraph text replacement that keeps paragraph formatting, comments, and
   bookmarks.
+- Counted literal replacement with `Paragraph.replace_text`, `Cell.replace_text`
+  and `Document.replace_text_at`, scoped to the selected owner and preserving
+  run formatting. `expect` checks the local count before publishing any edit.
 - Paragraph style assignment by style ID or name, checked against the styles
   the document defines.
 - New documents with Word's usual styles, such as `Heading 2`, `Title`,
@@ -149,6 +152,12 @@ python -m mypy your_application.py
 
 The release gate validates the installed package with strict mypy and
 `stubtest` in addition to its runtime suite.
+
+`Document.set_header(text)` and `Document.set_footer(text)` replace a complete
+story through one checked transaction. Removing a complete owned comment thread
+cleans its definitions and companion metadata. Partial ranges or malformed
+ownership raise `RdocxError` and preserve the document and live handles.
+Successful replacement invalidates earlier handles once.
 
 ## Project links
 

@@ -4,6 +4,67 @@
 
 No changes have been recorded after the prepared family sections below.
 
+## v0.16.0
+
+### Highlights
+
+Word editing gains checked field updates, richer note policies, cross-story ranges and reusable document fragments. Comment and story edits preserve their physical owners and fail atomically when a safe update cannot be proved. The stable Word Rust crates, CLI and Python distribution share version 0.16.0.
+
+### Added
+
+- Native Rust note policies control separators, custom markers, numbering, restart and placement, including authored continuation content. Cross-story bookmark, comment, permission and proofing ranges can be checked, moved and removed with paired endpoints preserved.
+- Native block fragments capture supported body, furniture, note, comment, table-cell, text-box and nested control owners. Imports close their styles, numbering, notes, review metadata and reachable supported package graphs. Glossary, AutoText, building-block and content-control template operations use this staged ownership model.
+- Native field authoring supports simple and complex fields, nested operands, rich cached results and locks. Checked refresh covers pagination, captions, sequences, cross-references and typed note copies. INDEX, figure TOC and TOA rebuilding retains unsupported caches with diagnostics and uses its measured en-US ASCII sorting boundary.
+- Native citation and bibliography APIs preserve all seventeen source-kind identities, sixteen contributor-role identities and twelve style identities as authoring metadata. Formatting admits 210 of 223 measured dense APA locale configurations, separately earned sparse and rich controls, and lean numeric1033 Book inputs for the eleven other bibliography styles. Citation admissions remain separate. Recognized unfinished formatting branches abort the complete staged refresh. Unrecognized paths retain their caches with diagnostics. Source/style metadata coverage does not promise complete catalogue formatting, arbitrary Unicode ordering or dedicated Python/WASM bibliography APIs.
+
+### Fixed
+
+- Multi-paragraph comment threads retain parent and resolved metadata and authored paragraph boundaries, incorporating the core of [PR 271](https://github.com/tensorbee/rdocx/pull/271) with additional closure checks for [Issue 270](https://github.com/tensorbee/rdocx/issues/270).
+- Explicit cell `nil` borders suppress inherited borders, while omitted or `none` borders retain inheritance, for [Issue 272](https://github.com/tensorbee/rdocx/issues/272) and [PR 274](https://github.com/tensorbee/rdocx/pull/274). Page and column breaks inside cells no longer introduce unwanted line breaks or spaces, for [Issue 273](https://github.com/tensorbee/rdocx/issues/273) and [PR 275](https://github.com/tensorbee/rdocx/pull/275).
+- Direct table alignment survives style resolution for [Issue 277](https://github.com/tensorbee/rdocx/issues/277) and [PR 279](https://github.com/tensorbee/rdocx/pull/279). Absent side margins resolve to zero while cell padding remains authoritative. Measured legacy table placement uses the first accepted cell's left margin, resolving [Issue 276](https://github.com/tensorbee/rdocx/issues/276) and [Issue 278](https://github.com/tensorbee/rdocx/issues/278) through a hardened equivalent of [PR 280](https://github.com/tensorbee/rdocx/pull/280).
+- Comment removal closes its thread and companion metadata atomically for [Issue 282](https://github.com/tensorbee/rdocx/issues/282). Typed accepted comment anchors and identity-preserving anchor moves address [Issue 283](https://github.com/tensorbee/rdocx/issues/283) and [Issue 284](https://github.com/tensorbee/rdocx/issues/284). Exact direct-control mapping and cached sibling/nested-field story text address [Issue 289](https://github.com/tensorbee/rdocx/issues/289) and [Issue 291](https://github.com/tensorbee/rdocx/issues/291), using selected hardened equivalents from [PR 287](https://github.com/tensorbee/rdocx/pull/287).
+- Scoped paragraph, cell and document replacement preserves selected formatting and review state for [Issue 285](https://github.com/tensorbee/rdocx/issues/285), using a hardened equivalent of [PR 286](https://github.com/tensorbee/rdocx/pull/286). Complete story replacement and building-block removal reconcile review ownership for [Issue 288](https://github.com/tensorbee/rdocx/issues/288). Qualified marker omission happens before selected fragment dependencies are captured for [Issue 292](https://github.com/tensorbee/rdocx/issues/292), using the relevant contribution from [PR 290](https://github.com/tensorbee/rdocx/pull/290).
+- Namespace declarations alone no longer mark an imported numbering level as unmodeled. Real unknown attributes and children retain the existing preservation and admission rules, incorporating the core of [PR 293](https://github.com/tensorbee/rdocx/pull/293).
+- The shared font loader accepts source variants enabled by downstream Cargo feature unification, incorporating [PR 269](https://github.com/tensorbee/rdocx/pull/269). Existing ordinary file and binary caches retain their behavior.
+
+### Compatibility
+
+This pre-1.0 release adds required members to existing public Rust types. Update exhaustive struct literals for Word `LayoutInput` with `sequence_snapshot`, `legacy_table_positioning`, `modern_footnote_layout`, `footnote_layout_like_word8`, `note_defaults`, `story_part_names` and `story_bodies`. Add `text_body` and `source_text_box_owner` to `CT_Shape`, `special_references` to `CT_NoteProperties`, and `draw_marker` to `NoteLayout`. Use default/update construction where the type provides it.
+
+Shared `TextSegment`, `GlyphRun` and `MultilingualGlyphRun` literals now need `note_reference_source`. Exhaustive `FieldKind` matches must handle `Section`, `SectionPages`, `SequenceContext` and `SequenceRepeat`. Exhaustive `WordStory` matches must also handle `TextBox`. `FieldSource.index` now counts nested instruction and result fields in preorder.
+
+Native fallible header/footer setters validate staged content before publication. Existing infallible wrappers retain their panic contract and can reject invalid XML text earlier. Python setters propagate failures and revise document state only on success. Zero-result scoped edits preserve existing handles.
+
+Table border, placement and padding corrections intentionally change some rendered output. Note placement follows the authored OOXML policy, including the documented Word-for-Mac `beneathText` discrepancy. Unsupported, locked or ambiguous field owners retain their documented diagnostic/error boundaries. Full bibliography catalogue parity belongs to F-X192 in S91, and navigation F-283 is carried to S91. These changes do not promise universal native Word pixel parity.
+
+### Contributors
+
+- Hadrien Mary [@hadim](https://github.com/hadim) supplied the reports and reference implementations behind comment threads ([PR 271](https://github.com/tensorbee/rdocx/pull/271)), cell borders and breaks ([PR 274](https://github.com/tensorbee/rdocx/pull/274), [PR 275](https://github.com/tensorbee/rdocx/pull/275)), table alignment and margins ([PR 279](https://github.com/tensorbee/rdocx/pull/279), [PR 280](https://github.com/tensorbee/rdocx/pull/280)), comment cleanup ([Issue 282](https://github.com/tensorbee/rdocx/issues/282)), scoped replacement ([PR 286](https://github.com/tensorbee/rdocx/pull/286)), anchors and field snapshots ([PR 287](https://github.com/tensorbee/rdocx/pull/287)), and whole-story review ownership and fragment omission ([PR 290](https://github.com/tensorbee/rdocx/pull/290)). Accepted portions landed directly with additional controls or through the hardened equivalents described above, rather than wholesale adoption of the stacked PRs.
+- Pedro Assumpcao [@pedroassumpcao](https://github.com/pedroassumpcao) contributed the namespace-only numbering reader correction in [PR 293](https://github.com/tensorbee/rdocx/pull/293). The accepted core has expanded local preservation tests.
+- Changjoon [@changjoon-park](https://github.com/changjoon-park) contributed the shared fontdb feature-unification repair in [PR 269](https://github.com/tensorbee/rdocx/pull/269), also consumed by Word.
+
+## rpptx-v0.14.0
+
+### Highlights
+
+The shared OOXML and PowerPoint Rust crates, PowerPoint CLI and Python distribution share version 0.14.0. The shared font loader accepts additional source variants enabled by downstream Cargo feature unification.
+
+### Added
+
+Shared layout records carry explicit note-reference provenance. The PowerPoint, chart and PDF consumers initialize or propagate that provenance through their existing rendering paths. No separate PowerPoint editing feature is introduced by the Word-specific changes in this release range.
+
+### Fixed
+
+The shared font loader uses fontdb's face-data callback for source variants enabled by downstream feature unification, incorporating the core of [PR 269](https://github.com/tensorbee/rdocx/pull/269). It retains ordinary file and binary caches, the original face index and existing defaults.
+
+### Compatibility
+
+This pre-1.0 release adds `note_reference_source` to the existing public `TextSegment`, `GlyphRun` and `MultilingualGlyphRun` types. Update exhaustive Rust struct literals, or use default/update construction where provided. Exhaustive `FieldKind` matches must handle `Section`, `SectionPages`, `SequenceContext` and `SequenceRepeat`. `FieldSource.index` counts nested instruction and result fields in preorder. The font repair leaves public loader APIs and bundled font assets unchanged.
+
+### Contributors
+
+Changjoon [@changjoon-park](https://github.com/changjoon-park) contributed the fontdb feature-unification fix in [PR 269](https://github.com/tensorbee/rdocx/pull/269). Word-specific contributions are credited in v0.16.0.
+
 ## v0.15.0
 
 ### Highlights

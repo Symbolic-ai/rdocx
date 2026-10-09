@@ -262,6 +262,9 @@ pub struct Section {
 }
 
 pub(crate) struct SharedSection {
+    pub modern_footnote_layout: bool,
+    pub footnote_layout_like_word8: bool,
+    pub continuous: bool,
     pub blocks: Vec<SharedLayoutBlock>,
     pub geometry: PageGeometry,
     pub header_footer: Option<HeaderFooterContent>,
@@ -285,6 +288,7 @@ pub(crate) struct RecordedPagination {
     pub body_fragments: Vec<(usize, WordBodyLayoutFragment)>,
     pub checkpoints: Vec<PaginationCheckpoint>,
     pub stopped_at: Option<PaginationCheckpoint>,
+    pub last_flow_space: Option<PageFlowSpace>,
 }
 
 /// Remaining vertical body band after the last body mark and before footnotes.
@@ -295,6 +299,7 @@ pub(crate) struct PageFlowSpace {
 }
 
 pub(crate) struct SharedPagination {
+    pub page_sections: Vec<crate::WordPageSection>,
     pub pages: Vec<PageFrame>,
     pub outlines: Vec<OutlineEntry>,
     pub body_fragments: Vec<(usize, WordBodyLayoutFragment)>,
@@ -381,6 +386,11 @@ pub(crate) fn paginate_shared_sections(
     let media = media.media();
     if sections.is_empty() {
         return SharedPagination {
+            page_sections: vec![crate::WordPageSection {
+                physical_page: 1,
+                displayed_page: 1,
+                section_index: 0,
+            }],
             pages: vec![PageFrame::new(1, 612.0, 792.0, Vec::new())],
             outlines: Vec::new(),
             body_fragments: Vec::new(),
@@ -402,6 +412,7 @@ pub(crate) fn paginate_shared_sections(
             notes,
             1,
             section.page_number_start.unwrap_or(1),
+            None,
         );
         let mut endnotes_placed = Vec::new();
         if section.endnotes_at_section_end {
@@ -416,6 +427,15 @@ pub(crate) fn paginate_shared_sections(
             );
         }
         return SharedPagination {
+            page_sections: result
+                .pages
+                .iter()
+                .map(|page| crate::WordPageSection {
+                    physical_page: page.page_number,
+                    displayed_page: page.displayed_page_number,
+                    section_index: 0,
+                })
+                .collect(),
             pages: result.pages,
             outlines: result.outlines,
             body_fragments: result.body_fragments,
@@ -424,6 +444,7 @@ pub(crate) fn paginate_shared_sections(
         };
     }
 
+    let mut page_sections = Vec::new();
     let mut pages = Vec::new();
     let mut outlines = Vec::new();
     let mut body_fragments = Vec::new();
@@ -431,12 +452,26 @@ pub(crate) fn paginate_shared_sections(
     let mut next_section_page_number = 1usize;
     let mut last_flow_space = None;
     let mut endnotes_placed = Vec::new();
-    for section in sections {
+    let mut section_index = 0;
+    while section_index < sections.len() {
+        let section = &sections[section_index];
+        let mut group_end = section_index + 1;
+        while group_end < sections.len()
+            && sections[group_end].continuous
+            && !sections[group_end - 1].endnotes_at_section_end
+            && continuous_geometry_matches(&section.geometry, &sections[group_end].geometry)
+        {
+            group_end += 1;
+        }
+        let blocks = sections[section_index..group_end]
+            .iter()
+            .flat_map(|section| section.blocks.iter().cloned())
+            .collect::<Vec<_>>();
         let section_page_number = section
             .page_number_start
             .unwrap_or(next_section_page_number);
         let mut result = paginate_with_media_recorded(
-            &section.blocks,
+            &blocks,
             section.geometry.clone(),
             section.header_footer.as_ref(),
             section.header_footer_semantics.as_ref(),
@@ -447,38 +482,123 @@ pub(crate) fn paginate_shared_sections(
             notes,
             page_offset + 1,
             section_page_number,
+            (group_end > section_index + 1).then_some(&sections[section_index..group_end]),
         );
-        if section.endnotes_at_section_end {
-            endnotes_placed.extend(collect_endnote_refs(
-                &result.pages,
-                notes,
-                section.geometry.content_width(),
-            ));
-            append_endnote_pages_at_document_end(
+        let boundary = &sections[group_end - 1];
+        let mut section_end_last_page = None;
+        if boundary.endnotes_at_section_end {
+            let mut ordered = Vec::new();
+            for block in &boundary.blocks {
+                let references = block
+                    .paragraph()
+                    .map(|paragraph| {
+                        paragraph
+                            .lines
+                            .iter()
+                            .flat_map(notes_in_line)
+                            .collect::<Vec<_>>()
+                    })
+                    .or_else(|| block.table().map(|table| table_note_references(&table)))
+                    .unwrap_or_default();
+                for note in references {
+                    if note.stream == NoteStream::Endnote
+                        && notes.get(note, boundary.geometry.content_width()).is_some()
+                        && !ordered.contains(&note)
+                    {
+                        ordered.push(note);
+                    }
+                }
+            }
+            endnotes_placed.extend(&ordered);
+            result.last_flow_space = append_ordered_endnote_pages(
                 &mut result.pages,
+                &ordered,
                 notes,
-                section.geometry.clone(),
+                boundary.geometry.clone(),
+                0,
+                1,
                 result.last_flow_space,
-                &[],
             );
+            section_end_last_page = result.pages.last().map(|page| page.page_number);
         }
-        next_section_page_number = section_page_number.saturating_add(result.pages.len());
+        for (offset, member) in sections[section_index..group_end].iter().enumerate() {
+            let body_indices = member
+                .blocks
+                .iter()
+                .filter_map(|block| match block {
+                    SharedLayoutBlock::Owned { body_index, .. }
+                    | SharedLayoutBlock::Paragraph { body_index, .. }
+                    | SharedLayoutBlock::Table { body_index, .. } => *body_index,
+                })
+                .collect::<std::collections::HashSet<_>>();
+            let occupied = result
+                .body_fragments
+                .iter()
+                .filter(|(index, _)| body_indices.contains(index))
+                .map(|(_, fragment)| fragment.physical_page)
+                .collect::<std::collections::HashSet<_>>();
+            let first = occupied
+                .iter()
+                .min()
+                .copied()
+                .or_else(|| result.pages.first().map(|page| page.page_number));
+            let last = if section_index + offset + 1 == group_end {
+                section_end_last_page
+                    .or_else(|| occupied.iter().max().copied())
+                    .or(first)
+            } else {
+                occupied.iter().max().copied().or(first)
+            };
+            for page in &result.pages {
+                if first
+                    .zip(last)
+                    .is_some_and(|(first, last)| (first..=last).contains(&page.page_number))
+                {
+                    page_sections.push(crate::WordPageSection {
+                        physical_page: page.page_number,
+                        displayed_page: page.displayed_page_number,
+                        section_index: section_index + offset,
+                    });
+                }
+            }
+        }
+        next_section_page_number = result.pages.last().map_or(section_page_number, |page| {
+            page.displayed_page_number.saturating_add(1)
+        });
         last_flow_space = result.last_flow_space;
         page_offset += result.pages.len();
         pages.append(&mut result.pages);
         outlines.append(&mut result.outlines);
         body_fragments.append(&mut result.body_fragments);
+        section_index = group_end;
     }
     for (index, page) in pages.iter_mut().enumerate() {
         page.page_number = index + 1;
     }
     SharedPagination {
+        page_sections,
         pages,
         outlines,
         body_fragments,
         last_flow_space,
         endnotes_placed,
     }
+}
+
+fn continuous_geometry_matches(left: &PageGeometry, right: &PageGeometry) -> bool {
+    left.page_width == right.page_width
+        && left.page_height == right.page_height
+        && left.margin_left == right.margin_left
+        && left.margin_right == right.margin_right
+        && left.margin_top == right.margin_top
+        && left.margin_bottom == right.margin_bottom
+        && left.body_rotation == right.body_rotation
+        && left.columns.len() == right.columns.len()
+        && left
+            .columns
+            .iter()
+            .zip(&right.columns)
+            .all(|(left, right)| left.width == right.width && left.x == right.x)
 }
 
 pub(crate) fn paginate_shared_single_section_recorded(
@@ -505,6 +625,7 @@ pub(crate) fn paginate_shared_single_section_recorded(
         notes,
         first_page_number: checkpoint.page_count + 1,
         first_header_page_number: checkpoint.next_header_page_number,
+        continuous_sections: None,
     };
     let result = paginate_pass_from(
         &section.blocks,
@@ -524,6 +645,7 @@ pub(crate) fn paginate_shared_single_section_recorded(
         body_fragments: result.body_fragments,
         checkpoints,
         stopped_at: result.stopped_at,
+        last_flow_space: result.last_flow_space,
     }
 }
 
@@ -702,6 +824,7 @@ fn paginate_with_media<B: LayoutBlockLike>(
         notes,
         first_page_number,
         first_header_page_number,
+        None,
     );
     (result.pages, result.outlines)
 }
@@ -719,6 +842,7 @@ fn paginate_with_media_recorded<B: LayoutBlockLike>(
     notes: &NoteRegistry,
     first_page_number: usize,
     first_header_page_number: usize,
+    continuous_sections: Option<&[SharedSection]>,
 ) -> PassResult {
     let context = PassContext {
         geometry,
@@ -731,6 +855,7 @@ fn paginate_with_media_recorded<B: LayoutBlockLike>(
         notes,
         first_page_number,
         first_header_page_number,
+        continuous_sections,
     };
     let first = paginate_pass(blocks, &context, &ResolvedWraps::new());
 
@@ -776,6 +901,7 @@ struct PassContext<'a> {
     notes: &'a NoteRegistry,
     first_page_number: usize,
     first_header_page_number: usize,
+    continuous_sections: Option<&'a [SharedSection]>,
 }
 
 fn paginate_pass<B: LayoutBlockLike>(
@@ -821,7 +947,51 @@ fn paginate_pass_from<B: LayoutBlockLike>(
         stop_at,
     );
 
+    pager.continuous_sections = context.continuous_sections;
     for (block_idx, block) in blocks.iter().enumerate().skip(first_block_index) {
+        if let Some(sections) = context.continuous_sections {
+            let mut end = 0;
+            let previous_member = pager.active_member;
+            pager.active_member = sections
+                .iter()
+                .position(|section| {
+                    end += section.blocks.len();
+                    block_idx < end
+                })
+                .unwrap_or(sections.len() - 1);
+            if pager.active_member != previous_member
+                && !pager.page_note_ids.is_empty()
+                && !sections[pager.active_member].modern_footnote_layout
+            {
+                if sections[pager.active_member].footnote_layout_like_word8 {
+                    pager.pending_continuous_footnote_break = true;
+                } else {
+                    pager.finish_page_outright();
+                }
+            }
+        }
+        if pager.pending_continuous_footnote_break {
+            let references = block
+                .paragraph()
+                .map(|paragraph| {
+                    paragraph
+                        .lines
+                        .iter()
+                        .flat_map(page_foot_notes_in_line)
+                        .collect::<Vec<_>>()
+                })
+                .or_else(|| block.table().map(|table| table_note_references(&table)))
+                .unwrap_or_default();
+            if references.iter().any(|reference| {
+                reference.stream == NoteStream::Footnote
+                    && pager
+                        .notes
+                        .get(*reference, pager.geometry.content_width())
+                        .is_some()
+            }) {
+                pager.finish_page_outright();
+            }
+        }
         let follows_trailing_run_page_break =
             pager.consume_trailing_run_page_break_before(block_idx);
         // Check for page break before
@@ -832,6 +1002,7 @@ fn paginate_pass_from<B: LayoutBlockLike>(
             }
         }
 
+        pager.select_empty_page_member();
         if let Some(para) = block.paragraph() {
             // Record heading outline entry before rendering
             if let (Some(level), Some(title)) = (para.heading_level, &para.heading_text) {
@@ -1168,6 +1339,11 @@ struct Pager<'a> {
     numbered_lines: Vec<NumberedLine>,
     /// The number the next body line of this section receives.
     next_line_number: u32,
+    continuous_sections: Option<&'a [SharedSection]>,
+    active_member: usize,
+    pending_continuous_footnote_break: bool,
+    page_member: Option<usize>,
+    member_first_pages: HashMap<usize, usize>,
     header_footer: Option<&'a HeaderFooterContent>,
     header_footer_semantics: Option<&'a HeaderFooterSemantics>,
     has_content_flag: bool,
@@ -1263,6 +1439,11 @@ impl<'a> Pager<'a> {
             geometry,
             header_footer,
             header_footer_semantics,
+            continuous_sections: None,
+            active_member: 0,
+            pending_continuous_footnote_break: false,
+            page_member: None,
+            member_first_pages: HashMap::new(),
             has_content_flag: false,
             outlines: Vec::new(),
             is_first_page,
@@ -1533,7 +1714,43 @@ impl<'a> Pager<'a> {
         lines.len()
     }
 
+    fn select_empty_page_member(&mut self) {
+        if self.page_member.is_some() {
+            return;
+        }
+        let Some(sections) = self.continuous_sections else {
+            return;
+        };
+        let member = &sections[self.active_member];
+        let first = self
+            .member_first_pages
+            .get(&self.active_member)
+            .copied()
+            .unwrap_or(self.page_number);
+        if let Some(start) = member.page_number_start {
+            self.header_page_number = start.saturating_add(self.page_number - first);
+        }
+        self.header_footer = member.header_footer.as_ref();
+        self.header_footer_semantics = member.header_footer_semantics.as_ref();
+        self.title_pg = member.title_pg;
+        self.is_first_page = self.page_number == first;
+        self.footnotes_beneath_text = member.footnotes_beneath_text;
+        self.section_geometry = member.geometry.clone();
+        let track = self.track_index;
+        self.begin_page();
+        self.track_index = track.min(self.tracks.len().saturating_sub(1));
+        self.apply_active_track();
+    }
+
     fn mark_content(&mut self) {
+        if self.continuous_sections.is_some() {
+            self.member_first_pages
+                .entry(self.active_member)
+                .or_insert(self.page_number);
+            if self.page_member.is_none() {
+                self.page_member = Some(self.active_member);
+            }
+        }
         self.has_content_flag = true;
     }
 
@@ -2083,6 +2300,7 @@ impl<'a> Pager<'a> {
                 field_kind: None,
                 field_source: None,
                 note: None,
+                note_reference_source: None,
                 tab_aligned: None,
             }));
         }
@@ -2305,6 +2523,9 @@ impl<'a> Pager<'a> {
 
         // behindDoc drawings render underneath everything else on the page.
         all_elements.append(&mut self.behind_elements);
+        let furniture_behind_index = all_elements.len();
+        let mut furniture_behind = Vec::new();
+        let mut furniture_front = Vec::new();
 
         if let Some(hf) = self.header_footer {
             // Choose header blocks: first-page or default
@@ -2332,7 +2553,11 @@ impl<'a> Pager<'a> {
                     &self.page_geometry,
                     header_y,
                     self.page_number,
-                    &mut all_elements,
+                    (
+                        &mut all_elements,
+                        &mut furniture_behind,
+                        &mut furniture_front,
+                    ),
                     self.media,
                 );
             }
@@ -2370,12 +2595,21 @@ impl<'a> Pager<'a> {
                     &self.page_geometry,
                     footer_y,
                     self.page_number,
-                    &mut all_elements,
+                    (
+                        &mut all_elements,
+                        &mut furniture_behind,
+                        &mut furniture_front,
+                    ),
                     self.media,
                 );
             }
         }
 
+        all_elements.splice(
+            furniture_behind_index..furniture_behind_index,
+            furniture_behind,
+        );
+        all_elements.append(&mut furniture_front);
         all_elements.append(&mut page_borders);
 
         let mut page = PageFrame::new(
@@ -2394,7 +2628,10 @@ impl<'a> Pager<'a> {
         self.ink_bottom = 0.0;
         self.has_content_flag = false;
         self.is_first_page = false;
+        self.page_member = None;
+        self.pending_continuous_footnote_break = false;
         self.begin_page();
+        self.select_empty_page_member();
     }
 
     /// Make room for the block at `next_block_index`.
@@ -2615,6 +2852,13 @@ fn push_multilingual_text(
             None => base.field_source,
         },
         note: base.note,
+        note_reference_source: match source_node {
+            Some(source_node) => base.note_reference_source.and_then(|mut source| {
+                source.node = source_node?;
+                Some(source)
+            }),
+            None => base.note_reference_source,
+        },
     }));
     if let Some(underline) = base.underline {
         let underline_y = adjusted_baseline + base.descent * 0.3;
@@ -2719,6 +2963,7 @@ fn draw_note(
             field_kind: None,
             field_source: None,
             note: None,
+            note_reference_source: None,
             tab_aligned: None,
         }));
     }
@@ -2858,6 +3103,7 @@ pub(crate) fn append_endnote_pages_for_references(
     geometry: PageGeometry,
     preceding_page_count: usize,
     next_displayed_page_number: usize,
+    flow_space: Option<PageFlowSpace>,
 ) {
     let mut ordered = Vec::new();
     for &note in references {
@@ -2876,7 +3122,7 @@ pub(crate) fn append_endnote_pages_for_references(
         geometry,
         preceding_page_count,
         next_displayed_page_number,
-        None,
+        flow_space,
     );
 }
 
@@ -2888,9 +3134,9 @@ fn append_ordered_endnote_pages(
     preceding_page_count: usize,
     next_displayed_page_number: usize,
     flow_space: Option<PageFlowSpace>,
-) {
+) -> Option<PageFlowSpace> {
     if ordered.is_empty() {
-        return;
+        return flow_space;
     }
 
     let authored_separator = notes.get_special(
@@ -3118,6 +3364,29 @@ fn append_ordered_endnote_pages(
     if !elements.is_empty() {
         flush(&mut elements, &mut page_number);
     }
+    Some(PageFlowSpace {
+        body_bottom: cursor_y,
+        note_top: content_height,
+    })
+}
+
+fn table_note_references(table: &crate::table::TableBlock) -> Vec<NoteRef> {
+    let mut references = Vec::new();
+    for row in &table.rows {
+        for cell in &row.cells {
+            for block in &cell.blocks {
+                match block {
+                    crate::table::CellBlock::Paragraph(paragraph) => {
+                        references.extend(paragraph.lines.iter().flat_map(notes_in_line))
+                    }
+                    crate::table::CellBlock::Table(table) => {
+                        references.extend(table_note_references(table))
+                    }
+                }
+            }
+        }
+    }
+    references
 }
 
 /// The notes referenced by the segments on one line.
@@ -4092,6 +4361,15 @@ fn render_paragraph_lines(
                             None => seg.field_source,
                         },
                         note: seg.note,
+                        note_reference_source: match para.source_node() {
+                            Some(source_node) => {
+                                seg.note_reference_source.and_then(|mut source| {
+                                    source.node = source_node?;
+                                    Some(source)
+                                })
+                            }
+                            None => seg.note_reference_source,
+                        },
                         tab_aligned: tab_aligned[visual_item].map(|mut field| {
                             field.start += x_offset;
                             field.end += x_offset;
@@ -4254,6 +4532,7 @@ fn render_paragraph_lines(
                             field_kind: None,
                             field_source: None,
                             note: None,
+                            note_reference_source: None,
                             tab_aligned: None,
                         }));
                         text_provenance.push(ReflowTextProvenance {
@@ -4904,11 +5183,26 @@ fn render_hf_blocks(
     geometry: &PageGeometry,
     start_y: f64,
     page_number: usize,
-    elements: &mut Vec<PositionedElement>,
+    layers: (
+        &mut Vec<PositionedElement>,
+        &mut Vec<PositionedElement>,
+        &mut Vec<PositionedElement>,
+    ),
     media: &HashMap<MediaId, ImageData>,
 ) {
+    let (elements, behind, front) = layers;
     let mut y = start_y - geometry.margin_top; // Convert to relative
     for (index, para) in blocks.iter().enumerate() {
+        place_cell_anchored(
+            &para.anchored,
+            geometry,
+            geometry,
+            y,
+            para.indent_left,
+            front,
+            behind,
+            media,
+        );
         render_paragraph_lines(
             &para.lines,
             ParagraphView {
@@ -4935,6 +5229,86 @@ fn render_hf_blocks(
         );
         y += para.content_height();
     }
+}
+
+/// Keep a related-story table's row geometry and cell clipping in its
+/// paragraph-based furniture flow. Each row is one indivisible flow line.
+pub(crate) fn story_table_rows(
+    table: &crate::table::TableBlock,
+    semantics: &crate::block::TableSemantics,
+    geometry: &PageGeometry,
+    media: &HashMap<MediaId, ImageData>,
+) -> Vec<ParagraphBlock> {
+    let local_geometry = PageGeometry {
+        margin_top: 0.0,
+        margin_left: 0.0,
+        margin_right: 0.0,
+        margin_bottom: 0.0,
+        ..geometry.without_columns()
+    };
+    table
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(index, row)| {
+            let mut children = Vec::new();
+            let mut behind = Vec::new();
+            render_table_row(
+                row,
+                semantics.rows.get(index),
+                &table.col_widths,
+                table.table_indent,
+                0.0,
+                &local_geometry,
+                1,
+                table.borders.as_ref(),
+                table.bidi_visual,
+                &mut children,
+                &mut behind,
+                media,
+                index == 0,
+                index + 1 == table.rows.len(),
+            );
+            behind.extend(children);
+            let line = LayoutLine {
+                items: vec![LineItem::Group {
+                    width: table.table_width,
+                    height: row.height,
+                    baseline: Some(row.height),
+                    group: GroupElement {
+                        transform: Transform::IDENTITY,
+                        clip: None,
+                        opacity: 1.0,
+                        effects: Vec::new(),
+                        children: behind,
+                    },
+                }],
+                width: table.table_width,
+                ascent: row.height,
+                descent: 0.0,
+                line_gap: 0.0,
+                height: row.height,
+                indent_left: 0.0,
+                available_width: table.table_width,
+                is_last: true,
+                forced_break_after: None,
+            };
+            crate::block::build_paragraph_block(
+                vec![line],
+                0.0,
+                0.0,
+                None,
+                None,
+                0.0,
+                0.0,
+                None,
+                false,
+                true,
+                false,
+                false,
+            )
+        })
+        .collect()
 }
 
 /// Render a table row.
@@ -5285,10 +5659,9 @@ fn render_cell_borders(
 ) {
     // Determine effective border for each edge (cell overrides table)
     let get_edge = |cell_edge: Option<&rdocx_oxml::borders::CT_BorderEdge>,
-                    table_edge: Option<&rdocx_oxml::borders::CT_BorderEdge>,
-                    outer_edge: bool|
+                    table_edge: Option<&rdocx_oxml::borders::CT_BorderEdge>|
      -> Option<BorderEdge> {
-        let edge = crate::table::resolved_cell_edge(cell_edge, table_edge, outer_edge)?;
+        let edge = crate::table::resolved_cell_edge(cell_edge, table_edge)?;
         let thickness = edge.sz.unwrap_or(4) as f64 / 8.0; // sz is in 1/8 pt
         let color = edge
             .color
@@ -5311,8 +5684,7 @@ fn render_cell_borders(
     // A horizontal border fills the band below the row boundary it sits on,
     // which the row heights reserve, rather than straddling the boundary.
     let cell_top = cell_borders.as_ref().and_then(|b| b.top.as_ref());
-    if draw_top_border
-        && let Some((thickness, color, dash_pattern)) = get_edge(cell_top, table_top, is_first_row)
+    if draw_top_border && let Some((thickness, color, dash_pattern)) = get_edge(cell_top, table_top)
     {
         let line_y = y + thickness / 2.0;
         elements.push(PositionedElement::Line {
@@ -5337,8 +5709,7 @@ fn render_cell_borders(
     });
     let cell_bottom = cell_borders.as_ref().and_then(|b| b.bottom.as_ref());
     if draw_bottom_border
-        && let Some((thickness, color, dash_pattern)) =
-            get_edge(cell_bottom, table_bottom, is_last_row)
+        && let Some((thickness, color, dash_pattern)) = get_edge(cell_bottom, table_bottom)
     {
         // The table's bottom band is the last row's own, so its line sits
         // inside the row. Any other bottom edge is in the next row's band.
@@ -5368,7 +5739,7 @@ fn render_cell_borders(
         }
     });
     let cell_left = cell_borders.as_ref().and_then(|b| b.left.as_ref());
-    if let Some((thickness, color, dash_pattern)) = get_edge(cell_left, table_left, cell_idx == 0) {
+    if let Some((thickness, color, dash_pattern)) = get_edge(cell_left, table_left) {
         elements.push(PositionedElement::Line {
             start: Point { x, y },
             end: Point { x, y: y + h },
@@ -5387,9 +5758,7 @@ fn render_cell_borders(
         }
     });
     let cell_right = cell_borders.as_ref().and_then(|b| b.right.as_ref());
-    if let Some((thickness, color, dash_pattern)) =
-        get_edge(cell_right, table_right, cell_idx == num_cells - 1)
-    {
+    if let Some((thickness, color, dash_pattern)) = get_edge(cell_right, table_right) {
         elements.push(PositionedElement::Line {
             start: Point { x: x + w, y },
             end: Point { x: x + w, y: y + h },
@@ -5735,6 +6104,7 @@ mod tests {
             field_kind,
             field_source: None,
             note: None,
+            note_reference_source: None,
         }
     }
 
@@ -6089,6 +6459,222 @@ mod tests {
                 sourced.iter().all(|source| source.node == source_node),
                 "{story} sources must use the current story node: {sourced:?}"
             );
+        }
+    }
+
+    #[test]
+    fn generated_note_reference_rebinds_structural_owner_without_text_source() {
+        let cache_node = oxml_layout::SourceNodeId::new(u32::MAX).unwrap();
+        let rebound = oxml_layout::SourceNodeId::new(73).unwrap();
+        for direction in [TextDirection::LeftToRight, TextDirection::RightToLeft] {
+            let mut marker = directional_test_segment("1", direction, None, None);
+            marker.note = Some(oxml_layout::NoteRef {
+                stream: oxml_layout::NoteStream::Footnote,
+                id: 17,
+            });
+            marker.note_reference_source = Some(oxml_layout::SourceSpan {
+                node: cache_node,
+                char_start: 3,
+                char_end: 3,
+            });
+            let mut paragraph = make_para(1, 12.0);
+            paragraph.lines[0].items = vec![LineItem::Text(marker)];
+            let semantics = ParagraphSemantics {
+                source_node: Some(rebound),
+                structure_id: None,
+                reflow_direction: direction,
+            };
+            let mut elements = Vec::new();
+            render_paragraph_lines(
+                &paragraph.lines,
+                ParagraphView {
+                    block: &paragraph,
+                    semantics: Some(&semantics),
+                    reflow_direction: direction,
+                    reflow_allowed: false,
+                },
+                &PageGeometry::default(),
+                0.0,
+                &mut elements,
+                &HashMap::new(),
+            );
+            let references = elements
+                .iter()
+                .filter_map(|element| match element {
+                    PositionedElement::Text(run) if run.note.is_some() => {
+                        Some((run.source, run.note_reference_source))
+                    }
+                    PositionedElement::MultilingualText(run) if run.note.is_some() => {
+                        Some((run.source, run.note_reference_source))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                references,
+                vec![(
+                    None,
+                    Some(oxml_layout::SourceSpan {
+                        node: rebound,
+                        char_start: 3,
+                        char_end: 3
+                    })
+                )]
+            );
+        }
+    }
+
+    #[test]
+    fn furniture_anchors_keep_variant_coordinates_and_background_text_layers() {
+        for (horizontal, vertical) in [
+            (ST_RelativeFromH::Page, ST_RelativeFromV::Page),
+            (ST_RelativeFromH::Margin, ST_RelativeFromV::Margin),
+            (ST_RelativeFromH::Column, ST_RelativeFromV::Paragraph),
+            (ST_RelativeFromH::Character, ST_RelativeFromV::Paragraph),
+        ] {
+            for border_in_front in [false, true] {
+                let story = |id: u64| {
+                    let mut para = make_para(1, 14.0);
+                    para.indent_left = 13.0;
+                    para.lines[0].items = vec![LineItem::Text(directional_test_segment(
+                        "FURNITURE",
+                        TextDirection::Auto,
+                        None,
+                        None,
+                    ))];
+                    for behind in [true, false] {
+                        let mut anchor = wrapping_drawing(vertical);
+                        anchor.rel_h = horizontal;
+                        anchor.off_h = 7.0;
+                        anchor.off_v = 5.0;
+                        anchor.height = 200.0;
+                        anchor.wrap = WrapType::None;
+                        anchor.behind_doc = behind;
+                        anchor.content = AnchoredContent::Image {
+                            media_id: MediaId(id + u64::from(!behind)),
+                        };
+                        para.anchored.push(anchor);
+                    }
+                    let mut neighbor = make_para(1, 14.0);
+                    neighbor.lines[0].items = vec![LineItem::Text(directional_test_segment(
+                        "NEIGHBOR",
+                        TextDirection::Auto,
+                        None,
+                        None,
+                    ))];
+                    vec![para, neighbor]
+                };
+                let watermark = GroupElement {
+                    transform: Transform::IDENTITY,
+                    clip: None,
+                    opacity: 0.75,
+                    effects: Vec::new(),
+                    children: Vec::new(),
+                };
+                let hf = HeaderFooterContent {
+                    header_blocks: story(10),
+                    footer_blocks: story(20),
+                    first_header_blocks: story(30),
+                    first_footer_blocks: story(40),
+                    even_header_blocks: story(50),
+                    even_footer_blocks: story(60),
+                    even_headers_active: true,
+                    watermark: Some(watermark.clone()),
+                    first_watermark: Some(watermark.clone()),
+                    even_watermark: Some(watermark),
+                };
+                let mut geometry = PageGeometry::default();
+                let mut edge = CT_BorderEdge::new(ST_Border::Single);
+                edge.color = Some("123456".into());
+                edge.sz = Some(8);
+                geometry.page_borders = Some(PageBorderFrame {
+                    display: ST_PageBorderDisplay::AllPages,
+                    offset_from: ST_PageBorderOffset::Page,
+                    in_front: border_in_front,
+                    edges: CT_PBdr {
+                        top: Some(edge),
+                        ..Default::default()
+                    },
+                });
+                let mut blocks = Vec::new();
+                for page in 0..3 {
+                    let mut para = make_para(1, 14.0);
+                    para.page_break_before = page > 0;
+                    para.lines[0].items = vec![LineItem::Text(directional_test_segment(
+                        "BODY",
+                        TextDirection::Auto,
+                        None,
+                        None,
+                    ))];
+                    blocks.push(LayoutBlock::Paragraph(para));
+                }
+                let (pages, _) = paginate(
+                    &blocks,
+                    geometry.clone(),
+                    Some(&hf),
+                    true,
+                    &FontManager::new(),
+                    &empty_media(),
+                    &NoteRegistry::default(),
+                );
+                assert_eq!(pages.len(), 3);
+                for (page_index, page) in pages.iter().enumerate() {
+                    let (header, footer) = match page_index {
+                        0 => (30, 40),
+                        1 => (50, 60),
+                        _ => (10, 20),
+                    };
+                    let mut images = Vec::new();
+                    let mut text = Vec::new();
+                    for (index, element) in page.elements.iter().enumerate() {
+                        oxml_layout::walk(std::slice::from_ref(element), &mut |element, _| {
+                            match element {
+                                PositionedElement::Image { media_id, rect, .. } => {
+                                    images.push((index, media_id.0, *rect))
+                                }
+                                PositionedElement::Text(_)
+                                | PositionedElement::MultilingualText(_) => text.push(index),
+                                _ => {}
+                            }
+                        });
+                    }
+                    assert_eq!(
+                        images.iter().map(|(_, id, _)| *id).collect::<Vec<_>>(),
+                        [header, footer, header + 1, footer + 1]
+                    );
+                    let watermark=page.elements.iter().position(|element| matches!(element,PositionedElement::Group(group) if group.opacity==0.75)).unwrap();
+                    assert!(watermark < images[0].0);
+                    assert!(images[1].0 < *text.iter().min().unwrap());
+                    assert!(*text.iter().max().unwrap() < images[2].0);
+                    let border=page.elements.iter().position(|element| matches!(element,PositionedElement::Line {color,..} if *color == Color::from_hex("123456"))).unwrap();
+                    if border_in_front {
+                        assert!(images[3].0 < border);
+                    } else {
+                        assert!(border < watermark);
+                    }
+                    for (_, id, rect) in &images {
+                        let story_top = if *id == header || *id == header + 1 {
+                            geometry.header_distance
+                        } else {
+                            geometry.page_height - geometry.footer_distance - 28.0
+                        };
+                        let x = match horizontal {
+                            ST_RelativeFromH::Page => 7.0,
+                            ST_RelativeFromH::Margin | ST_RelativeFromH::Column => {
+                                geometry.margin_left + 7.0
+                            }
+                            _ => geometry.margin_left + 13.0 + 7.0,
+                        };
+                        let y = match vertical {
+                            ST_RelativeFromV::Page => 5.0,
+                            ST_RelativeFromV::Margin => geometry.margin_top + 5.0,
+                            _ => story_top + 5.0,
+                        };
+                        assert_eq!(rect.x, x);
+                        assert_eq!(rect.y, y);
+                    }
+                }
+            }
         }
     }
 
@@ -6824,6 +7410,7 @@ mod tests {
             field_kind: None,
             field_source: None,
             note: None,
+            note_reference_source: None,
         };
         LayoutLine {
             items: vec![LineItem::Text(seg)],
@@ -6959,6 +7546,7 @@ mod tests {
             field_kind: None,
             field_source: None,
             note: None,
+            note_reference_source: None,
         };
         let line = LayoutLine {
             items: vec![LineItem::Text(seg)],
@@ -7189,6 +7777,7 @@ mod tests {
             field_kind: None,
             field_source: None,
             note: None,
+            note_reference_source: None,
         };
         LayoutLine {
             items: vec![LineItem::Text(seg)],
@@ -7232,6 +7821,7 @@ mod tests {
             field_kind: None,
             field_source: None,
             note: None,
+            note_reference_source: None,
         };
         let line = LayoutLine {
             items: vec![LineItem::Text(seg)],
@@ -7696,14 +8286,13 @@ mod tests {
     }
 
     #[test]
-    fn outer_nil_border_matches_word_without_changing_interior_nil() {
+    fn cell_nil_removes_every_edge_and_cell_none_falls_back_to_the_table() {
         use rdocx_oxml::borders::CT_BorderEdge;
         use rdocx_oxml::table::CT_TblBorders;
 
         let mut visible = CT_BorderEdge::new(ST_Border::Single);
         visible.sz = Some(8);
         visible.color = Some("112233".to_owned());
-        let nil = CT_BorderEdge::new(ST_Border::None);
         let table = CT_TblBorders {
             top: Some(visible.clone()),
             bottom: Some(visible.clone()),
@@ -7713,51 +8302,55 @@ mod tests {
             inside_v: Some(visible),
             extra_xml: Vec::new(),
         };
-        let cell = Some(CT_TblBorders {
-            top: Some(nil.clone()),
-            bottom: Some(nil.clone()),
-            left: Some(nil.clone()),
-            right: Some(nil),
-            inside_h: None,
-            inside_v: None,
-            extra_xml: Vec::new(),
-        });
+        let cell_edges = |val: ST_Border| {
+            let edge = CT_BorderEdge::new(val);
+            Some(CT_TblBorders {
+                top: Some(edge.clone()),
+                bottom: Some(edge.clone()),
+                left: Some(edge.clone()),
+                right: Some(edge),
+                inside_h: None,
+                inside_v: None,
+                extra_xml: Vec::new(),
+            })
+        };
+        // A lone cell has only outer edges, the middle cell of a middle row
+        // only inside ones.
+        let drawn = |cell: &Option<CT_TblBorders>, outer: bool| {
+            let (cell_idx, num_cells) = if outer { (0, 1) } else { (1, 3) };
+            let mut elements = Vec::new();
+            render_cell_borders(
+                10.0,
+                20.0,
+                30.0,
+                40.0,
+                cell,
+                Some(&table),
+                cell_idx,
+                num_cells,
+                outer,
+                outer,
+                true,
+                true,
+                &mut elements,
+            );
+            elements.len()
+        };
 
-        let mut outer = Vec::new();
-        render_cell_borders(
-            10.0,
-            20.0,
-            30.0,
-            40.0,
-            &cell,
-            Some(&table),
-            0,
-            1,
-            true,
-            true,
-            true,
-            true,
-            &mut outer,
+        let nil = cell_edges(ST_Border::Nil);
+        assert_eq!(drawn(&nil, true), 0, "nil removes the table's outer edges");
+        assert_eq!(drawn(&nil, false), 0, "nil removes the inside edges");
+        let none = cell_edges(ST_Border::None);
+        assert_eq!(
+            drawn(&none, true),
+            4,
+            "none leaves the outer edges to the table"
         );
-        assert_eq!(outer.len(), 4, "four outer edges fall back to the table");
-
-        let mut interior = Vec::new();
-        render_cell_borders(
-            10.0,
-            20.0,
-            30.0,
-            40.0,
-            &cell,
-            Some(&table),
-            1,
-            3,
-            false,
-            false,
-            true,
-            true,
-            &mut interior,
+        assert_eq!(
+            drawn(&none, false),
+            4,
+            "none leaves the inside edges to the table"
         );
-        assert!(interior.is_empty(), "interior nil remains suppressive");
     }
 
     #[test]
@@ -8128,6 +8721,7 @@ mod tests {
             notes: &notes,
             first_page_number: 1,
             first_header_page_number: 1,
+            continuous_sections: None,
         };
         let pass = paginate_pass(&blocks, &context, &empty);
 

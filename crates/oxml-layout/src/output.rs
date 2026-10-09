@@ -120,7 +120,7 @@ pub struct SourceSpan {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FieldSource {
     pub node: SourceNodeId,
-    /// Zero-based position among the node's top-level fields.
+    /// Zero-based preorder position among the node's fields, including nested operands and result fields.
     pub index: u32,
 }
 
@@ -200,10 +200,18 @@ pub enum FieldKind {
     Page,
     /// Total number of pages.
     NumPages,
+    /// One-based owning section number.
+    Section,
+    /// Physical pages occupied by the owning section.
+    SectionPages,
     /// Page containing a target.
     TargetPage(usize),
     /// Zero-width target position retained until page locations are collected.
     Target(usize),
+    /// Zero-width Word sequence event position in the current source snapshot.
+    SequenceContext(usize),
+    /// Word sequence repeat resolved from its physical source and page context.
+    SequenceRepeat,
 }
 
 /// A positioned run of shaped glyphs.
@@ -235,6 +243,8 @@ pub struct GlyphRun {
     pub field_source: Option<FieldSource>,
     /// If this glyph run is a footnote/endnote reference marker, its ID.
     pub note: Option<crate::line::NoteRef>,
+    /// Structural source of a note reference, independent of generated glyph text.
+    pub note_reference_source: Option<SourceSpan>,
     /// Where a field placeholder sits in text aligned on a tab stop.
     pub tab_aligned: Option<TabAlignedField>,
 }
@@ -286,6 +296,8 @@ pub struct MultilingualGlyphRun {
     pub field_kind: Option<FieldKind>,
     pub field_source: Option<FieldSource>,
     pub note: Option<crate::line::NoteRef>,
+    /// Structural source of a note reference, independent of generated glyph text.
+    pub note_reference_source: Option<SourceSpan>,
 }
 
 impl MultilingualGlyphRun {
@@ -329,6 +341,7 @@ impl MultilingualGlyphRun {
             field_kind: self.field_kind,
             field_source: self.field_source,
             note: self.note,
+            note_reference_source: self.note_reference_source,
             tab_aligned: None,
         }
     }

@@ -116,7 +116,9 @@ merge state, and unmodelled-content flags. `NumberingFormat`,
 `ListLevelSuffix`, `NumberingLevel`, `DrawingKind`,
 `DrawingRelationshipKind`, `FieldKind`, and `FieldDisplaySegmentRef` are
 concrete native Rust values. Python, WASM, and CLI surfaces do not gain these
-reader methods.
+reader methods. The native numbering level reader reports actual extra
+attributes and children on its instance, definition and level. Retained XML
+namespace declarations alone do not signal unmodeled numbering semantics.
 
 At the public low-level Rust boundary, `CT_RPr` includes the complete language
 attribute set and its retained foreign attributes, while `LayoutInput` includes
@@ -124,8 +126,10 @@ the document automatic-hyphenation boolean and the
 `w:doNotUseHTMLParagraphAutoSpacing` compatibility boolean, and the laid-out
 `TableCell` includes the horizontal border bands above and below its content.
 Full struct literals must provide these fields. These are intentional pre-1.0 source breaks for the next stable
-family. Established `TextSegment` construction and layout entrypoints retain
-their existing shapes.
+family. Shared `TextSegment`, `GlyphRun` and `MultilingualGlyphRun` struct
+literals also provide `note_reference_source`. Exhaustive shared `FieldKind`
+matches cover `Section`, `SectionPages`, `SequenceContext` and `SequenceRepeat`.
+The established layout entrypoints retain their call shapes.
 
 The shared native `ChartData` input includes optional category-axis and
 value-axis titles plus a typed `Vec<RgbColor>` palette. `oxml-chart`, `rdocx`,
@@ -375,8 +379,9 @@ field cache update operations. `RunPosition` and
 `StoryRunPosition` also accepts a body `Paragraph` handle. A handle to a
 paragraph inside a block content control yields an item with the two-segment
 path of `Document::paragraph_story_location`, the control's story item index
-then the paragraph's position among the control's paragraphs, which only
-comment positions accept.
+then the paragraph's position among the control's paragraphs. Comment positions
+and scoped paragraph replacement accept this path. Both paragraph-handle positions and returned comment
+endpoints carry checked accepted paragraph text and nonempty paragraph XML.
 `Document.add_comment` accepts either range form.
 `Document.add_comment_on_text` comments on the zero-based occurrence of an
 exact text in the main story without run index bookkeeping. The original
@@ -404,6 +409,36 @@ the revision once only when that state changes. Revision resolution,
 replacement, and field updates release the GIL and advance the revision once
 only when they report a nonzero count. A native error publishes no
 candidate and does not advance the binding revision.
+
+`Paragraph.replace_text(old, new, *, expect=None)`,
+`Cell.replace_text(old, new, *, expect=None)` and
+`Document.replace_text_at(item, old, new, *, expect=None)` return a local
+literal replacement count. Paragraphs keep run formatting and never join
+separate paragraphs. Cells search their supported nested tables and controls,
+without visiting neighboring cells. The explicit Document operation accepts
+checked paragraph, table and block-control StoryItems, including related header,
+footer and normal note paragraphs. StoryItem remains frozen and detached.
+Paragraph handles inside block controls retain their checked two-segment paths.
+Cell and cell-paragraph handles use physical table, row and cell coordinates.
+
+Each route stages the owning native Document and reopens the complete package
+before publication. `expect` mismatch raises `ReplacementCountError` with
+`index=None`, `expected` and `found`, preserving the document and all handles.
+Invalid XML text, stale selection, unsupported targets and preparation failures
+also preserve bytes and revisions. Zero replacements, including an empty old
+literal, do not advance the revision. A positive count publishes once, releases
+the GIL while working and advances the revision once, staling prior handles.
+The shared binding generic has checked StoryItem and physical cell closures as
+its existing consumers. Global replacement and CLI signatures remain unchanged.
+
+`Document.remove_content` returns false for an absent index and raises
+`RdocxError` for an unsafe comment cut. Complete thread deletion and cell text
+replacement publish one prepared and reopened candidate, then invalidate
+borrowed handles once. Refused operations leave handles and package bytes
+unchanged. `pop_content` refuses a commented fragment rather than detaching
+anchors from their definitions. Native `Cell::try_set_text` exposes checked
+errors, while its legacy setter leaves the cell unchanged on refusal.
+
 
 `Document.add_picture` accepts in-memory bytes, a safe filename, optional
 paired EMU dimensions, and an optional checked `StoryItem` placement. Omitted
@@ -763,6 +798,51 @@ native validation failure publishes no candidate and leaves existing handles
 valid.
 
 ## Native Word facade stability
+Native Rust exposes `BibliographySourceKind`, `BibliographyContributorRole`,
+`BibliographySourceField`, `BibliographyStyle`, source/person/contributor/property
+records, source/style inspection records, `CitationOptions`,
+`CitationSourceOptions`, `BibliographyOptions` and `BibliographyUpdateReport`.
+`Document::bibliography_sources`, `add_bibliography_source`,
+`replace_bibliography_source` and `remove_bibliography_source` inspect and mutate
+qualified source records. `bibliography_style`, `set_bibliography_options`,
+`insert_citation` and `insert_bibliography` provide checked native authoring.
+`update_bibliography` and `update_bibliography_with_default_locale` explicitly
+materialize admitted caches through one staged transaction.
+
+Metadata models all seventeen source kinds, sixteen roles and twelve style
+identities. Formatting coverage is separate. APA's 210 measured ordinary dense
+locale configurations do not promise arbitrary sparse, plural, corporate or
+Unicode input. The eleven other bibliography branches currently require
+numeric1033, Book, Author-only contributors, a small property set, one person
+and nonempty ASCII Last/First/Title/Year/City/Publisher values. Citation locale,
+kind and modifier admissions have their own contract. A recognized unfinished
+standard branch returns an explicit error and preserves the whole document.
+Noncatalogue paths retain caches and return diagnostics in the update report.
+Locked and protected owner boundaries remain distinct. Source LCID and field
+selectors precede a caller-supplied actual default locale, with no ambient or
+guessed en-US fallback. Non-ASCII collection sort keys refuse.
+
+These additive pre-1.0 APIs are native Rust only. Python, WASM and CLI expose no
+dedicated bibliography source or update API. Their existing document and field
+compatibility checks remain required over the shared Rust changes. The remaining
+full catalogue belongs to F-X192, rather than an implied wrapper capability.
+
+
+Native Rust adds `IndexEntry`, `AuthorityEntry`, `IndexOptions`,
+`TableOfFiguresOptions`, `TableOfAuthoritiesOptions` and
+`GeneratedTablesReport`. `Document::insert_index_entry` and
+`insert_authority_entry` author checked complex source markers.
+`insert_index`, `insert_table_of_figures` and `insert_table_of_authorities`
+insert dynamic generated owners at checked story boundaries.
+`rebuild_generated_tables` atomically rebuilds supported caches.
+These are additive pre-1.0 APIs with no Python, WASM or CLI additions.
+
+Authority category `None` inserts separate numbered fields for every populated
+category in native order and returns the first checked location. It never
+encodes All as zero or as an omitted category. INDEX hyperlink authoring retains
+its formatting request in the paragraph mark's Hyperlink character style and
+in the generated label caches. Entry hyperlinks point to checked internal
+bookmarks. Requested leaders and existing producer styles remain intact.
 
 The pre-1.0 `rdocx-layout::TableRow` projection carries a public
 `cant_split: bool` alongside its header and height facts. Direct and
@@ -792,7 +872,12 @@ one exact style, `numId`, and level tuple. Python binds definition and instance
 creation and the style link, as described for the Python `Document`. WASM and
 CLI bindings gain no numbering graph authoring surface.
 `ListNumberFormat::from_name` reads a `w:numFmt` name, and a name outside the
-standard set is `Other`.
+standard set is `Other`. `Document::numbering_level` retains namespace
+declarations without counting them in `has_unmodeled_properties`. Real extra
+attributes and children remain reported. Modeled producer metadata and raw
+property or typed-leaf preservation overlays keep their existing reader
+behavior. The richer numbering authoring completeness checks retain their
+separate admission contract.
 
 F-248 also adds public fields to the pre-1.0 native Rust projections.
 `ResolvedNumbering` exposes `number_current`, `number_level`,
@@ -975,7 +1060,13 @@ control or a field inside a paragraph.
 location against a staged package and publishes only a serialized and reopened
 candidate. These additions are native Rust APIs on the pre-1.0 `rdocx` crate.
 Python exposes story and story item snapshots, including each item's `xml` as
-bytes. `Document.set_story_text` takes a `StoryItem` snapshot and resolves its
+bytes. Cached complex-field text agrees between owned bulk snapshots and direct
+native reads when the field spans sibling runs or nests inside another field.
+Snapshot reads preserve source locations, XML, direct-body coordinates and the
+document revision, leaving held live handles valid. Nested instruction caches
+remain distinct from their enclosing field's visible result. Story links retain
+physical source ordering and relationship scope through the same bounded excerpt
+projection. `Document.set_story_text` takes a `StoryItem` snapshot and resolves its
 story kind, part name, owner index, item kind, and index path against the same
 document revision. The compatibility constructor accepts omitted or `None`
 XML and materializes it as empty immutable bytes. Cloned fragments omit Word
@@ -1238,9 +1329,30 @@ The additive pre-1.0 Rust surface also exposes `create_building_block`,
 content. Fragment creation and insertion use `FragmentConflictPolicy` and
 the source package dependency closure. Mutation checks the complete
 `BuildingBlockInfo` snapshot, rejecting stale ordinals and changed values.
+Glossary transfers omit review anchors and definition import before dependency
+capture, including selected note and textbox review content. Reverse capture
+omits before main-owned fragment construction. Dependency-free typed creation
+retains comment-marker refusal. Direct replacement omits newly supplied review
+markers while metadata-only updates preserve the original body. Actual local
+comment relationships isolate their numeric ids from main comments. Unproved
+local ownership and glossary-local note projection refuse atomically.
+
 Placeholder binding keeps the existing control discriminator and updates
 selection properties only on existing document-part control variants.
 Python, WASM, and CLI bindings remain unchanged.
+
+The additive pre-1.0 native whole-story text surface exposes `try_set_header`,
+`try_set_footer`, `try_set_first_page_header` and `try_set_first_page_footer`,
+each returning `Result<()>`. Existing infallible signatures remain compatibility
+wrappers with their established panic convention. Complete header/footer
+output proof refuses XML-invalid supplied text before publication, retaining
+the OPC part and code-point diagnostic through the fallible route and exact
+original bytes through either route. Raw and image setters stage
+all dependency allocation and remapping before reconciliation and publication.
+Python's existing `set_header(text)` and `set_footer(text)` return `None`,
+propagate checked native errors, and bump the document revision once only after
+success. Refusal preserves package bytes and live handles. No additional
+Python, WASM or CLI setter surface is introduced.
 
 The native document renderer copies those defaults into the concrete optional
 `rdocx_layout::LayoutInput::math_properties` field. This field addition is a
@@ -1614,6 +1726,15 @@ in the literal text, and a match whose range would also show text that the
 literal text leaves out, such as a field result, is not exact. Python exposes
 it with keyword `author`, `text`, `occurrence`, `initials` and `date`
 arguments.
+Native `move_comment(id, StoryRunRange)` and `move_comment_to_text(id, anchor,
+occurrence)` move an existing root thread without changing its numeric id or
+metadata. Python exposes `move_comment(id, range)` and
+`move_comment_to_text(id, anchor, *, occurrence=0)`, advancing the document
+revision exactly once after successful package publication. Refusals retain
+bytes and revisions. `rdocx comment move <file> <id> --text <anchor>
+--occurrence <n>` uses the existing required output, JSON and atomic save
+conventions. Unknown ids, replies, stale destinations and unsupported source
+ownership produce checked errors.
 The Python `add_comment` and `reply_to` methods expose the same value as the
 optional `date` keyword, and `rdocx comment add` and `rdocx comment reply` as
 the optional `--date` flag. Omission writes no date and remains deterministic.
@@ -1649,8 +1770,25 @@ parts are in other runs, or part of a tracked move destination is refused
 without change. A field whose parts are all in the
 paragraph is one run and is removed whole. A removal advances the binding
 revision. `CommentRef` exposes
-comment metadata, text, parent identity, and resolved state without permitting
-part-local mutation. `rdocx-cli comment` lists, adds, replies to, resolves, and
+comment metadata, text, parent identity, resolved state and checked accepted-view
+anchor access without permitting part-local mutation. Frozen Python `Comment`
+snapshots retain the seven original keyword arguments and add optional
+`anchor_text` and `anchor` values, both defaulting to `None` for manually
+constructed records. Equality retains the original seven metadata fields, since
+derived revision-bound locations are not comment metadata identity. Document
+listing materializes real `StoryRunRange`
+endpoints with checked story identity, paragraph path and revision. Paragraphs
+directly inside block controls retain their two-segment path and actual containing
+body index. Recursive facade handles use the actual direct paragraph identity,
+so nested control or table descendants have no two-segment location. Non-body
+owners never acquire a body index. Snapshots remain readable
+after mutation, while reuse of their stale range refuses. Listing propagates
+extraction errors instead of converting unsupported sources to orphans.
+CLI `comment list --json` retains metadata and adds nullable `anchor_text` and
+`anchor`, with explicit start/end story kind, part, owner index, paragraph kind,
+index path, run index and containing body index. Its scope is `all_stories`.
+Empty point text differs from orphan null text, and replies have no invented
+parent range. `rdocx-cli comment` lists, adds, replies to, resolves, and
 removes comments. Add ranges use explicit zero-based, half-open body paragraph
 and run coordinates, and the run coordinates count the runs that `text --json`
 lists. `comment add --anchor TEXT`, with an optional zero-based
@@ -1698,12 +1836,21 @@ numeric id. Removing a comment pair retains its reference and definition as
 a point comment. Moving the pair relocates the reference with it. Existing
 Python, WASM and CLI APIs remain source compatible and preserve these markers.
 
+Native Word callers author captions with `CaptionOptions` and `CaptionTarget`,
+sequence fields with `SequenceOptions`, and REF fields with
+`CrossReferenceOptions` and `CrossReferenceNumber`. `insert_sequence` and
+`insert_cross_reference` take checked accepted `StoryRunPosition` boundaries.
+Caption targets expose the actual allocated whole-caption, label-and-number
+and number bookmark names. Invalid instructions, ambiguous physical ownership
+and rejected ranges publish no partial change. These additive pre-1.0 native
+APIs add no Python, WASM or CLI methods.
+
 Native Word callers evaluate fields with `Document::evaluate_fields` and an
 explicit `FieldEvaluationContext`. `FieldDateTime` supplies deterministic civil
 time. Caller maps supply merge values and included text, including
 `source#bookmark` keys for bookmark-scoped includes. Each `FieldEvaluation`
-records a snapshot-local document-order index, original instruction, stored
-display, and a `FieldOutcome` that is resolved text, pagination deferral, a
+records a snapshot-local visible document-order index, original instruction,
+stored display, and a `FieldOutcome` that is resolved text, pagination deferral, a
 structured `TocField`, `TcField`, `MailMergeControl`, or `BarcodeField`, or a
 stable stored-display fallback. The explicit context optionally supplies
 one-based merge record and output sequence numbers. Formula results remain
@@ -1717,15 +1864,40 @@ types are additive. The new public `FieldEvaluationContext` fields are a
 pre-1.0 source break for native callers that construct the context with a
 struct literal. The new `FieldOutcome` variants are also a pre-1.0 source break
 for exhaustive native matches. Python, WASM, and CLI surfaces gain no evaluator
-methods and continue to preserve the same package content. Python exposes
+methods and continue to preserve the same package content. SEQ and REF include
+qualified physical related and selected text-box owners. Other fields preserve
+their established discovery boundary. Hidden ordinary fields keep their stored
+cache and raw attributes. Public evaluation indices do not identify physical
+layout source fields. Python exposes
 `Document.update_layout_backed_fields() -> LayoutBackedFieldUpdateReport` and
 the count-only `Document.update_page_fields() -> int` wrapper. The frozen owned
-report carries separate PAGE, NUMPAGES, and PAGEREF counts plus an immutable
-diagnostic tuple. Both operations release the GIL while native deterministic
+report carries separate PAGE, NUMPAGES, PAGEREF, SECTION and SECTIONPAGES counts
+plus an immutable diagnostic tuple. Its total is the sum of all five counts. Both operations release the GIL while native deterministic
 layout runs and advance the document revision only when a cache is written, so
 handles taken earlier then raise `StaleElementError`. The new `field_source`
 member of `oxml-layout`'s `TextSegment`, `GlyphRun`, and
 `MultilingualGlyphRun` is a pre-1.0 source break for native struct literals.
+
+Native immutable layout snapshots expose page_sections, field_placements and
+bookmark_page_section while preserving bookmark_page compatibility. WordStory
+has a physical text-box variant with actual OPC part and logical owner path.
+Hidden ordered cached-field segment, section inventory and physical text-box owner
+accessors support checked staging. The hidden Field.cached_display_owner_is_locked
+accessor reports effective cached-owner ancestry and conservatively protects an
+owner outside the cached tree. LayoutInput adds actual story part names,
+authoritative optional rich story bodies and projected footnote compatibility
+booleans. CT_Shape adds optional text_body and source_text_box_owner projections.
+Format-neutral TextSegment, GlyphRun and MultilingualGlyphRun add optional
+note_reference_source for structural ownership independently of exact text spans.
+Hidden physical revision/control metadata accessors and the existing CT_R
+selected-MC raw-slot predicate support layout-only binding without changing
+producer serialization. CT_P.source_runs borrows initialized physical revision
+projections while the existing runs reader keeps its prior scope. Field readers
+expose effective instruction text, typed cached result runs and owned comment
+range markers. Cache setters validate their typed result on a staged clone and
+preserve source form, instructions, lock controls and unrelated XML. Absent projections retain legacy callers. These pre-1.0 public struct and enum
+additions require exhaustive constructor updates and package consumer checks.
+Python gains the two report count getters. WASM and CLI gain no update methods.
 
 Native paragraph item inspection reports whether comment-range and bookmark
 marker source elements contained child elements or visible text. Complex-field
@@ -1863,6 +2035,23 @@ advances the revision once. An instruction without a field name raises
 serializes as a simple field after the run's earlier content, and
 `update_layout_backed_fields` fills a `PAGE`, `NUMPAGES`, or `PAGEREF` cache.
 WASM and CLI gain no implicit surface.
+
+Native Rust also exposes `Run::add_field_value(Field)`. It accepts a checked
+`Field::from_raw` or `Field::from_instruction` with explicit `FieldForm::Simple`
+or `FieldForm::Complex` and ordered `Vec<CT_R>` cached content. The shared
+`FieldInstruction::new` constructor validates names and switches, quotes text
+operands and accepts recursive typed operands. A simple instruction cannot hold
+nested fields. Known flag switches reject explicit operands. Otherwise unknown
+quoted or nested switch operands retain their operand position across reopen.
+This is a pre-1.0 semantic projection extension for ambiguous unknown switches,
+while original producer bytes remain unchanged. `Field::form`, `locked` and
+`set_locked` expose representation and three-state field locks, and immutable
+`FieldRef::locked` reads the lock. Existing conservative unmodeled semantic
+attribute reporting still identifies producer lock attributes. These additions
+are native Rust only. Existing `Run::add_field` retains its simple-field API,
+including its default PAGE and NUMPAGES cache behavior. Ordered cache controls
+and properties survive attachment and reopen. Invalid attachment leaves the
+run unchanged.
 
 `add_symbol` keeps that meaning. `add_symbol_char(font, char_code)` is the
 separate method that produces `w:sym`, and `add_special_character` produces
@@ -2513,6 +2702,16 @@ flag, system codec, subprocess, or binary asset.
 
 ## Packaging
 
+Current source prepares the exact seven-package Word Rust family, `rdocx`
+Python distribution, `rdocx-wasm` and inherited support carriers at0.16.0.
+The exact fifteen-package shared OOXML and PowerPoint family plus `rpptx-py`
+and its Python distribution are prepared at0.14.0. The separate unpublished
+`rpptx-wasm` npm carrier remains0.12.1. Word's current dependency pins require
+shared0.14.0, so the shared family precedes Word publication. Preparation is
+local metadata and artifact verification, without registry publication or tag
+authority. The previous unified v0.15.0 and rpptx-v0.13.1 releases remain
+immutable at reviewed main9d019472f7e6b95ac4ba0770c4dee35dcbc28f0e.
+
 **maturin, mixed Rust and Python layout**, so type stubs and enum shims have a
 home. `python-source = "python"`, `module-name = "rdocx._rdocx"`,
 `features = ["pyo3/extension-module"]`. The rpptx package uses the parallel
@@ -2557,8 +2756,8 @@ the embedded metadata and the required README sections before publication.
 Full-description comparison normalizes platform CRLF to LF and ignores terminal
 newline count. All prose and other metadata remain exact.
 
-The Rust package trains remain separate. The exact 15-package shared OOXML and
-PowerPoint workspace family is published at 0.12.1 from immutable annotated tag
+The historical S73 Rust package trains remain separate. The exact 15-package
+shared OOXML and PowerPoint workspace family was published at 0.12.1 from immutable annotated tag
 `rpptx-v0.12.1` at reviewed SHA
 `58ca5a279277f7cd8de0b8f250fb4650de14371b`. The stable workspace is published
 as the exact seven-package 0.14.0 family from immutable annotated tag `v0.14.0`
@@ -2594,48 +2793,38 @@ version, the immutable v0.11.0 tag, and GitHub release state remain unchanged.
 
 ## CI
 
-`wheels.yml` on **`py-rdocx-v*` and `py-rpptx-v*` tag namespaces**, separate
-from `publish.yml` on `v*` and `rpptx-v*`, so a Rust release does not rebuild
-Python wheels and a binding-only fix does not force a crates.io release.
-Publishing uses PyPI trusted publishing via OIDC, with no long-lived token in
-secrets. Manual dispatch builds `rdocx` and `rpptx` across the six declared
-targets. A tag build runs only the selected distribution cells. Each package
-produces one source distribution and uploads each matrix product independently.
-Every native wheel is
-installed into a fresh environment for its compatible pytest, exact
-`mypy==2.3.0 --strict`, and `stubtest` gates. Each musllinux wheel is installed
-in a fresh Python 3.9 Alpine environment and runs the same package parity suite
-as the native cells.
+`wheels.yml` handles the unified `v*` Word and `rpptx-v*` shared/PowerPoint
+namespaces. A tag selects one exact Rust allowlist, CLI and Python distribution.
+Historical `py-*` tags remain immutable and cannot start new publication.
+Manual dispatch builds both Python projects across six declared targets plus
+one source distribution each. It cannot publish to registries or create a
+GitHub release and does not build the tag-only CLI archives.
 
-The build jobs have only repository read permission. A separate publish job
-depends on all wheel and source-distribution jobs, selects exactly six wheels
-and one source distribution for the tag's project, and receives
-`id-token: write` only for a `py-rdocx-v*` or `py-rpptx-v*` tag event in the
-`pypi` environment. Manual dispatch builds and tests both distributions but
-cannot publish them. Every external action and the maturin tool version are
-pinned to reviewed immutable versions.
+Each freshly built native wheel runs clean installed priority runtime checks.
+The supported floor remains Python3.9. Exact `mypy==2.3.0 --strict` and
+recursive package `stubtest` run under Python3.12, including the native
+extension and handwritten stubs. The current local preparation builds real
+wheels and source distributions and checks their complete metadata and README
+payloads. Compatible oracle exclusions on hosted runners retain their pinned
+native and CI coverage. The musllinux cells use a clean Python3.9 Alpine
+runtime. Build jobs have read-only repository permissions, while selected
+tag-only publication uses OIDC through the `pypi` environment.
 
-Each Python release family contains one distribution at its native crate
-version. After the reviewed SHA is pushed but before either Python tag is
-created, a manual build-only run at that SHA must produce twelve `cp39-abi3`
-wheels and two source distributions across both projects. The selected six
-wheels and one source distribution must name the selected project and version
-in both filenames and embedded metadata. The selected distribution is
-installed under clean Python 3.9 and 3.12 environments for the priority runtime
-gate. Exact `mypy==2.3.0 --strict` and stubtest run under Python 3.12 because
-that mypy version requires Python 3.10 or newer. The tag-only publish job uses
-PyPI trusted publishing. Successful publication is not complete until the
-selected project version, all seven files, authenticated owner or maintainer
-roles, the exact reviewed GitHub release body, and every contribution
-notification are verified.
+After final integrated full verification, clean sprint review and sprint push,
+the SHA-bound build-only rehearsal must produce twelve `cp39-abi3` wheels and
+two source distributions at that reviewed source. Downloaded provenance,
+metadata and clean Python3.9/3.12 installed checks are required before close.
+Local worker artifacts do not substitute for this final hosted evidence.
 
-The current reviewed Python releases are `rdocx 0.13.2` from
-`py-rdocx-v0.13.2` and `rpptx 0.11.0` from `py-rpptx-v0.11.0`, both at SHA
-`2b009243ed39ab66470d7484d490985368e865a8`. Each PyPI release contains the
-exact six platform wheels and one source distribution, exposes its complete
-crate-local README and project metadata, and passes clean Python 3.9 and 3.12
-runtime checks plus Python 3.12 strict typing and stub checks. Their GitHub
-release bodies match the reviewed changelog text byte for byte.
+After sprint close, each family requires its own immediate approval at the
+reviewed main merge SHA. The tagged workflow verifies six CLI archives, six
+wheels, one source distribution and a complete `SHA256SUMS`, then publishes
+only the selected family. Registry state, ownership, attestation, exact release
+body and release-bound contribution notifications are verified afterward.
+Neither local preparation nor build-only dispatch earns publication or hosted
+artifact availability. Historical separately tagged Python releases
+`rdocx0.13.2` and `rpptx0.11.0` at2b009243ed39ab66470d7484d490985368e865a8
+remain available, and the later unified family releases remain immutable.
 
 **A PR-time job that builds the wheel and runs pytest is mandatory.** The
 absence of exactly this job for wasm is why `rdocx-wasm` rotted.
@@ -2875,3 +3064,8 @@ these target-specific archives without selecting source compilation or an
 unreviewed quick-install source. Native builds retain the CLI default system
 font feature. The static musl build disables host discovery and retains bundled
 fonts.
+
+Generated-table rebuild errors include checked target mutations that would
+require unsafe canonical serialization beneath conflicting retained namespace
+bindings. The error leaves the package and existing caches unchanged. Namespace
+aliases are accepted when the source projection and mutation are safe.

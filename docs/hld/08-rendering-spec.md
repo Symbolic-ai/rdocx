@@ -970,16 +970,42 @@ region's `w:trPr` is modeled and round-tripped but not applied, which is row
 geometry owned by F-268a. Region selection reads the table look together with
 every `w:cnfStyle` on the row, the cell and the cell's paragraphs. Direct table
 and cell properties remain the final overlay. An explicit
-cell `nil` or `none` border yields to a visible table border only on the exact
-outer edge. The same value remains suppressive on an interior edge.
+cell `nil` border suppresses the corresponding edge, including an outer edge.
+A cell `none` border behaves as an unset cell edge and inherits the corresponding
+table or table-style border. Painting and row border bands share this resolution.
 The model retains `nil` and `none` as distinct source tokens because an
-unrelated table or document edit must not normalize producer XML. Both tokens
-have the same invisible-border layout behavior.
+unrelated table or document edit must not normalize producer XML.
 
 A table without an explicit style uses the authored default table style.
 Its modeled base width, alignment, indent, borders, shading, look, and cell
-margins resolve base-first before direct table and cell overlays. Existing
-direct width and alignment behavior remains unchanged.
+margins resolve base-first before direct table and cell overlays. Direct
+`w:jc` left, center, right, start and end values override style alignment.
+Center uses half the free width, and right or end uses the full free width.
+Other values retain the resolved left indent. Direct width behavior remains
+unchanged. Absent side margins resolve to zero after the selected style chain.
+Intrinsic autofit width and final layout apply direct cell margins edge by
+edge, including explicit zero, before falling back to the table margin.
+
+For the qualified built-in default with ID `TableNormal`, name `Normal Table`,
+table type, default flag, gallery priority99, semi-hidden and unhide metadata,
+zero dxa indent and zero top and bottom margins, the effective base LEFT margin
+is108 twips. Authored side values0,108 and288 in the pinned native controls
+share that left text start. Custom default identities preserve their authored
+margins. This bounded exception applies at the base style layer, so derived,
+direct table and direct cell overrides still win. It preserves every other
+property and does not assert a right-padding or wrapping exception.
+
+Compatibility modes below15, including an absent mode, compensate eligible
+top-level LTR, nonfloating tables. Left and start subtract the first accepted
+cell's resolved left margin when a resolved dxa indent exists. Right and end
+add that same left margin to the full free width even when indent is absent. Center,
+modern, nested, bidi and floating placement retain their existing policies.
+An absent indent differs from an explicit or style-inherited zero. This uses
+`LayoutInput::legacy_table_positioning`, including retained engine cache
+qualification, independently of tab and footnote compatibility facts. The
+required public field is an intentional pre-1.0 struct-literal source break.
+Relative bundled-font geometry is tested without claiming Word's subpoint
+border quantization or absolute Arial and Caladea parity.
 The direct table facade can author auto, fixed, and percentage width modes,
 left indentation, fixed or autofit layout, shading, aggregate or individual
 borders, default cell margins, conditional look flags, and the complete active
@@ -1523,6 +1549,12 @@ drawing element, and fields contribute one cached display. Schema-required
 physical run splitting does not change that logical order. Deterministic font
 mode is the acceptance path for the resulting PDF.
 
+Inside ordinary or nested table cells, page and column run breaks emit no
+inline item. Text on either side joins without an added line or space, and the
+row retains its no-break height. Line breaks remain line breaks. Form feed and
+vertical tab in a field display follow the same cell policy. Body page and
+column transitions remain intact. Layout leaves authored break XML unchanged.
+
 Line breaking records the exact explicit break that ended each `LayoutLine` as
 `ForcedBreakKind::Line`, `Page`, or `Column`. Word pagination splits a paragraph
 immediately after a page-marked line when continuation content exists, before
@@ -1625,9 +1657,11 @@ settings reach the model and the package and change no page geometry at all.
 
 A section without a restart continues after the preceding section's displayed
 last page. Overflow endnote pages continue after the final body page for fresh
-and restarted pagination, including a restarted final section. PAGE fields on
-those pages consume the continued displayed value. Number format, chapter
-style, and chapter separator remain preserved but do not affect M23 layout.
+and restarted pagination, including a restarted final section. Pagination field
+values inside notes follow their unique body reference owner rather than the
+physical page that prints the note. PAGE uses its source section number format
+and PAGEREF uses the target section number format. Chapter style and chapter
+separator remain preserved without changing layout.
 
 Dynamic TOC entry materialization uses the section that owns the TOC field.
 When the effective entry style has no right tab, the generated paragraph adds
@@ -1825,6 +1859,25 @@ system codec.
 
 ## Word bookmark field pagination
 
+INDEX, caption-selected TOC and TOA rebuilding creates provisional entries
+before obtaining one immutable deterministic `WordLayoutResult`. Every page
+and range endpoint is read through `bookmark_page_section` from that result.
+The transaction never measures source pages before table insertion and never
+runs a second paginator. A range uses both checked bookmark endpoints, including
+the sequence context at each endpoint for chapter-prefixed INDEX entries.
+Caption selection uses TOC `c` or `a`, independently of its `s` page prefix.
+
+INDEX hierarchy, repeated-page suppression, cross-reference punctuation,
+run-in entries, page emphasis and chapter separators follow the pinned en-US
+captures. Sorting is bounded to ASCII keys with case-sensitive grouping and
+captured lowercase-first ties. Other sort keys retain the generated owner.
+Caption entries preserve rich source runs and use real caption SEQ decisions,
+while styled TOC selection follows its explicit style set. Authority occurrences
+join by category-local short citation and display the first long citation.
+Passim applies at the captured five-distinct-page threshold. TOA `h` emits
+category headings, not hyperlinks. Category headings follow the sixteen
+captured default en-US labels, with categories 8 through 16 displayed numerically.
+
 Word `REF` fields resolve the text of one uniquely correlated typed main-story
 bookmark before shaping. Paragraph correlation follows document order through
 body paragraphs, laid-out tables, and modeled content controls. A missing or
@@ -1865,28 +1918,81 @@ The native facade exposes a separate read-only field evaluator for automation
 callers. `PAGE` and `NUMPAGES` always report pagination deferral. A valid
 `PAGEREF` also reports deferral, while a missing or ambiguous target keeps its
 stored display with a stable diagnostic. The evaluator does not replace the
-single post-pagination substitution pass and does not trigger layout. `REF`
-resolves the same unique typed bookmark text used by layout, so pure
-evaluation and rendering share the same target-validity boundary.
+single post-pagination substitution pass. SEQ evaluation is font independent
+and uses the same accepted physical source snapshot as rendering. Numbered REF
+may consult deterministic layout's existing resolved-numbering context. REF
+resolves unique bookmark text and numbering with the same shared formatter as
+layout. Numeric pictures precede character and general formatting. Missing,
+ambiguous, locked or unqualified sources retain stored display with diagnostics.
 
-Layout gives each PAGE, NUMPAGES, and PAGEREF placeholder run an optional
-`FieldSource` beside its `FieldKind`. It names the source paragraph node and the
-field's position among that paragraph's top-level fields in `CT_P::runs` order,
-the order the field evaluator and cache updates use. Main-story and related-
-story cache reuse rebinds it together with the paragraph's source spans. It is
-not a `SourceSpan`, so PDF ActualText grouping and extracted text do not
-change. Fields that only a revision projection reaches, and text box
-paragraphs, carry no identity. `Document::update_layout_backed_fields` lays out
-one staged candidate deterministically and writes the values the substitution
-pass renders. PAGE takes the displayed page number of the first page that
-places the field, so a header or footer shared by many pages takes its first
-page. NUMPAGES takes the page count. PAGEREF takes the parsed target-page text
-already produced by post-pagination substitution. Written fields are marked
-clean. A field whose switches the evaluator cannot format keeps its cache.
-PAGE also keeps its cache when any section declares a non-decimal
-`w:pgNumType` format or a chapter style, because layout substitutes decimal
-page numbers only. The count-only `update_page_fields` wrapper publishes the
-same complete operation.
+SEQ instruction descendants place zero-width counter events before their owning
+visible cache. Generated cache fields place no events. Shared furniture repeats
+are single structural placeholders resolved from each actual page boundary.
+With no preceding value, the exact stored text is retained without formatting
+it again. Related notes retain their source-bound resolved value. Hidden results
+have no glyphs or advances and preserve counter placement independently.
+
+Selected header and footer text-box anchors paint through the existing shape
+renderer. Paragraph-relative coordinates use content-relative story y once.
+Behind-document furniture follows background layers and precedes all text.
+Front furniture follows story text and precedes front page borders. Existing
+page, margin, column and character coordinate policies remain unchanged.
+
+REF typed note caches participate in existing note layout after reopen. Comment
+references remain nonpainting, while copied literal cache text paints normally.
+Measured related-story and selected text-box REF-f contexts retain literal text
+without creating new note owners. Unselected fallback XML stays untouched.
+
+Layout attaches `FieldSource` to PAGE, NUMPAGES, SECTION, SECTIONPAGES and
+PAGEREF display runs. It names the source paragraph node and the field's preorder
+index through nested instructions and cached results. Ordered cached segments
+retain the exact nested field owner and its direct formatting. Effective locks
+include every cached ancestor, so a locked intermediate owner prevents live
+substitution of otherwise unlocked descendants. A visible cached
+child receives its own physical placement across page and column breaks. An
+invisible child remains unplaced. Instruction operands alone inherit their owning
+display's placement. Rebinding preserves this identity through rich tables,
+controls, notes and selected typed text boxes, independently of `SourceSpan`.
+
+`WordLayoutResult` retains immutable page-section records, field placements and
+bookmark target ownership from the same pagination pass. Several continuous
+sections may occupy one physical page. Furniture and displayed numbering use the
+first owner on a shared page and the active later section on subsequent pages.
+A restart in a later section consumes its shared first page before advancing its
+own sequence. The section inventory includes control-owned ending paragraphs
+and excludes section properties inside table cells. Active furniture relationship
+selection and inherited references follow that same main-story section order,
+including nested block controls.
+
+Fresh Word 16.113.2 build 16.113.26092012 captures pin saved cache policy. Literal
+header and footer PAGE and NUMPAGES caches stay unchanged for simple and complex
+forms and all furniture variants, including singly placed stories. Rendering
+still substitutes dynamic per-page values. SECTION and SECTIONPAGES use measured
+owner placement. Unique target-owned PAGEREF may update an unused source story.
+PAGE uses its source section's numbering and PAGEREF uses its target section's
+numbering. NUMPAGES, SECTION and SECTIONPAGES have decimal base values. Numeric
+picture switches operate on raw numbers before section display formatting.
+Unsupported formats, missing or ambiguous ownership and locks preserve caches.
+
+Note field physical placement records where text is painted. Its PAGE and SECTION
+values follow the unique body note reference, including document-end notes printed
+on another page. Rich note tables retain real row geometry and cell sources across
+continuations. Section-end notes consume the final continuous member's boundary
+and document-end notes resume after the consumed flow band.
+Generated note labels keep exact text source None. An independent structural
+note_reference_source channel retains the reference owner through shaping,
+painting and source rebinding. Default and explicit document-end notes preserve
+bounded restart reuse, including unused parts, middle-tail reuse and final-body
+completion with fitting or overflowing note content.
+
+
+Continuous footnote flow projects typed compatibility settings. Authenticated
+mode 12 and default-mode captures advance at a continuous boundary after an actual
+placed footnote. Mode 15 captures retain continuous flow on the same page. With
+`footnoteLayoutLikeWW8` true in legacy mode, following paragraphs remain until the
+next actual footnote-bearing block or page extent. Orphan definitions and endnote
+references do not trigger that branch. The bounded Word immediate and relocated
+anchor pairs support the [documented legacy footnote rule](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/8a382070-ad9b-4723-98f9-49f0277f56cd).
 
 REF switch evaluation uses the bookmarked paragraph's resolved numbering in
 the flattened main-story paragraph order, including paragraphs inside tables

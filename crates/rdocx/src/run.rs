@@ -304,6 +304,11 @@ impl FieldRef<'_> {
         self.inner.dirty
     }
 
+    /// The field-local lock state, when specified.
+    pub fn locked(&self) -> Option<bool> {
+        self.inner.locked()
+    }
+
     /// Whether the retained field source carries semantic attributes outside
     /// the modeled reader projection.
     pub fn has_unmodeled_semantic_attributes(&self) -> bool {
@@ -508,6 +513,13 @@ impl<'a> Run<'a> {
                 "field instruction must contain a field name".to_owned(),
             ));
         }
+        self.inner.append_content(RunContent::Field(field));
+        Ok(())
+    }
+
+    /// Append a checked simple or complex field with its ordered cached content.
+    pub fn add_field_value(&mut self, field: Field) -> Result<()> {
+        field.validate_for_attachment()?;
         self.inner.append_content(RunContent::Field(field));
         Ok(())
     }

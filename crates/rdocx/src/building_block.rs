@@ -352,7 +352,7 @@ impl Document {
         &mut self,
         glossary_part: &str,
         ordinal: usize,
-        block: BuildingBlock,
+        mut block: BuildingBlock,
     ) -> Result<BuildingBlockInfo> {
         if self.glossary_part_name.as_deref() != Some(glossary_part) {
             return Err(Error::Other("stale glossary part identity".to_owned()));
@@ -363,9 +363,25 @@ impl Document {
             .as_mut()
             .and_then(|glossary| glossary.doc_parts.get_mut(ordinal))
             .ok_or_else(|| Error::Other("stale building block ordinal".to_owned()))?;
+        if facade_block(part).body != block.body {
+            let mut writer = quick_xml::Writer::new(Vec::new());
+            block.body.to_xml(&mut writer)?;
+            let xml = writer.into_inner();
+            let scoped = String::from_utf8(xml)
+                .map_err(|_| Error::Other("invalid glossary body encoding".into()))?
+                .replacen(
+                    "<w:body>",
+                    &format!("<w:body xmlns:w=\"{}\">", rdocx_oxml::namespace::W_NS),
+                    1,
+                );
+            let omitted = Document::omit_comment_markers(scoped.as_bytes())?;
+            let body = glossary_body_as_document(&omitted)?;
+            block.body = rdocx_oxml::document::CT_Document::from_xml(&body)?.body;
+        }
         apply_block(part, block.clone())?;
         candidate.glossary_dirty = true;
         candidate.preserve_glossary_drawing_ids_staged()?;
+        candidate.reconcile_comment_removal(self)?;
         let reopened = candidate.prepare_and_reopen_staged()?;
         let result = reopened
             .building_blocks()?
@@ -578,6 +594,7 @@ impl Document {
         apply_block(part, block)?;
         candidate.glossary_dirty = true;
         candidate.preserve_glossary_drawing_ids_staged()?;
+        candidate.reconcile_comment_removal(self)?;
         let reopened = candidate.prepare_and_reopen_staged()?;
         let result = reopened.building_blocks()?.remove(entry.ordinal);
         self.commit_staged_mutation(reopened);
@@ -596,6 +613,7 @@ impl Document {
             .remove(entry.ordinal);
         candidate.glossary_dirty = true;
         candidate.preserve_glossary_drawing_ids_staged()?;
+        candidate.reconcile_comment_removal(self)?;
         let reopened = candidate.prepare_and_reopen_staged()?;
         self.commit_staged_mutation(reopened);
         Ok(entry.block.clone())
@@ -616,7 +634,10 @@ impl Document {
         let body = crate::document::close_content_fragment_namespaces(&xml[range], &scope)?;
         // Replace just the outer wrapper. Every body attribute and namespace
         // remains on the source document body for package-authoritative capture.
+        candidate.glossary_comment_owner()?;
         let wrapped = glossary_body_as_document(&body).map_err(Error::from)?;
+        let wrapped = Document::omit_comment_markers(&wrapped)?;
+        candidate.omit_glossary_fragment_note_comments(&entry.glossary_part, &wrapped)?;
         let content = crate::document::package_authoritative_body_fragment(
             &wrapped,
             false,

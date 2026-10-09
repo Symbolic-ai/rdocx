@@ -1633,6 +1633,40 @@ publish the preserve, model, and execute classification for every advanced
 feature in this milestone. Compare the planned boundary with `calamine`,
 `rust_xlsxwriter`, `umya-spreadsheet`, `xls`, and any credible successor without
 claiming that simple read or write support is a differentiator.
+Assess the concrete demand in [Issue 281](https://github.com/tensorbee/rdocx/issues/281)
+from `hadim`: template filling, small preservation-safe edits and a consistent
+CLI/Python workflow with rendering. Compare integration, installation,
+maintenance and release costs, including reuse behind a consistent facade.
+Evaluate the utility and limits of a reader/editor stage before calculation
+and pivots, retaining formula and pivot state with explicit stale-result
+diagnostics when edits cannot be recalculated. The existing S104 distribution
+boundary remains until a separate reviewed roadmap decision changes it.
+
+The reporter's [follow-up](https://github.com/tensorbee/rdocx/issues/281#issuecomment-6063901190)
+defines a Google Sheets review workflow: read and change cell text, edit a
+shared-formula column and preserve reviewer comments. Ordinary spreadsheet
+reading is already covered in that workflow. The differentiators are one
+CLI/Python shape and installation, Rust performance and safety, loss-aware
+editing and later rendering without Excel. The requested first cut preserves
+all unmodeled parts, including threaded comments and `commentsmeta*`, data
+validation, conditional formatting and defined names. It reads values and
+types, shared strings, formats and styles, merged ranges, formulas and cached
+results. Edits include values, formulas and styles, rows and columns, sheets,
+widths and heights, frozen panes and auto-filters, with atomic output. Shared
+formula structure must survive. The decision must choose explicit stale-cache
+invalidation and recalculate-on-load, or a separately bounded evaluator for
+arithmetic, references, SUM, AVERAGE, MIN, MAX and IF. Chart authoring is not a
+requested first-cut need. Rendering is a desired second step. These are inputs
+to F-184, not S90 implementation or an approved earlier release boundary.
+
+The [maintainer commitment](https://github.com/tensorbee/rdocx/issues/281#issuecomment-6064533994)
+confirms preservation tests and the review workflow first, then reading and
+styled edits with explicit stale-cache handling. A bounded evaluator and
+rendering follow, with chart authoring deferred. Pivot refresh, Power Query
+and scripting remain longer-term goals. F-184 must reconcile the scheduled
+stories and any proposed reader/editor distribution boundary with that order
+before approving implementation. S90 records this direction without claiming
+that the conditional spreadsheet programme or an earlier release is approved.
 **Depends on**: none.
 **Test gate**: regression. The scope document and capability matrix state one
 non-contradictory boundary, and every scheduled spreadsheet story maps to a
@@ -2956,14 +2990,25 @@ cached entries, page ranges, leaders, links, and preserved formatting.
 and page targets as the pinned Word update.
 
 ### F-282, Citations and bibliography authoring (L)
-Create bibliography sources, citation fields, source styles, and bibliography
-results while preserving unsupported producer metadata and locale data.
+Create the native bibliography source and field-authoring foundation and the
+measured citation and bibliography formatter subset, preserving producer
+metadata, locale data and unavailable result caches with diagnostics. The user
+moved the remaining full Word catalogue work to F-X192 in S91 before S90
+publication. Document exact admitted inputs and verified output coverage,
+including the 210-of-223 dense APA development checkpoint, without claiming
+full catalogue parity. New formatting expansion belongs to F-X192.
 **Depends on**: F-278.
-**Test gate**: differential. A source-built citation set and bibliography match
-the pinned Word identifiers, ordering, display text, and round-trip package.
+**Test gate**: differential. Public source-built admitted citation and
+bibliography controls match pinned Word identifiers, ordering, rich display
+and package round trips. Outside the measured materialization boundary,
+inspection and authoring retain source data. Unfinished recognized standard
+branches fail the whole update atomically with an explicit error. Noncatalogue
+branches retain caches with report diagnostics. Atomicity and XML preservation
+gates remain mandatory.
 
 ### F-283, Complete numbering-aware navigation fields (L)
-Close all numbering interactions across TOC, STYLEREF, REF, PAGEREF, captions,
+Schedule this unfinished story in S91. Close all numbering interactions across
+TOC, STYLEREF, REF, PAGEREF, captions,
 and document outline results, including table-cell headings and suppressed
 paragraphs.
 **Depends on**: F-248, F-279 through F-282.
@@ -6529,6 +6574,259 @@ No public API, dependency version or default feature changes.
 fontdb/memmap` fails on the claimed base and passes after the fix. Default,
 no-default and no-default plus memmap checks and font tests pass, with all
 49 hash entries unchanged. Record the contributor disposition for sprint close.
+
+### F-X184, Safe comment ownership during content removal (L)
+
+Resolve every criterion of [Issue 282](https://github.com/tensorbee/rdocx/issues/282), reported by `hadim`. Whole safely owned comment graphs removed with body, story, row or cell content lose their root, descendant replies and selectively owned commentsExtended, commentsIds and commentsExtensible entries. Partial cuts and comment-bearing detached fragments refuse atomically. Unprovable imported graph ownership refuses instead of discarding opaque XML. Add fallible native try_remove_content for Python and retain the legacy bool method with false on refusal and no panic. Raw all-story validation distinguishes an orphan from a reference-only comment or a linked reply. Preserve unrelated parts and source XML.
+**Depends on**: F-X179, F-271.
+**Test gate**: regression. `comment_removal_preserves_thread_closure` proves the reported failure before implementation and exact successful or refused behavior after save and reopen. Existing Rust, Python, typing and CLI entrypoints cover the complete issue criteria, with unrelated package members and opaque XML preserved. All 49 hash entries remain unchanged. Record reporter provenance and full acceptance for sprint close.
+
+### F-X188, Preserve comment ownership when replacing or removing whole stories (L)
+
+Resolve every criterion of [Issue 288](https://github.com/tensorbee/rdocx/issues/288), reported by `hadim`. Extend the completed F-X184 ownership transaction to default and first-page text header/footer replacement, raw and image replacement including even variants, and glossary entry removal. Complete safely owned threads and their selectively linked companions are removed together. Shared story targets retain comments while a section still references them, including reopened producer parts and different relationship ids reaching the same target. Preserve producer-owned parts and opaque references rather than deleting them to manufacture an ownership decrease. Add checked fallible native text setters for Python error propagation while retaining documented legacy wrapper conventions. Ambiguous ownership and partial cuts refuse before publication. Explicitly test whole endnote removal and all Issue288 variants rather than inferring acceptance from common helpers.
+Issue [292](https://github.com/tensorbee/rdocx/issues/292) also requires
+documented omission of comments from building-block creation, replacement,
+fragment update, extraction and insertion. Filter qualified transferred
+markers before comment dependency import. Isolate glossary-local ownership
+from main comments even when numeric ids match, retain unrelated producer
+parts and refuse ambiguous ownership atomically. Metadata-only updates and
+general fragment behavior retain their existing contracts. Issue291 is
+included as a separate field snapshot correction after this story. Issue281
+remains open for F-184 and Issue264 remains excluded.
+**Depends on**: F-X184.
+**Test gate**: regression. `whole_story_removal_and_replacement_preserve_comment_closure` fails against the exact claimed Base for uncovered replacement and glossary routes, then passes source-built cleanup, shared-reference, companion, namespace and atomic refusal controls after save and reopen. Existing Rust, Python and CLI entrypoints cover the complete issue criteria. All 49 hash entries remain unchanged. Record reporter provenance and full acceptance for sprint close.
+
+### F-X185, Expose comment anchor text and story location (M)
+
+Resolve every criterion of [Issue 283](https://github.com/tensorbee/rdocx/issues/283), reported by `hadim`. Expose checked native and CommentRef anchor text and StoryRunRange, then frozen typed Python snapshots and CLI JSON locations. Accepted-view span text joins paragraphs with newline. Reference-only comments have no paired range and empty anchor text, while orphans have neither. Keep the seven-argument Python Comment constructor compatible through optional new defaults. Cover table cells, tracked insertions and block and inline goog_rdk wrappers.
+**Depends on**: F-X184.
+**Test gate**: regression. `comment_anchor_snapshots_match_accepted_story_spans` proves the reported failure before implementation and exact successful or refused behavior after save and reopen. Existing Rust, Python, typing and CLI entrypoints cover the complete issue criteria, with unrelated package members and opaque XML preserved. All 49 hash entries remain unchanged. Record reporter provenance and full acceptance for sprint close.
+
+### F-X186, Move comment anchors without losing threads (M)
+
+Resolve every criterion of [Issue 284](https://github.com/tensorbee/rdocx/issues/284), reported by `hadim`. Move a checked root comment's range and reference without replacing thread identity, metadata, replies or resolved state. Reuse staged story-range placement and support cross-story destinations where existing placement permits comments. Unknown ids, reply ids and unsupported destinations refuse atomically. Remove goog_rdk wrappers made empty solely by marker removal. Provide move-to-text with the existing add-comment body search scope and a CLI move command.
+**Depends on**: F-X185.
+**Test gate**: regression. `comment_moves_preserve_thread_identity` proves the reported failure before implementation and exact successful or refused behavior after save and reopen. Existing Rust, Python, typing and CLI entrypoints cover the complete issue criteria, with unrelated package members and opaque XML preserved. All 49 hash entries remain unchanged. Record reporter provenance and full acceptance for sprint close.
+
+### F-X187, Scoped paragraph and cell text replacement (M)
+
+Resolve every criterion of [Issue 285](https://github.com/tensorbee/rdocx/issues/285), reported by `hadim`. Add Python Paragraph.replace_text and Cell.replace_text with run-aware matching, optional expected count and document transaction atomicity. Expose Document.replace_text_at for a checked detached StoryItem to cover supported header, footer and note owners without giving snapshots an originating Document mirror. Preserve comment ranges, bookmarks and formatting outside a match. Keep unselected content and parts unchanged.
+**Depends on**: none.
+**Test gate**: regression. `scoped_text_replacement_preserves_unselected_content` proves the reported failure before implementation and exact successful or refused behavior after save and reopen. Existing Rust, Python, typing and CLI entrypoints cover the complete issue criteria, with unrelated package members and opaque XML preserved. All 49 hash entries remain unchanged. Record reporter provenance and full acceptance for sprint close.
+
+### F-X190, Preserve cached text in multi-run complex field story snapshots (M)
+
+Resolve [Issue291](https://github.com/tensorbee/rdocx/issues/291), reported by
+Hadrien Mary (`hadim`) and contributed through
+[PR287](https://github.com/tensorbee/rdocx/pull/287), semantic commit
+`65365c4b2de49956f73c09bb326190e336db9bc8`. Bulk story snapshots and Python
+StoryItem.text expose the stored result of a complex field spanning sibling
+runs, matching existing direct story reads. Preserve one namespace context,
+valid nested field and link coordinates, source XML, locations, ordering and
+read-only revisions. No new public snapshot API. Run exclusively after
+F-X188 and before F-282 resumes. Issue281 remains open for F-184 and Issue264
+remains excluded.
+**Depends on**: none.
+**Test gate**: regression. `complex_field_story_snapshots_preserve_cached_text`
+fails on the exact claimed Base through existing APIs, then passes actual
+native and rebuilt Python controls across supported owners, nested fields,
+links, aliases, namespace shadows and retained source bytes. All49 hash
+entries remain unchanged. Record contributor provenance and full acceptance
+before sprint close.
+
+### F-X192, Complete the remaining Word bibliography catalogue (L)
+
+Complete the Word bibliography work explicitly deferred from S90 to S91 by the
+user. F-282 delivers the native source-authoring foundation and its measured
+formatter subset. This story owns the full pinned Word catalogue result
+contract, without claiming the existing subset establishes complete parity.
+
+Cover all seventeen schema source kinds, all twelve installed styles and all
+223 documented ordinary bibliography locale selectors, plus any independently
+established valid extensions. Retain the pinned style editions rather than
+substituting newer editions. At the S90 development checkpoint, 210 of 223
+dense APA locale grammars pass. Remaining selectors are1054,1105,1107,1108,
+1109,1111,1112,1113,1115,1121,2117,2128 and2145. Existing captures are supporting
+evidence. Completed own2117 and2145 controls and prepared Thai/Tibetan controls
+do not count as implemented consumers.
+
+Finish the remaining dense APA consumers, broader formatting across the other
+eleven styles, sparse and repeated source properties, personal and corporate
+contributors, multiple authors, missing author/date values and mixed scripts.
+Complete multiple-source and empty-selection bibliography behavior, grouped
+citations, locators, suppression, prefix/suffix, author/year disambiguation,
+source and field locale precedence, application-default context and filtering.
+Derive locale-aware sorting, numeric assignment and stable ties from
+independent Word discriminators. Partial ICU or Core Foundation matches do not
+establish the Word comparator. Do not invent an ASCII or en-US approximation.
+A new collation dependency requires an approved design revision and exact
+publication, MSRV, WASM, bundled-data, supply-chain and archive riders.
+
+Keep exact source identities, opaque XML, rich run and paragraph properties,
+IEEE table structure, physical field ownership and cache boundaries. Prove
+source mutation, repeat update, save/reopen and atomic refusal across supported
+stories. Equivalent namespace prefixes produce equal library results while
+preserving imported XML and documenting the measured Word discrepancy.
+Retain historical interrupted-update captures as cache-preservation evidence,
+and use actual completed update and normal reopen captures for output claims.
+Never generalize font coverage from a finite measured grapheme.
+
+**Depends on**: F-282.
+**Test gate**: differential. `full_bibliography_catalogue_matches_pinned_word`
+checks exact source identities, instructions, selection, ordering, readable
+text, rich properties and reopened packages across the complete independently
+observed catalogue. No catalogue row is skipped, mapped by assumed language
+alias or accepted from a cache fallback. All remaining branch and context
+controls pass. Unsupported producer extensions still preserve caches and
+metadata with diagnostics. Scoped verification, independent zero-finding
+review, unchanged or explicitly reviewed harness output and all earned risk
+riders are required before completion.
+
+### F-X191, Ignore namespace declarations in numbering reader completeness (S)
+
+Resolve the native reader false positive contributed by Pedro Assumpcao
+(`pedroassumpcao`) through [PR293](https://github.com/tensorbee/rdocx/pull/293)
+at head `fd112a7ac3333709f62746b7065c5cc1b4be0eed`. A namespace declaration
+alone on a numbering instance, abstract definition or level does not make
+`Document::numbering_level().has_unmodeled_properties` true. Retain all
+namespace declarations and producer XML, while actual unknown attributes and
+extra children remain flagged. Preserve the existing narrower reader fact
+and richer numbering authoring completeness contracts. Adopt only the native
+reader correction and focused tests, not contributor archive sizes or the
+archive-platform override. Run in an exclusive implementation wave before
+F-X189 release preparation. Issue264 remains excluded and Issue281 remains
+open roadmap work.
+**Depends on**: none.
+**Test gate**: regression.
+`numbering_level_namespace_declarations_do_not_report_unmodeled_properties`
+fails through the existing native API on the exact claimed Base, then passes
+all twelve owner/declaration combinations, retained namespace and producer
+payload checks, real foreign attributes, rebound aliases, raw children and
+save/reopen controls. All49 hash entries remain unchanged. Record actual
+current package evidence and contributor provenance before completion.
+
+### F-X189, Prepare Word 0.16.0 and PowerPoint 0.14.0 families (L)
+
+Prepare the exact seven-package Word family and Python distribution at 0.16.0,
+and the exact fifteen-package shared OOXML and PowerPoint family and Python
+distribution at 0.14.0. The user approved both new versions and workflow
+records after confirming that the previous unified releases are published.
+Update current version carriers, internal pins, lockfile, policy assertions,
+README examples and measured archives without altering historical tags or
+release records. Derive separate reviewed family notes and authenticated
+contributor inventories from the complete range since each previous tag,
+including S89 and S90 accepted work. Exclude Issue264 and retain Issue281's
+open roadmap disposition. The prepared source preserves unpublished binding and
+WASM carriers, external tool versions and immutable historical release records.
+The local worker completion proves preparation only. Final integrated full
+verification, sprint review and hosted build-only artifacts precede close,
+with separate family publication approvals afterward. Require current local package and binding evidence,
+then the final reviewed sprint's hosted build-only rehearsal before close.
+Publication follows sprint close through separate exact-SHA approvals under
+`/release`, shared family first where the Word dependency graph requires it.
+**Depends on**: F-278, F-279, F-280, F-281, F-282, F-X179, F-X180, F-X181, F-X182, F-X183, F-X184, F-X185, F-X186, F-X187, F-X188, F-X190, F-X191.
+**Test gate**: release regression. `s90_release_families_match_reviewed_versions`
+in the existing workflow test module checks both exact family allowlists,
+version carriers and rendered notes. Actual22-package patched publication dry
+runs, archive bounds and clean installed Python3.9/3.12 runtime and typing
+evidence pass without publication. The integrated hash baseline is unchanged
+by release preparation. Hosted evidence binds the final reviewed sprint SHA.
+
+### F-X182, Honor direct table alignment (M)
+
+Resolve every reported variant of [Issue 277](https://github.com/tensorbee/rdocx/issues/277), reported by `hadim`, through PR 279 at `93749ddce266103b62a61e78c3b8a6b692a94646`.
+Direct table jc overrides table-style alignment, including left, center,
+right, start and end. Retain authored indentation rules and preserve source
+XML. Nested and bidi controls distinguish existing placement semantics.
+**Depends on**: none.
+**Test gate**: regression. Source-built reported variants match fresh pinned
+Word relative positions and survive unrelated edits and reopen. Prove the
+failure before implementation. Deterministic PNG/PDF hash deltas are declared,
+separately attributed and independently reviewed, with unchanged source XML.
+Record reporter provenance and full acceptance for sprint close.
+
+### F-X183, Correct table margins and legacy positioning (M)
+
+Resolve every reported variant of [Issue 276](https://github.com/tensorbee/rdocx/issues/276) and [Issue 278](https://github.com/tensorbee/rdocx/issues/278), reported by `hadim`, through PR 280 at `795b29d78d5c2ca49c1b414c9818de201fe36b4e`, stacked on PR 279.
+Absent side margins resolve to zero consistently in measurement and layout.
+Retain authored and inherited margins, with the separately qualified built-in
+TableNormal native behavior and effects-only default fallback.
+Pre-15 and absent compatibility modes position eligible top-level tables
+using the measured first-cell left margin and resolved indent context. Preserve modern,
+centered and nested placement, and distinguish bidi and floating contexts.
+**Depends on**: F-X182.
+**Test gate**: regression. Source-built reported variants match fresh pinned
+Word relative positions and survive unrelated edits and reopen. Prove the
+failure before implementation. Deterministic PNG/PDF hash deltas are declared,
+separately attributed and independently reviewed, with unchanged source XML.
+Record reporter provenance and full acceptance for sprint close.
+
+### F-X180, Correct cell nil and none border precedence (S)
+
+Adopt [PR 274](https://github.com/tensorbee/rdocx/pull/274) from `hadim`,
+reviewed at `59d9de9426233da389369ee10f5c8bd32ca8f75c`, against every
+criterion of [Issue 272](https://github.com/tensorbee/rdocx/issues/272).
+A cell `nil` removes its edge on the outer boundary as on the interior.
+A cell `none` is unset for layout and inherits the corresponding table edge.
+Both direct table borders and style-derived borders follow the same rule in
+painting and border bands. Preserve the distinct source tokens on save.
+**Depends on**: none.
+**Test gate**: regression. The seven reported direct and Table Grid variants,
+including a single unmodified corner and first-row top suppression, match
+pinned Word line sets. The contributed gate fails before the correction.
+The deterministic dense-form golden changes only the identified top segment,
+with unchanged row geometry. All 49 hash-harness entries remain unchanged.
+Record contributor provenance and complete issue acceptance for sprint close.
+
+### F-X181, Ignore page and column breaks inside table cells (S)
+
+Adopt [PR 275](https://github.com/tensorbee/rdocx/pull/275) from `hadim`,
+reviewed at `5ea2f5710d4bb13d0182bd74417fa5ca58522984`, against every
+criterion of [Issue 273](https://github.com/tensorbee/rdocx/issues/273).
+Inside table cells, including nested tables, page and column run breaks
+produce no page transition, line break or space. Text remains on one line and
+row height matches the input without the break. Ordinary line breaks remain
+line breaks and body page breaks still advance the page. Field-result control
+characters interpreted as page and column breaks follow the same cell rule.
+**Depends on**: none.
+**Test gate**: regression. Leading and inline page and column breaks in ordinary
+and nested cells match pinned Word text positions and no-break row geometry.
+Line-break and body page-break controls retain their existing behavior.
+The contributed gate fails before the correction. Source XML survives reopen,
+and all 49 hash-harness entries remain unchanged. Record contributor provenance
+and complete issue acceptance for sprint close.
+
+### F-X179, Correct multi-paragraph comment threads from PR 271 (S)
+
+Adopt [PR 271](https://github.com/tensorbee/rdocx/pull/271) from `hadim`,
+reviewed at `e22641a8f20a1c31d905a8c1b83171f548d2e230`, against every
+acceptance criterion of [Issue 270](https://github.com/tensorbee/rdocx/issues/270).
+Read and write thread and resolved metadata using each comment's last
+paragraph id. Author one paragraph per newline through every existing comment
+entry point. Preserve legacy parent links, unrelated producer XML and fragment
+thread closure. Leave Issue 264 and F-X178 untouched.
+**Depends on**: none.
+**Test gate**: regression. Last-paragraph reading, reply and resolution XML,
+multiline save and reopen, single-paragraph controls, missing ids, fragment
+closure and removal all pass. The contributed gate fails before the fix.
+All 49 hash entries remain unchanged. Record acceptance and contributor
+provenance for GitHub reconciliation through sprint close.
+
+### F-X178, Clearable direct run formatting setters (S)
+
+Follow-up to [Issue 264](https://github.com/tensorbee/rdocx/issues/264). A
+declarative wrapper needs one setter per run property that can set a value,
+write an explicit false, or clear direct formatting. `Run` lacks that form for
+double strike, all caps, small caps, vertical alignment, character spacing,
+width scale, position and hidden. Add `_value` setters that take an `Option`
+and match `set_bold_value`. Vertical alignment takes a typed value covering
+superscript, subscript and baseline. The existing one-way setters keep their
+behaviour. Rust facade only, binding parity is decided in design.
+**Depends on**: none.
+**Test gate**: unit and round trip. Each new setter writes a value, writes an
+explicit false where the property is boolean, removes only its own element on
+`None`, and adds no `w:rPr` to a run that has none. Values survive save and
+reopen, and all 49 hash entries are unchanged.
 
 ### F-X168, Current issue and contribution closure evidence (M)
 

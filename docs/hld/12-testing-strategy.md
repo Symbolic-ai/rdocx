@@ -14,6 +14,30 @@ exactly one as its test gate.
 | `golden` | Byte or pixel comparison against a recorded baseline | the hash harness |
 | `differential` | Compared against an external oracle | LibreOffice for renders, python-docx and python-pptx for the bindings |
 
+The cached complex-field snapshot regression uses compiled source-built
+packages to compare bulk snapshots with existing direct reads. Coverage spans
+sibling runs, same-run and nested fields, supported body and related story
+owners, namespace aliases and shadows, literal cached text and immutable source
+bytes. A private span test proves real hyperlink source endpoints inside a
+complex excerpt without relaxing public typed admission for an opaque wrapper.
+Public link controls preserve neighboring links and fields enclosed by links.
+The Python runtime uses the current rebuilt extension and verifies frozen text,
+XML and coordinates, stable read revisions and held handle validity. Strict
+typing and stub agreement remain separate checks. No field evaluation or native
+Word session is needed to expose an already stored cache.
+
+The comment ownership regression uses source-built packages and a compiled
+exact-Base failure for whole-thread removal and partial-cut refusal. Existing
+integration gates separately prove row removal, fragment pop and cell text
+behavior before and after implementation. The matrix covers related stories,
+selected text boxes, raw wrappers, signed ids, modern companion links, opaque
+payload, nested thread anchors and atomic byte preservation. CLI checks
+separate valid point comments and linked replies from true orphan roots.
+Python runtime checks verify once-only handle invalidation and refused no-ops,
+with strict typing and stub agreement checked independently. These API and
+package contracts require no fresh native Word capture and leave all 49
+rendering harness entries unchanged.
+
 The table-row pagination regression uses source-built tagged lines and a
 footer-only-page sentinel because Issue 138's private 53-page package is not
 available. The deterministic layout must place each tag on exactly one page,
@@ -390,11 +414,46 @@ The Word field regression matrix records Microsoft Word 16.104 build
 separator, comma grouping separator, and UTC clock context. Its readable
 in-code `F-161-readable-field-matrix-v1` input covers every supported field
 family and compares normalized document-order outcomes with exact literals.
-Focused tests cover recursive IF operands, story-isolated SEQ state, typed
+Focused tests cover recursive IF operands, source-qualified SEQ state, typed
 paragraph traversal, package properties and variables, explicit external
 inputs, formatting pictures, and stable cached-display fallbacks. The oracle
 is test metadata only. It is not a runtime dependency and adds no binary
 fixture.
+
+The caption, sequence and REF matrix pins Word 16.113.2 build
+16.113.26092012 sanitized source and actual explicit-update captures. Tests cover
+all 55 original and 58 renumbered caption fields, 33 sequence owners, 20 optional
+bookmark sequence controls, 53 numbered REF delimiter fields and 31 REF-f wire
+owners. Pure evaluation preserves source bytes. Explicit updates and reopen
+prove exact instructions, selected caches, fallback preservation and bounded
+typed note or comment graphs. Actual physical-page controls require furniture
+14 and 16, selected boxes15,15,16 and source-bound note14. Nested instruction
+events, generated caches, inherited locks and no-prior-value stored fallback
+have independent discriminators. Same-paragraph before, after and containment
+controls cover pure evaluation, update, reopen and actual painting. Related
+target text and numbered references cover all five rendered owner families,
+with unavailable cross-story position retaining both scalar and numbered caches.
+A separate36-field native matrix covers paragraph and run boundaries within
+body, header, footer, normal footnote, normal endnote and selected body text-box
+owners. Tests use an explicitly cache-reset derivative of the schema-valid
+native normalized package. The original prepared drawing omitted its run parent
+and stays excluded from qualified input. The native selected Choice and opaque
+Fallback remain separate. Successful positions are compared with actual Word
+updates, while containment retains the saved cache with a diagnostic under the
+conservative library policy. Word's measured self-reference error is not claimed
+as library parity. Native close and reopen preserve all36 rich caches, but their
+PDF pixel difference is recorded separately from equal page text.
+Malformed quoted SEQ input followed by a valid increment proves cache retention
+and counter isolation, while escaped quotes and backslashes remain valid.
+
+Native repeated-update and original-owner-only mutation captures qualify copy
+refresh without graph growth. Copied drawing, paragraph and durable identities
+may regenerate, so identity equality is not a payload contract. Tests preserve
+original owners, relationship closure, styles and media, and reject ambiguous
+or malformed optional companion edges atomically. Deterministic source and
+reopened rendering verifies literal painting, anchor coordinates and background
+ordering. Native close/reopen cache and PDF audits remain separate from Rust
+semantic parity and do not imply archive byte equality or cross-renderer pixels.
 
 The extended Word field matrix uses the same pinned Word build and environment.
 Its source-built `F-231-readable-field-matrix-v1` input covers formula, TOC,
@@ -1345,6 +1404,19 @@ rendered-group perturbation proves the geometry and raster path is
 mutation-sensitive. The source DOCX digest and tool identities live in the
 text manifest, while both PDF outputs remain untracked.
 
+The general native field construction gate reopens explicit simple and complex
+fields with identical instruction semantics and ordered cached content. Tests
+construct inputs in code and cover recursive argument and switch operands,
+three-state lock and dirty toggles, operand quoting, formatting and typed line,
+page and column breaks. Unknown typed switch operands reopen in the same
+position, while known flags retain following positional operands. Equal-text
+nested replacements must emit their new properties rather than reuse the old
+source. Namespace-aware cache validation preserves foreign lookalikes and
+inherited-prefix opaque children but rejects actual raw Word delimiters and
+malformed XML. Attachment failures keep destination runs unchanged, and the
+legacy plain-string field API retains its existing serialization. Existing
+`text.rs` unit tests and `regression_test.rs` provide this round-trip gate.
+
 ## The hash harness
 
 The single highest-value mechanism in the plan is
@@ -1862,6 +1934,36 @@ Required-corpus mode fails closed on missing artifacts, hashes, provenance,
 sample identity, dimensions, normalization provenance, or case coverage.
 
 ## The Word corpus
+The measured bibliography gate uses source-built controls against Microsoft
+Word for Mac16.113.2 build16.113.26092012. Its current APA acceptance set retains
+all 1340 earned tests without skipped or ignored obligations. The 210-of-223
+dense locale count is a grammar coverage measure, not arbitrary input parity.
+Non-APA lean Book and citation controls assert their own admitted boundaries.
+Source CRUD, options, insertion and staged updates preserve qualified source
+XML, unrelated parts, exact instructions and source identities. Mixed eligible
+and unfinished standard fields must prove whole-operation atomic error behavior,
+including caches, package bytes and revisions. Noncatalogue retention reports,
+locks and protected physical owners remain separate controls.
+
+Rich result assertions retain exact run properties, paragraph context, IEEE
+table structure and physical separator/end boundaries. Actual completed F9 and
+normal no-F9 reopen owners are the formatting authority. Interrupted recovered
+caches remain separate no-update preservation evidence. The exact seventeen
+original pagination comparison registry pairs and the individually proved
+1125 and1093 BookSection pairs may join only their bound adjacent equal-property
+runs after raw marker, attributes, child shapes, text, spaces and offsets pass.
+Immutable raw expectations and unprojected paragraph properties remain beside
+those finite comparisons. No general coalescing, font stripping, synthetic
+pagination marker or renderer parity follows from this projection.
+
+Shared scanner tests preserve accepted/raw comment and PI behavior, selected
+fragment/comment ownership and namespace-lifetime complex-field snapshots.
+Hash output remains unchanged for all49 entries. Scoped native, package,
+Python runtime/typing compatibility and WASM checks cover the actual diff
+without implying dedicated bibliography bindings. Remaining catalogue rows,
+contexts and comparator behavior are F-X192 acceptance work, not a fallback
+cache or a weakened version of its full catalogue gate.
+
 
 The cross-story range gate source-builds all eight supported story owners and
 block content controls inside related owners. It adds bookmark, comment,
@@ -1983,6 +2085,58 @@ LibreOffice Writer 26.2.5.2 page and text result for a trailing run page break
 followed by `pageBreakBefore`. Single-break controls remain two pages. Focused
 paginator controls retain separate transitions across intervening content,
 visible continuation formatting, line breaks, and column breaks.
+
+The all-story pagination-field differential gate pins fresh Microsoft Word for
+Mac 16.113.2 build 16.113.26092012 source, saved DOCX and offline PDF captures.
+Source-built cases retain exact normalized labels, instructions, wire forms,
+geometry, section references and bookmark ownership. Saved fields join by source
+owner and label, accommodating Word's normal note-ID renumbering without guessing.
+Shared, complex, continuous, restart, first/even/default furniture and note/text-box
+cases assert literal cache policy. The mixed-format matrix compares 252 actual
+saved fields across six pages and three numbering formats. Continuous furniture
+and restart cases compare 70 saved fields. Two reference-owner note cases compare
+90 fields and distinguish printed endnote pages from their semantic PAGE owner.
+
+Compatibility minimal pairs alter only mode 12 versus 15, the direct WW8 flag or
+the second-section footnote-reference run location. Their body-only update procedure
+gates pagination and body caches, with no full-update note PAGEREF claim. Immediate
+true and false controls both advance. The delayed true control shares early body
+content and advances at the later footnote-bearing paragraph. Exact source and
+artifact hashes authenticate these records. No older capture is relabeled.
+
+Aliased nested caches retain inherited foreign prefix bindings, opaque cache bytes
+and only genuine field identities through update, save and reopen. Three-level
+simple and complex caches cover a locked middle owner, rendered literal retention
+and original dirty/lock flags, alongside unlocked dynamic descendants. A unique
+control-owned first header and footer activates on its section and is inherited
+by a following section whose references are absent, with per-section live values.
+
+Actual no-F9 saved-output reopens cover all 18 cases and retain all 957 fields,
+with zero cache, dirty or lock changes and 180 successful source-contract checks.
+The same pinned Word build opens offline, exports Best printing PDF, saves and
+closes. Exact initial and reopened artifact hashes retain the provenance chain.
+Partial initial update scopes remain explicit. This Word stability rider is
+separate from native update, save and reopen cache comparisons.
+
+Source-built review regressions retain exact generated-text provenance, separate
+structural note-reference rebinding, default and explicit document-end bounded
+restart, unused note-part eligibility, fitting and multi-page note flow, accepted
+insertion and move-destination owners, inline controls inside revisions, identical
+deleted and moved-away predecessors and identical opaque predecessors. Direct
+and selected MC drawings in one run retain physical child order. Foreign Word
+prefix rebinding stays opaque despite canonical fragment fallback. Public warm
+and fresh layout comparisons cover authoritative rich body and part-name edits
+for all related story families.
+
+
+Focused regressions cover all four nested cache wire-form pairs across page and
+column breaks, invisible children, direct formatting, parent locks, atomic failure,
+control-owned section formats, rich related tables and controls, distinct physical
+identical text boxes, earlier unregistered owners, once-only section-end boundaries,
+wrapped multirow note tables and physical continuation with reference-owned values.
+Preservation checks retain unknown producer XML, relationships and opaque selected
+story boundaries. Deterministic bundled fonts remain mandatory for rendering and
+the normal hash harness still gates the integrated result.
 
 The contributor reader-fact regression combines strict document and body
 boundaries, first section properties, missing revision authors, empty simple
@@ -2169,6 +2323,23 @@ directory without changing it. The primary workspace-test and MSRV jobs fetch
 both pinned corpora before running Cargo tests.
 
 ## The private from-scratch DOCX conformance corpus
+
+Generated-table differential tests pin Microsoft Word 16.113.2 build
+16.113.26092012 and en-US source language. Source-built initial and mutated
+INDEX, authority and caption cases compare exact original instructions and
+ordered cache entries against independently authenticated native updates.
+The Chapter/k discriminator varies source counter restarts and range endpoint
+contexts. Category authoring checks separate populated numbered owners.
+Rich-cache tests check hierarchy styles and individual page-reference emphasis.
+Repeated rebuild, checked source ownership, locked and unsupported cache
+retention, namespace aliases, unknown XML and atomic target refusal have
+separate regression riders. The pagination rider inserts a table that moves
+source pages and checks every cached reference against the retained layout.
+
+Native no-F9 reopen evidence authenticates producer cache, PDF text, geometry,
+fonts and decoded pixels independently. It does not itself claim Rust render
+parity. Semantic runtime comparisons remain exact, and a source-built layout
+check does not become an external oracle expectation.
 
 M23 uses five client reference documents that are never committed, published,
 or fetched by repository automation. They live in a configured ignored private
@@ -3568,3 +3739,93 @@ Stated plainly, because they are why two shipped defects went unnoticed:
   seven commands.
 - **PDF and PNG output is only checked for non-emptiness**, so layout
   regressions are invisible. The hash harness closes this.
+
+### Checked Word comment anchor projections
+
+The existing native regression entrypoint exercises exact accepted-view comment
+text and reusable story ranges across body and related owners. Controls cover
+Google block and inline content controls, accepted revisions, field cache text,
+empty intervening paragraphs, namespace-qualified endpoints and source-order
+boundaries. Reads and reopen preserve package source. Point, orphan and reply
+states stay distinct. Duplicate, reversed, unmatched and unrepresentable raw
+ranges return checked errors. A wrapper-only zero-run interval is refused when
+its coordinates cannot re-anchor the selected display. Python runtime and
+strict typing cover optional frozen fields, typed snapshots and stale range
+reuse. CLI JSON asserts complete typed endpoint locations and null versus empty
+text. These source-built API checks do not claim native Word render parity. Issue 289 is covered by block-control paragraph endpoints with accepted text and nonempty XML, exact two-segment paths and containing body indices before and after reopen.
+
+
+### Checked Word comment moves
+
+Existing native entrypoints pin thread and companion continuity, same-paragraph
+accepted-boundary rebasing, cross-story placement, block-control destinations
+and exact mixed-reference source retention. Google marker wrappers prune only
+when their raw skeleton contains no unrelated payload. Namespace aliases and
+foreign lookalikes remain distinct. Incomplete, duplicate, reversed, point,
+orphan, reply, unknown and stale sources refuse without publication. Oxml
+carrier tests cover paired and empty references, qualified attributes, multiple
+references, property insertion, typed replacement, removal, splitting and
+segment serialization. Python runtime and typing cover revision invalidation
+and text occurrence errors. CLI outputs reopen with the same thread identity.
+These source-built checks do not claim a native Word rendering oracle.
+
+
+### Checked Word scoped literal replacement
+
+`scoped_text_replacement_preserves_unselected_content` proves the duplicate-clause
+failure through the old guarded global API at the exact claim Base, then proves
+the selected-owner operation. After-only controls cover split runs, first-run
+formatting, complete comment threads, ordered Comment and PI nodes, opaque XML,
+cell descendants, block-control paths, table scope, headers, footers and normal
+notes through save and reopen. Unselected OPC members and producer owner bytes
+remain exact. Prefix/property normalization positives and qualified owner
+reinterpretation refusal protect source selection.
+
+The private physical-position probe rejects a different identical sibling and
+requires one collision-free sentinel in each normalized model. Separate unit
+controls exercise initial relationship-allocation failure and actual final OPC
+reopen entry-limit refusal, retaining the complete live model and package. Native
+and actual Python control-ordinal regressions prove that nested controls
+cannot redirect a handle to a later direct sibling. Empty direct paragraphs and
+table descendants preserve the supported two-segment axis. Reopened comment
+anchors and scoped paragraph edits resolve the same direct p3 paragraph. The Python
+runtime checks local mismatch attributes and pickling, invalid text, stale
+handles, zero no-op and positive publication. Typed call shapes independently
+cover Paragraph, Cell and detached StoryItem operations. All 49 deterministic
+hash entries remain unchanged. These controls require no external native oracle.
+
+
+### Whole-story comment ownership and glossary transfer
+
+`whole_story_removal_and_replacement_preserve_comment_closure` demonstrates
+header replacement and glossary removal orphan failures against the exact
+claim Base. Separate compiled Base controls cover raw and image replacement,
+direct glossary replacement and fragment update. The complete create, reverse
+capture and generic cross-document import before control exposes main comment
+definition import into a glossary destination. Same-part selected and unselected footnote/endnote controls prove forward
+create and update ignore unrelated opaque or malformed review carriers, retain
+source bytes and import only the selected note. Recursive footnote textbox
+references reach selected endnotes before review dependency capture. Selected
+bad carriers still refuse atomically. A retained foreign background with an
+opaque qualified comment carrier cannot block plain-body glossary creation or
+update, while the same carrier inside selected content refuses atomically.
+Source bytes and unselected root payload remain intact. Current-before regressions
+separately expose producer note review recapture and orphan local companion
+mapping acceptance before their repairs.
+
+The after matrix executes all ten installer entrances, all six Header/Footer
+variants, imported shared physical targets through different relation ids,
+inherited uses, main and non-main opaque uses and unknown-use refusal. It proves
+last-use marker removal while retaining producer parts and unrelated bytes.
+Actual whole footnote and endnote removal tests retain unrelated thread and
+companion rows. A real glossary-local comments relationship and commentsExtended
+part coexist with equal-id main definitions, proving reverse omission, local
+cleanup and metadata-only preservation. Invalid local mappings and orphan
+local companion edges refuse atomically. Public building-block creation,
+fragment update and insertion cover same and different documents, selected
+notes and textboxes, and retained source bytes. Legacy raw/image panic controls
+retain original bytes after provisional allocations. A real final OPC reopen
+entry-limit failure and preparation refusal discard complete candidates.
+Actual rebuilt Python tests prove checked setter errors and once-only revision
+publication. Strict typing and CLI validation are separate execution evidence.
+All 49 deterministic hash entries remain unchanged.
