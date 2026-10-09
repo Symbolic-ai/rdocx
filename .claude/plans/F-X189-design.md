@@ -147,8 +147,8 @@ and rendered notes. Missing new production APIs are not fail-before evidence.
 | package | Actual locally patched workspace publication dry run | All22 archives verify against local source, exact selected inventories, measured payloads and below10MiB bounds |
 | Python | Clean installed current wheels on3.9 and3.12 | Runtime priority suites, exact metadata and Python3.12 mypy2.3.0/stubtest for both distributions |
 | integration | Version, README, workflow and WASM checks | Current literals update without changing external tools, historical contracts or npm publication authority |
-| artifact | Final reviewed-SHA hosted build-only rehearsal | Twelve wheels and two sdists across both projects have exact metadata and provenance, no publication |
-| integrated | Final full sprint and read-only main gates | Hash baseline and declared sprint delta remain unchanged by preparation, clean review and close provenance retained |
+| post-integration artifact | Final reviewed-SHA hosted build-only rehearsal | Twelve wheels and two sdists across both projects have exact metadata and provenance, no publication |
+| post-integration release | Final full sprint and read-only main gates | Hash baseline and declared sprint delta remain unchanged by preparation, clean review and close provenance retained |
 
 The local scoped gate and independent zero-finding microscope precede prepare
 and integration. The final hosted rehearsal is a pre-close gate, not a worker
@@ -182,8 +182,22 @@ Version preparation must not change rendering or replace the baseline.
 - [ ] Capture genuine new-version contract failure against the immutable Base.
 - [ ] Update exact carriers, pins, notes, policy, inventories and listed HLD files.
 - [ ] Pass scoped package/binding/typing checks and independent microscope, then prepare and integrate.
-- [ ] Pass final full sprint verification and clean sprint review, then the SHA-bound hosted build-only pre-close gate.
-- [ ] Close the sprint, run each release preflight and obtain separate final publication approval at reviewed main.
+
+## Post-integration gates
+
+The implementation checklist records local release preparation. Completing this
+story does not claim sprint closure, a hosted rehearsal or publication.
+After integration, run final full sprint verification and clean sprint review,
+then the SHA-bound hosted build-only rehearsal before close. These mandatory
+post-integration gates retain the exact artifact obligations in the test plan.
+They cannot execute against a worker SHA as a substitute for the final reviewed
+and pushed sprint SHA.
+
+After the sprint closes, run each family's read-only release preflight and
+obtain its separate final publication approval at reviewed main. The release
+command requires this preparation story to be done and its plan completed
+before creating either tag. Publication evidence belongs to the release report,
+not a prospective checked implementation item or a post-release main edit.
 
 ## Open questions
 
